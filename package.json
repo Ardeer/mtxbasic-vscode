@@ -1,0 +1,42 @@
+{
+  "name": "mtxbasic-extension",
+  "displayName": "mtxbasic",
+  "description": "MTX BASIC Programming Language and syntax highlighting",
+  "version": "0.0.1",
+  "publisher": "Ardeer",
+  "engines": {
+    "vscode": "^1.103.0"
+  },
+  "icon": "images/MTX_series.jpg",
+  "categories": [
+    "Programming Languages"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ardeer/mtxbasic-vscode.git"
+  },
+  	"contributes": {
+    "languages": [
+      {
+        "id": "mtxbasic",
+        "aliases": [
+          "BASIC",
+          "basic",
+          "mtx basic",
+          "MTX BASIC"
+        ],
+        "extensions": [
+          ".bas",
+          ".b"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "mtxbasic",
+        "scopeName": "source.mtxbasic",
+        "path": "./src/language/mtxbasic.tmLanguage.json"
+      }
+    ]
+  }
+}
