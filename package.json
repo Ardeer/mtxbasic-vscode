@@ -28,9 +28,10 @@
         "extensions": [
           ".bas",
           ".b"
-        ]
-      }
-    ],
+        ],
+    "configuration": "./language-configuration.json"
+			}
+		],
     "grammars": [
       {
         "language": "mtxbasic",
