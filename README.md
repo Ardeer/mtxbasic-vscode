@@ -7,17 +7,23 @@ This extension provides support for the MTX BASIC programming language in Visual
 - Syntax highlighting for MTX BASIC code
 - Basic code snippets
 - Language support for MTX BASIC programming constructs
+- Description and usage when hovering over a MTX BASIC command
 
 ## Installation
 
 1. Clone the repository or download the ZIP file.
 2. Open the project in Visual Studio Code.
 3. Press `F5` to run the extension in a new Extension Development Host window.
-4. Open a BASIC file or create a new one with the `.bas` extension to start using the extension.
+4. Ensure that the following is set in VS Code User settings. File->Preferences->Settings then select USER tab and search for Hover, and tick enabled.
+    Alternatively, to set manually, type below. On linux this can be found at ~/.config/Code/User/settings.json
+    "[mtxbasic]": {
+        "editor.hover.enabled": true
+    }
+5. Open a BASIC file or create a new one with the `.bas` extension to start using the extension.
 
 ## Usage
 
-Once the extension is installed, you can open any BASIC file, and the syntax highlighting will be applied automatically. You can also use the provided snippets to speed up your coding process.
+Once the extension is installed, you can open any BASIC file, and the syntax highlighting will be applied automatically. You can also use the provided snippets to speed up your coding process. If you hover over a BASIC command (e.g. PRINT or LET or ..), it will bring up its description and usage. If it is a string command (e.g. INKEY$ or CHR$ or ..) you need to hover over the $ symbol to bring up the description and usage information.
 
 ## Contributing
 
@@ -25,7 +31,7 @@ Contributions are welcome! Please feel free to submit a pull request or open an 
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for more details.
+This project is licensed under the GNU License. See the LICENSE file for more details.
 
 ## Working with Markdown
 
@@ -37,7 +43,6 @@ You can author your README using Visual Studio Code. Here are some useful editor
 
 ## For more information
 
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
+Refer to the "MTX series owners manual.odt" (open document format).
 
 **Enjoy!**
