@@ -15,19 +15,23 @@
           },
           {
             "name": "keyword.command.mtxbasic",
-            "match": "\\b(ADJSPR|ANGLE|ARC|ATTR|BAUD|CIRCLE|CLOCK|CLEAR|CLS|COLOUR|CRVS|CSR|CTLSPR|DATA|DIM|DRAW|DSI|EDITOR|GENPAT|INK|INPUT|LEN|LET|LINE|LLIST|LPRINT|MVSPR|OUT|PAPER|PEEK|PHI|PI|PLOD|PLOT|POKE|PRINT|RAND|READ|REM|RESTORE|RND|SBUF|SOUND|SPRITE|USER|VIEW|VS)\\b"
+            "match": "\\b(ADJSPR|ANGLE|ARC|ATTR|BAUD|CIRCLE|CLOCK|CLEAR|CLS|CODE|COLOUR|CRVS|CSR|CTLSPR|DATA|DIM|DRAW|DSI|EDITOR|GENPAT|INK|INPUT|LEN|LET|LINE|LLIST|LPRINT|LOAD|MVSPR|NODDY|OUT|PAPER|PEEK|PHI|PI|PLOD|PLOT|POKE|PRINT|RAND|READ|REM|RESTORE|RND|SAVE|SBUF|SOUND|SPRITE|USER|VIEW|VS)\\b"
           },
           {
             "name": "keyword.other.mtxbasic",
-            "match": "\\b(CHR\\$|GR\\$|INKEY\\$|LEFT\\$|MID\\$|RIGHT\\$|SPK\\$|STR\\$|TIME\\$)\\b"
+            "match": "(?<![A-Za-z0-9_])(?:INKEY\\$|SPK\\$|TIME\\$)(?![A-Za-z0-9_])"
           },
           {
-            "name": "entity.name.function.mtxbasic",
+            "name": "entity.name.function.string.mtxbasic",
+            "match": "(?<![A-Za-z0-9_])(?:CHR\\$|GR\\$|LEFT\\$|MID\\$|RIGHT\\$|STR\\$)(?![A-Za-z0-9_])"
+          },          
+          {
+            "name": "entity.name.function.numeric.mtxbasic",
             "match": "\\b(ABS|ASC|ATN|COS|EXP|INP|INT|LN|MOD|SGN|SIN|SQR|TAN|USR|VAL)\\b"
           },           
           {
             "name": "illegal.keyword.control.mtxbasic",
-            "match": "\\b(ASSEM|AUTO|EDIT|EDITOR|FRE|LIST|LLIST|LOAD|NEW|NODDY|PANEL|RUN|SAVE|VERIFY)\\b"
+            "match": "\\b(ASSEM|AUTO|EDIT|FRE|LIST|LLIST|NEW|PANEL|RUN|VERIFY)\\b"
           },
           {
             "name": "constant.numeric.line-number.mtxbasic",
@@ -48,34 +52,25 @@
           {
             "name": "keyword.operator.relational.mtxbasic",
             "match":"(<>|<=|>=|=|<|>)"
-          },
-          {
-            "name": "comment.line.rem.mtxbasic",
-            "match": "(?<=:(\\bREM\\b|').*)"
-          },
+          },       
           {
              "name": "variable.name.mtxbasic",
-             "match": "\\b[A-Za-z_](\\$|[A-Za-z0-9_]*)\\b"
-          },
+             "match": "\\b[A-Za-z][A-Za-z0-9]*\\$?\\b"
+          },            
           {
             "name": "constant.numeric.mtxbasic",
             "match": "-?\\b((([0-9]+\\.?[0-9]*)|(\\.[0-9]+))((e|E)(\\+|-)?[0-9]+)?)\\b"
           },
-          {
-             "name": "keyword.operator.arithmetic.mtxbasic",
-             "match": "(&|\\*|\\-|\\+|=|<>|<|>|\\|\\^|<<|>>|~)"
+          { "name": "constant.hexadecimal.mtxbasic",
+            "match": "\\b(#|£[0-9A-Fa-f]+)\\b"
           },
           {
-            "name": "keyword.command.parameter.mtxbasic",
-            "match": "(\\bCOLOUR\\s)(p|n)\\b"
-          },   
-          {
-            "name": "keyword.command.parameter.mtxbasic",
-            "match": "(\\bCRVS\\s)(n|t|x|y|w|h|s)\\b"
-          },
+            "name": "keyword.control.mtxbasic",
+            "match": "(?<=^\\s*(\\d{1,5})\\s*)\\bCODE\\s*$\\b"
+          },        
           {
             "name": "variable.parameter.mtxbasic",
-            "match": "(?<=\\bON\\s)([A-Za-z][A-Za-z0-9]*|\\d+)"
+            "match": "(?<=\\bON)\\s([A-Za-z][A-Za-z0-9]*|\\d+)"
           },
           {
             "name": "keyword.control.mtxbasic",
@@ -83,12 +78,8 @@
           },
           {
             "name": "constant.numeric.line-number.mtxbasic",
-            "match": "(?<=\\bGOTO\\s|\\bGOSUB\\s)\\d{1,5}\\b"
-          },
-          {
-            "name": "keyword.command.parameter.mtxbasic",
-            "match": "\\bTIME\\$\\b"
-          }
+            "match": "(?<=\\b(GOTO|GOSUB)\\b)\\s*\\d{1,5}"
+          }            
       ]
     },
     "strings": {
@@ -97,7 +88,7 @@
           "end": "\"",
           "patterns": [
             {
-                "name": "constant.character.escape.zxbasic",
+                "name": "constant.character.escape.mtxbasic",
             "match": "\\\\."
             }
         ]
