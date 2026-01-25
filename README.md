@@ -13,12 +13,14 @@ This extension provides support for the MTX BASIC programming language in Visual
 
 1. Clone the repository or download the ZIP file.
 2. Open the project in Visual Studio Code.
-3. Press `F5` to run the extension in a new Extension Development Host window.
+3. Press `F5` to run the extension in a new Extension Development Host window or use SHIFT CTRL P, select <Developer: Restart Host Extension>
 4. Ensure that the following is set in VS Code User settings. File->Preferences->Settings then select USER tab and search for Hover, and tick enabled.
     Alternatively, to set manually, in VS Code, keypress: CTRL SHIFT P and select Preferences: OPEN USER SETTINGS (JSON). 
     or if you want to access the user settings outside of VS code, in linux this can be found at ~/.config/Code/User/settings.json
     "[mtxbasic]": {
         "editor.hover.enabled": true
+        //avoids colour swatches appearing in front of #hexadresses
+        "editor.colorDecorators": false
     }
 5. Open a BASIC file or create a new one with the `.BAS` extension to start using the extension.
 6. Inline assembler (ASSEM <linenumber>), is not required, use <linenumber> CODE . You can then enter Z80 assembly language instructions.
@@ -28,7 +30,7 @@ This extension provides support for the MTX BASIC programming language in Visual
 
 ## Usage
 
-Once the extension is installed, you can open any BASIC file, and the syntax highlighting will be applied automatically. You can also use the provided snippets to speed up your coding process. If you hover over a BASIC command (e.g. PRINT or LET or ..), it will bring up its description and usage. If it is a string command (e.g. INKEY$ or CHR$ or ..) you need to hover over the $ symbol to bring up the description and usage information.
+Once the extension is installed, you can open any BASIC file (.BAS), and the syntax highlighting will be applied automatically (the bottom left hand corner of the VS cide taskbar should have {} MTX BASIC as the select language mode). You can also use the provided snippets to speed up your coding process. If you hover over a BASIC command (e.g. PRINT or LET or ..), it will bring up its description and usage. If it is a string command (e.g. INKEY$ or CHR$ or ..) you need to hover over the $ symbol to bring up the description and usage information.
 
 Errors like missing space after a command or too many spaces, or insufficient or too many arguments or numeric assigned to string or vice versa will be show a red squiggly line under the command/function. Hovering over it will also show the error prompt message.
 Erros are also listed on the Problems Tab if a TERMINAL window is opened within VS Code.

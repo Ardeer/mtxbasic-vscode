@@ -27,7 +27,9 @@
         ],
         "extensions": [
           ".bas",
-          ".b"
+          ".BAS",
+          ".txt",
+          ".mtx"
         ],
         "configuration": "./language-configuration.json"
       }
@@ -39,6 +41,21 @@
         "path": "./src/language/mtxbasic.tmLanguage.json"
       }
     ]
+  ,
+    "commands": [
+      {
+        "command": "mtxbasic.saveHex",
+        "title": "MTX: Save HEX from active editor"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "mtxbasic.saveHex",
+          "when": "editorLangId == mtxbasic"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

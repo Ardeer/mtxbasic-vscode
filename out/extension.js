@@ -1,12 +1,156 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __generator = (this && this.__generator) || function (thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+};
+var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
+    if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
+        if (ar || !(i in from)) {
+            if (!ar) ar = Array.prototype.slice.call(from, 0, i);
+            ar[i] = from[i];
+        }
+    }
+    return to.concat(ar || Array.prototype.slice.call(from));
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 // Import the VS Code extensibility API
 var vscode = require("vscode");
 var stdFns_js_1 = require("./stdFns.js");
+var z80codes_js_1 = require("./z80codes.js");
+var mtxtokens_js_1 = require("./mtxtokens.js");
+var mtxsavehdr_js_1 = require("./mtxsavehdr.js");
 function activate(ctx) {
+    var _this = this;
     var diagCollection = vscode.languages.createDiagnosticCollection('mtxbasic');
     ctx.subscriptions.push(diagCollection);
+    // default start address for MTX BASIC programs (depends on RAM size)
+    var ramSize = 48; // assumes MTX512, if MTX500 use 32KB. Future option for user settings
+    var mtxRamSize = ramSize * 1024;
+    var hexBaseAddress = ramSize === 48 ? 0x4000 : 0x8000;
+    var noddyLength = 0; // Tracks ASCII characters in the current document's NODDY section
+    // Command: save converted HEX bytes from active editor to a file
+    var saveHexCmd = vscode.commands.registerCommand('mtxbasic.saveHex', function () { return __awaiter(_this, void 0, void 0, function () {
+        var editor, doc, text, noddyStartLine, noddyByteCount, bytes, totalBytelength, LSTPGsize, BASBOTaddr, BASTOPaddr, NODTOPaddr, ARRTOPdispl, sysVarStart_1, setSysVar, defaultFileName, uri, fileName, lastDotIdx, nameOnly, extension, headerName, i, DESAVEaddr, data, e_1;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    editor = vscode.window.activeTextEditor;
+                    if (!editor) {
+                        vscode.window.showErrorMessage('No active MTX BASIC editor');
+                        return [2 /*return*/];
+                    }
+                    doc = editor.document;
+                    text = doc.getText();
+                    _a.label = 1;
+                case 1:
+                    _a.trys.push([1, 4, , 5]);
+                    (0, mtxsavehdr_js_1.initCreateHdr)(); //initialize the createHdr array before populating it with updated values
+                    noddyStartLine = validateLineNumbers(doc).noddyStartLine;
+                    noddyByteCount = computeNoddyByteLength(doc, noddyStartLine);
+                    noddyLength = noddyByteCount;
+                    bytes = (0, mtxtokens_js_1.convertTextToHex)(text, hexBaseAddress);
+                    totalBytelength = bytes.length;
+                    LSTPGsize = ramSize === 48 ? 0x01 : 0x00;
+                    BASBOTaddr = hexBaseAddress;
+                    BASTOPaddr = BASBOTaddr + (totalBytelength - noddyLength - 1);
+                    NODTOPaddr = BASBOTaddr + totalBytelength - 1;
+                    ARRTOPdispl = NODTOPaddr - BASBOTaddr;
+                    //Pass the above data to update the system variables in createHdr array before inserting the header
+                    (0, mtxsavehdr_js_1.initCreateHdr)();
+                    sysVarStart_1 = 368;
+                    setSysVar = function (offset, value) {
+                        mtxsavehdr_js_1.createHdr[sysVarStart_1 + offset] = value & 0xFF;
+                        mtxsavehdr_js_1.createHdr[sysVarStart_1 + offset + 1] = (value >> 8) & 0xFF;
+                    };
+                    mtxsavehdr_js_1.createHdr[sysVarStart_1 + 42] = LSTPGsize; // LSTPG
+                    setSysVar(84, NODTOPaddr); // NBTOP
+                    setSysVar(87, BASTOPaddr); // BASTOP
+                    setSysVar(90, BASBOTaddr); // BASBOT
+                    setSysVar(92, BASTOPaddr); // BASTPO
+                    setSysVar(124, ARRTOPdispl); // ARRTOP
+                    setSysVar(127, BASBOTaddr); // BASELIN
+                    setSysVar(134, BASTOPaddr); // PGTOP
+                    setSysVar(246, BASBOTaddr); // DATAAD
+                    defaultFileName = doc.uri && doc.uri.fsPath ? doc.uri.fsPath.replace(/\.[^.]*$/, '') + '.mtx' : 'output.mtx';
+                    return [4 /*yield*/, vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(defaultFileName), saveLabel: 'Save HEX' })];
+                case 2:
+                    uri = _a.sent();
+                    if (!uri)
+                        return [2 /*return*/];
+                    fileName = uri.fsPath.split(/[/\\]/).pop() || '';
+                    lastDotIdx = fileName.lastIndexOf('.');
+                    nameOnly = lastDotIdx > -1 ? fileName.substring(0, lastDotIdx) : fileName;
+                    extension = lastDotIdx > -1 ? fileName.substring(lastDotIdx) : '';
+                    nameOnly = nameOnly.toUpperCase();
+                    headerName = "";
+                    // 1) strip .mtx from the name saved to createHdr only
+                    // doesn't apply if extension is .BAS for example
+                    if (extension.toLowerCase() === '.mtx') {
+                        headerName = nameOnly;
+                    }
+                    else {
+                        headerName = nameOnly + extension.toUpperCase();
+                    }
+                    // 2) filename length can be 15 bytes without .mtx
+                    if (headerName.length > 15) {
+                        vscode.window.showErrorMessage("Filename header \"".concat(headerName, "\" is too long. Must be 15 chars or less."));
+                        return [2 /*return*/];
+                    }
+                    // Populate createHdr (bytes 1-15)
+                    for (i = 1; i < 16; i++) {
+                        // Use (i - 1) because headerName is 0-indexed
+                        mtxsavehdr_js_1.createHdr[i] = (i - 1) < headerName.length ? headerName.charCodeAt(i - 1) : 0x20;
+                    }
+                    DESAVEaddr = 0xFB4E + headerName.length;
+                    setSysVar(249, DESAVEaddr); // DESAVE 
+                    data = Uint8Array.from(__spreadArray(__spreadArray([], mtxsavehdr_js_1.createHdr, true), bytes, true));
+                    return [4 /*yield*/, vscode.workspace.fs.writeFile(uri, data)];
+                case 3:
+                    _a.sent();
+                    vscode.window.showInformationMessage("Wrote ".concat(data.length, " bytes to ").concat(uri.fsPath));
+                    return [3 /*break*/, 5];
+                case 4:
+                    e_1 = _a.sent();
+                    vscode.window.showErrorMessage('Failed to generate or write HEX: ' + String(e_1));
+                    return [3 /*break*/, 5];
+                case 5: return [2 /*return*/];
+            }
+        });
+    }); });
+    ctx.subscriptions.push(saveHexCmd);
     // #############################  START of REUSABLE COMMON FUNCTIONS #############################
     //FUNCTIONS THAT CAN SIT INSIDE OR OUTSIDE THE MAIN FUNCTION and don't require vscode - part of stdFns
     // Functions that require vscode or less common
@@ -99,6 +243,36 @@ function activate(ctx) {
         }
         return s;
     } //END of stripTrailingCommentUnquoted function
+    // Count ASCII characters in the NODDY section (marker line excluded)
+    function computeNoddyAsciiLength(doc, noddyStartLine) {
+        if (noddyStartLine < 0)
+            return 0;
+        var startLine = noddyStartLine + 1;
+        if (startLine >= doc.lineCount)
+            return 0;
+        var start = new vscode.Position(startLine, 0);
+        var end = doc.lineAt(doc.lineCount - 1).range.end;
+        var noddyText = doc.getText(new vscode.Range(start, end));
+        return noddyText.length;
+    }
+    // Count BYTES in the NODDY section (using Page structure)
+    function computeNoddyByteLength(doc, noddyStartLine) {
+        // FIX: Return 0 immediately if no NODDY section serves as the fix
+        if (noddyStartLine < 0) {
+            return 0;
+        }
+        var startLine = noddyStartLine + 1;
+        if (startLine >= doc.lineCount) {
+            return 0; // Handle edge case where NODDY header is the last line
+        }
+        var start = new vscode.Position(startLine, 0);
+        var end = doc.lineAt(doc.lineCount - 1).range.end;
+        var noddyText = doc.getText(new vscode.Range(start, end));
+        var lines = noddyText.split(/\r?\n/);
+        // This now returns the full binary size including Page headers (Len) and footers (0xFF)
+        var bytes = (0, mtxtokens_js_1.convertNoddyBlock)(lines);
+        return bytes.length;
+    }
     // Run all validators over `segment` and call `onError` for each CheckResult.
     // - Skips matches that begin inside double-quoted strings (isIndexInQuotedString)
     function runValidatorsOnSegment(segment, validatorsList, onError, baseOffset) {
@@ -214,69 +388,102 @@ function activate(ctx) {
     } //END of printCheck function        
     // Add this helper function before refreshDiagnostics
     // Update validateLineNumbers function to include format and range checks:
+    // Update validateLineNumbers function to handle NODDY internally:
+    // Cleaner alternative - return an object with both errors and noddyStartLine:
     function validateLineNumbers(doc) {
         var errors = [];
-        var lineNumbers = new Map(); // Map<lineNumber, documentLine>
-        var lastLineNo = -1;
-        // Scan document collecting line numbers
-        for (var i = 0; i < doc.lineCount; i++) {
-            var text = doc.lineAt(i).text;
-            var trimmed = text.trim();
-            // Skip empty lines and comment-only lines
-            if (trimmed.length === 0)
-                continue;
-            // Check format and presence of line number on non-empty first segments
-            var lineNumRe = /^\s*(\d{1,5})\b/;
-            var mLnum = lineNumRe.exec(text);
-            if (!mLnum) {
-                // missing leading line number -> highlight first token / first non-space column
-                var firstNonSpace = text.search(/\S/);
-                errors.push({
-                    line: i,
-                    start: firstNonSpace === -1 ? 0 : firstNonSpace,
-                    end: firstNonSpace === -1 ? 1 : firstNonSpace + 1,
-                    message: 'Missing line number (required, 0..65535)'
-                });
-                continue;
+        var noddyStartLine = -1;
+        var lastLineNum = -1;
+        // Detect CODE block ranges using the centralized detector from z80codes.ts.
+        // `detectCodeBlocks` returns blocks with `startLine` pointing at the
+        // numbered CODE marker and `endLine` pointing at the final assembly line.
+        // Convert these to ranges of actual assembly lines (start = startLine+1).
+        var codeBlockRanges = [];
+        var documentLines = [];
+        for (var i = 0; i < doc.lineCount; i++)
+            documentLines.push(doc.lineAt(i).text);
+        try {
+            var blocks = (0, z80codes_js_1.detectCodeBlocks)(documentLines) || [];
+            for (var _i = 0, blocks_1 = blocks; _i < blocks_1.length; _i++) {
+                var b = blocks_1[_i];
+                var s = (typeof b.startLine === 'number') ? b.startLine + 1 : -1;
+                var e = (typeof b.endLine === 'number') ? b.endLine : -1;
+                if (s >= 0 && e >= s)
+                    codeBlockRanges.push({ start: s, end: e });
             }
-            // Check numeric range (0..65535)
-            var lineNo = parseInt(mLnum[1], 10);
-            if (!Number.isInteger(lineNo) || lineNo < 0 || lineNo > 65535) {
-                var innerIndex = mLnum[0].indexOf(mLnum[1]);
-                errors.push({
-                    line: i,
-                    start: mLnum.index + innerIndex,
-                    end: mLnum.index + innerIndex + mLnum[1].length,
-                    message: "Line number out of range 0..65535 (got ".concat(mLnum[1], ")")
-                });
-                continue;
-            }
-            // Check for duplicates
-            if (lineNumbers.has(lineNo)) {
-                var prevLine = lineNumbers.get(lineNo);
-                errors.push({
-                    line: i,
-                    start: mLnum.index,
-                    end: mLnum.index + mLnum[1].length,
-                    message: "Duplicate line number ".concat(lineNo, " (previously used on line ").concat(prevLine + 1, ")")
-                });
-            }
-            // Check sequence
-            if (lineNo <= lastLineNo) {
-                errors.push({
-                    line: i,
-                    start: mLnum.index,
-                    end: mLnum.index + mLnum[1].length,
-                    message: "Line number ".concat(lineNo, " is out of sequence (previous was ").concat(lastLineNo, ")")
-                });
-            }
-            lineNumbers.set(lineNo, i);
-            lastLineNo = lineNo;
         }
-        return errors;
-    } // END of validateLineNumbers function
+        catch (err) {
+            // Detection failed unexpectedly; fall back to no CODE blocks
+            // (leave codeBlockRanges empty) — errors will be reported elsewhere.
+        }
+        // Helper function to check if a line is inside a CODE block
+        function isInCodeBlock(lineNum) {
+            for (var _i = 0, codeBlockRanges_1 = codeBlockRanges; _i < codeBlockRanges_1.length; _i++) {
+                var block = codeBlockRanges_1[_i];
+                if (lineNum >= block.start && lineNum <= block.end)
+                    return true;
+            }
+            return false;
+        }
+        // Second pass: validate BASIC line numbers (skip CODE block lines and NODDY section)
+        for (var i = 0; i < doc.lineCount; i++) {
+            var line = doc.lineAt(i);
+            var text = line.text;
+            var trimmed = text.trim();
+            // Skip empty lines
+            if (!trimmed) {
+                continue;
+            }
+            // Skip lines inside CODE blocks - they are assembly, not BASIC
+            if (isInCodeBlock(i)) {
+                continue;
+            }
+            // Check for NODDY trigger
+            //if (/^\d+\s+(?:REM\s*)?NODDY/i.test(trimmed)) {
+            if (/^\d+\s+REM\s+NODDY/i.test(trimmed)) {
+                noddyStartLine = i;
+            }
+            // Skip lines after NODDY trigger
+            if (noddyStartLine >= 0 && i > noddyStartLine) {
+                continue; // <-- This skips BASIC line number validation after NODDY
+            }
+            // Check if line starts with a BASIC line number
+            // Must be decimal digits only (not hex like 400C)
+            var lineNumMatch = /^(\d+)/.exec(trimmed);
+            if (!lineNumMatch) {
+                errors.push({
+                    line: i,
+                    start: 0,
+                    end: Math.min(10, text.length),
+                    message: 'Line must start with a BASIC line number'
+                });
+                continue;
+            }
+            var lineNum = parseInt(lineNumMatch[1], 10);
+            // Check line number is in valid range
+            if (lineNum < 1 || lineNum > 65535) {
+                errors.push({
+                    line: i,
+                    start: 0,
+                    end: lineNumMatch[1].length,
+                    message: "Line number ".concat(lineNum, " is out of valid range (1-65535)")
+                });
+            }
+            // Check line numbers are ascending
+            if (lineNum <= lastLineNum) {
+                errors.push({
+                    line: i,
+                    start: 0,
+                    end: lineNumMatch[1].length,
+                    message: "Line number ".concat(lineNum, " must be greater than previous line number ").concat(lastLineNum)
+                });
+            }
+            lastLineNum = lineNum;
+        } // END of BASIC line number validation loop
+        return { errors: errors, noddyStartLine: noddyStartLine, codeBlockRanges: codeBlockRanges };
+    } // END of validateLineNumbers function 
     function refreshDiagnostics(doc) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t;
         if (doc.languageId !== 'mtxbasic') {
             return;
         }
@@ -352,7 +559,7 @@ function activate(ctx) {
             { id: 'MOD', pattern: 'MOD', cmdname: 'numfn', args: [{ kind: 'numeric' }, { kind: 'numeric' }], expectEnd: true }, //range to be confirmed
             { id: 'MVSPR', pattern: 'MVSPR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 8 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true }, //3rd param needs for detail
             { id: 'NEXT', pattern: 'NEXT', cmdname: 'stdcmd', args: [{ kind: 'expr', required: false }], expectEnd: true }, //CONTROL STRUCTURE MUST BE Alphanumeric expr. No expr is also valid
-            { id: 'NODDY', pattern: 'NODDY', cmdname: 'stdcmd', args: [], expectEnd: true }, //setup similar to CODE
+            { id: 'NODDY', pattern: 'NODDY', cmdname: 'stdcmd', args: [], expectEnd: true, description: 'Marks the start of NODDY text language section' }, //setup similar to CODE
             { id: 'NOT', pattern: 'NOT', cmdname: 'stdcmd', args: [] }, // removed , expectEnd: true so that A=NOT*5 is valid
             //{ id: 'ON', pattern: 'ON', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}] }, //CONTROL STRUCTURE and associated with GOTO or GOSUB
             { id: 'OR', pattern: 'OR', cmdname: 'stdcmd', args: [] }, // removed , expectEnd: true so that A=OR*5 is valid
@@ -362,11 +569,11 @@ function activate(ctx) {
             { id: 'PEEK', pattern: 'PEEK', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true },
             { id: 'PHI', pattern: 'PHI', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0 }], expectEnd: true }, //float number, angle in radians
             { id: 'PI', pattern: 'PI', cmdname: 'stdcmd', args: [] }, //removed , expectEnd: true so that A=PI*5 is valid
-            { id: 'PLOD', pattern: 'PLOD', cmdname: 'strcmd', args: [{ kind: 'string' }], expectEnd: true },
+            { id: 'PLOD', pattern: 'PLOD', cmdname: 'strcmd', args: [{ kind: 'string' }], expectEnd: true, description: 'Execute a NODDY program' },
             { id: 'PLOT', pattern: 'PLOT', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }], expectEnd: true },
             { id: 'POKE', pattern: 'POKE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
             //{ id: 'PRINT', pattern: 'PRINT',  cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, // allows comma and semicolon between exprs and at end of line. Only allows ; or , before a : if another command after it (common to all)
-            { id: 'RAND', pattern: 'RAND', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 65535 }], expectEnd: true }, //range to be confirmed
+            { id: 'RAND', pattern: 'RAND', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: -1E+38, max: 1E+38 }], expectEnd: true }, //range to be confirmed
             { id: 'READ', pattern: 'READ', cmdname: 'stdcmd', args: [], expectEnd: false }, //requires at least one value or expr. no error checking as data can be anything but it must match up with the DATA statements (typically a run time error)     
             { id: 'REM', pattern: 'REM', cmdname: 'strcmd', args: [{ kind: 'string' }], expectEnd: true }, // can be anything - how do we avoid false positives like REM valid information where code determines that valid or Valid or VALID is part of VAL!
             { id: 'RESTORE', pattern: 'RESTORE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true },
@@ -378,10 +585,10 @@ function activate(ctx) {
             { id: 'SBUF', pattern: 'SBUF', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 8160 }], expectEnd: true }, //range confirmed, see appendix 8
             { id: 'SGN', pattern: 'SGN', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1, max: 1 }], expectEnd: true }, //-1 if -ve 0 if 0 and +1 if +ve
             { id: 'SIN', pattern: 'SIN', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1E-9, max: 1E+9 }], expectEnd: true }, //float number, range to avoid div by 0 overflow
-            { id: 'SOUND', pattern: 'SOUND', cmdname: 'stdcmd', // 3 or 7 parameter options allowed
-                args: [{ kind: 'numeric', min: 0, max: 4 }, { kind: 'numeric', min: 0, max: 1023 },
-                    { kind: 'numeric', min: 0, max: 15 }, { kind: 'numeric', min: 1 / 64 },
-                    { kind: 'numeric', min: 1 / 64 }, { kind: 'numeric', min: 1 / 64 }, //maxs to be confirmed
+            { id: 'SOUND', pattern: 'SOUND', cmdname: 'stdcmd', // 3 (direct sound) or 7 parameter continuous sound, more flexible options allowed
+                args: [{ kind: 'numeric', min: 0, max: 4 }, { kind: 'numeric', min: 0, max: 8192 }, //0-1023 for direct and 0 to 8192 for continuous sound
+                    { kind: 'numeric', min: 0, max: 1023 }, { kind: 'numeric', min: -8192, max: 8192 }, //vol 0-15 for direct sound, 0-1023 for continuous sound. Frequency change +/-8192
+                    { kind: 'numeric', min: -1023, max: 1023 }, { kind: 'numeric', min: 0, max: 65536 }, //vol change +/- 32767 but recommend +/-1023. For time, measured in 1/64ths of a second, max duration of 1024s over 17mins
                     { kind: 'numeric', min: 0, max: 1 }],
                 expectEnd: true },
             { id: 'SPK$', pattern: 'SPK\\$', cmdname: 'strcmd', args: [], expectEnd: true },
@@ -635,15 +842,81 @@ function activate(ctx) {
             };
         } // END of general validator code
         ); // END of validator
-        // Check line numbers first
-        var lineNumErrors = validateLineNumbers(doc);
+        // Check line numbers first and suppress NODDY lines
+        // Check line numbers first - also detects NODDY trigger line AND CODE block ranges
+        var _u = validateLineNumbers(doc), lineNumErrors = _u.errors, noddyStartLine = _u.noddyStartLine, codeBlockRanges = _u.codeBlockRanges;
         for (var _i = 0, lineNumErrors_1 = lineNumErrors; _i < lineNumErrors_1.length; _i++) {
             var err = lineNumErrors_1[_i];
             var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
             diags.push(new vscode.Diagnostic(range, err.message, vscode.DiagnosticSeverity.Error));
         } // END of line number errors check
+        // Helper function to check if a line is inside a CODE block
+        function isInCodeBlock(lineNum) {
+            for (var _i = 0, codeBlockRanges_3 = codeBlockRanges; _i < codeBlockRanges_3.length; _i++) {
+                var block = codeBlockRanges_3[_i];
+                if (lineNum >= block.start && lineNum <= block.end) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        // ============================================
+        // Z80 CODE BLOCK VALIDATION
+        // Validate assembly lines BEFORE the main BASIC loop
+        // ============================================
+        for (var _v = 0, codeBlockRanges_2 = codeBlockRanges; _v < codeBlockRanges_2.length; _v++) {
+            var block = codeBlockRanges_2[_v];
+            for (var i = block.start; i <= block.end; i++) {
+                var lineText = doc.lineAt(i).text;
+                var trimmed = lineText.trim();
+                // Skip empty lines
+                if (!trimmed)
+                    continue;
+                // Parse and validate Z80 assembly line
+                // This is where your Z80 validation goes
+                // For now, just skip - no errors for assembly lines
+                // Optional: Add Z80 validation here using z80codes.ts functions
+                // const parsed = parseZ80Line(lineText, i);
+                // if (parsed) {
+                //     const z80Errors = validateZ80Instruction(parsed);
+                //     for (const err of z80Errors) {
+                //         diags.push(new vscode.Diagnostic(...));
+                //     }
+                // }
+            }
+        }
+        // ============================================
+        // MAIN BASIC VALIDATION LOOP
+        // ============================================
+        // GOSUB nesting counter: count occurrences of GOSUB segments
+        // encountered during static validation. If the count exceeds the
+        // MTX BASIC limit of 34 nested GOSUBs, emit an error on the
+        // offending segment. This is a conservative static check.
+        var gosubCount = 0;
         var _loop_4 = function (i) {
+            // Skip lines after NODDY trigger
+            if (noddyStartLine >= 0 && i > noddyStartLine) {
+                return "break";
+            }
+            // Skip lines inside CODE blocks - these are Z80 assembly, not BASIC
+            if (isInCodeBlock(i)) {
+                return "continue";
+            }
             var line = doc.lineAt(i);
+            var lineText = line.text;
+            var trimmedLine = lineText.trim();
+            // Skip empty lines
+            if (!trimmedLine) {
+                return "continue";
+            }
+            // Check if this is a single-line numbered CODE marker (e.g. "57 CODE").
+            // This line is a valid BASIC directive that signals the start of a Z80
+            // assembly block; the assembly lines inside the block are validated
+            // earlier via `codeBlockRanges`. Skip generic BASIC validators for
+            // this marker only so we don't flag the correct form as an error.
+            if (/^\d+\s+CODE\s*$/i.test(trimmedLine)) {
+                return "continue";
+            }
             // MTX BASIC inline editor has a max line length of 159 characters
             if (line.text.length >= 159) { // range is 0 to 158 (159 characters max)
                 var range = new vscode.Range(new vscode.Position(i, 159), new vscode.Position(i, line.text.length));
@@ -761,6 +1034,7 @@ function activate(ctx) {
                 var readFlag = false;
                 var inputFlag = false;
                 var dimFlag = false;
+                var codeFlag = false;
                 // Match assignments not preceded by LET (BareAssignment) when they should
                 var bareAss = /^\s*(?:\d+\s+)?(?!LET\b)([A-Za-z][A-Za-z0-9]*\$?)\s*=/i.exec(seg.text);
                 var bstart = seg.start;
@@ -787,6 +1061,24 @@ function activate(ctx) {
                     var range = new vscode.Range(new vscode.Position(i, start), new vscode.Position(i, start + seg.text.length));
                     diags.push(new vscode.Diagnostic(range, 'REM must be followed by a space before comment text', vscode.DiagnosticSeverity.Error));
                 }
+                // GOSUB nested-call counter: if this segment is a GOSUB command - THIS CODE ONLY COUNTS TOTAL NUMBER OF GOSUBS
+                //NESTED is when a GOSUB is called within another GOSUB subroutine. This is hard to determine with static analysis.
+                // (not inside a REM or a quoted string) increment the counter and
+                // report an error when it exceeds 34.
+                /**                 const gosubStartMatch = /^\s*GOSUB\b/i.exec(seg.text);
+                                if (gosubStartMatch) {
+                                        // Ensure this occurrence is not inside a quoted string
+                                        const gosubIdx = seg.text.toUpperCase().indexOf('GOSUB');
+                                        if (!isInString(gosubIdx)) {
+                                                gosubCount++;
+                                                if (gosubCount > 34) {
+                                                        const absIdx = seg.start + gosubIdx;
+                                                        const range = new vscode.Range(new vscode.Position(i, absIdx), new vscode.Position(i, absIdx + 6));
+                                                        diags.push(new vscode.Diagnostic(range, 'Too many nested GOSUBs (maximum 34)', vscode.DiagnosticSeverity.Error));
+                                                }
+                                        }
+                                }
+                */
                 // Check LET assignments for type compatibility helper
                 var letMatch = /^\s*LET\s+([A-Za-z][A-Za-z0-9]*\$?)\s*=\s*(.+)$/i.exec(seg.text);
                 if (letMatch) {
@@ -807,8 +1099,8 @@ function activate(ctx) {
                     //special handling for LET as could be complex expression on RHS
                     if (rhs.length !== 0) {
                         // process each part of RHS further
-                        for (var _w = 0, rhs_1 = rhs; _w < rhs_1.length; _w++) {
-                            var itemInRhs = rhs_1[_w];
+                        for (var _7 = 0, rhs_1 = rhs; _7 < rhs_1.length; _7++) {
+                            var itemInRhs = rhs_1[_7];
                             var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
                             var t = rhsPart.trim();
                             // skip standalone arithmetic operator tokens
@@ -886,8 +1178,8 @@ function activate(ctx) {
                         var argsOffsetInSeg = Math.max(0, seg.text.indexOf(argsTextRaw, segMatchIndex));
                         var startChar = seg.start + argsOffsetInSeg;
                         var endChar = startChar + (argsTextRaw.length || 1);
-                        for (var _x = 0, printErrors_1 = printErrors; _x < printErrors_1.length; _x++) {
-                            var e = printErrors_1[_x];
+                        for (var _8 = 0, printErrors_1 = printErrors; _8 < printErrors_1.length; _8++) {
+                            var e = printErrors_1[_8];
                             if (!e)
                                 continue; // Skip null entries
                             var range = new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar));
@@ -978,40 +1270,91 @@ function activate(ctx) {
                         diags.push(new vscode.Diagnostic(range, "Boolean operator ".concat(issue.token, " must be separated by whitespace (found \"").concat(issue.fragment, "\")"), vscode.DiagnosticSeverity.Error));
                     });
                     // Validate comparisons in condition (skip comparisons inside quoted strings)
-                    var cmpRe = /([^<>=!]+?)\s*(=|<>|<=|>=|<|>)\s*([^<>=!]+)/g;
-                    var cm = void 0;
+                    //                const cmpRe = /([^<>=!]+?)\s*(=|<>|<=|>=|<|>)\s*([^<>=!]+)/g;
+                    //                let cm: RegExpExecArray | null;
                     var condSpans = (0, stdFns_js_1.splitBooleanExpression)(cond_1);
                     (0, stdFns_js_1.validateBooleanConnectors)(cond_1, condSpans, function (spanStart, spanEnd, bad) {
                         var startChar = seg.start + condStart_1 + spanStart;
                         var endChar = seg.start + condStart_1 + spanEnd;
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "Invalid boolean connector \"".concat(bad, "\" (expected AND, OR, or NOT)"), vscode.DiagnosticSeverity.Error));
                     });
-                    while ((cm = cmpRe.exec(cond_1)) !== null) {
-                        var relIdx = (_k = cm.index) !== null && _k !== void 0 ? _k : 0;
-                        // skip matches that occur inside quoted strings in the condition
-                        if (isIndexInQuotedString(cond_1, relIdx))
+                    /**             The mismatch happens because the IF comparison logic currently decides “string vs. numeric”
+                                    by running stringExprParts / varExprParts on the whole side. For ASC(SPK$) that returns
+                                    “string” (it sees the $ argument) before varExprParts ever marks it numeric, so the comparison
+                                    trips the (lhsHasStr && rhsHasNum) rule.
+                                    Fix: classify each side with a helper that looks at the top-level expression
+                                    (simple variable vs. known string / numeric functions) before falling back to the
+                                    expansive part-scans. Use classifyExpr to get lhsType and rhsType.
+                    */
+                    // Split condition by AND/OR first, then validate each comparison
+                    var condUpper = cond_1.toUpperCase();
+                    var inString = false;
+                    var currentPart = '';
+                    var currentStart = 0;
+                    var condParts = [];
+                    for (var j = 0; j <= cond_1.length; j++) {
+                        if (j < cond_1.length && cond_1[j] === '"') {
+                            inString = !inString;
+                            currentPart += cond_1[j];
                             continue;
-                        var lhs = ((_l = cm[1]) !== null && _l !== void 0 ? _l : '').trim();
-                        var rhs_2 = ((_m = cm[3]) !== null && _m !== void 0 ? _m : '').trim();
-                        /**                       The mismatch happens because the IF comparison logic currently decides “string vs. numeric”
-                                                by running stringExprParts / varExprParts on the whole side. For ASC(SPK$) that returns
-                                                “string” (it sees the $ argument) before varExprParts ever marks it numeric, so the comparison
-                                                trips the (lhsHasStr && rhsHasNum) rule.
-                                                Fix: classify each side with a helper that looks at the top-level expression
-                                                (simple variable vs. known string / numeric functions) before falling back to the
-                                                expansive part-scans. Use classifyExpr to get lhsType and rhsType.
-                        */
-                        var lhsType = (0, stdFns_js_1.classifyExpr)(lhs);
-                        var rhsType = (0, stdFns_js_1.classifyExpr)(rhs_2);
-                        if ((lhsType.hasString && rhsType.hasNumeric) || (lhsType.hasNumeric && rhsType.hasString)) {
-                            // compute absolute range for this comparison in seg.text
-                            var absIdx = condStart_1 + relIdx;
-                            if (isInString(absIdx))
-                                continue;
-                            var startChar = seg.start + absIdx;
-                            var endChar = startChar + (((_o = cm[0]) === null || _o === void 0 ? void 0 : _o.length) || 1);
-                            var range = new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar));
-                            diags.push(new vscode.Diagnostic(range, "Type mismatch in IF comparison: ".concat(lhs, " ").concat(cm[2], " ").concat(rhs_2), vscode.DiagnosticSeverity.Error));
+                        }
+                        if (inString) {
+                            if (j < cond_1.length)
+                                currentPart += cond_1[j];
+                            continue;
+                        }
+                        // Check for AND/OR at word boundary
+                        var slice = condUpper.slice(j);
+                        var matched = false;
+                        for (var _9 = 0, _10 = [' AND ', ' OR ']; _9 < _10.length; _9++) {
+                            var op = _10[_9];
+                            if (slice.startsWith(op)) {
+                                if (currentPart.trim()) {
+                                    condParts.push({ text: currentPart.trim(), start: currentStart });
+                                }
+                                j += op.length - 1;
+                                currentStart = j + 1;
+                                currentPart = '';
+                                matched = true;
+                                break;
+                            }
+                        }
+                        if (!matched && j < cond_1.length) {
+                            if (currentPart === '') {
+                                currentStart = j;
+                            }
+                            currentPart += cond_1[j];
+                        }
+                    }
+                    // Don't forget the last part
+                    if (currentPart.trim()) {
+                        condParts.push({ text: currentPart.trim(), start: currentStart });
+                    }
+                    // Now validate each individual comparison
+                    for (var _11 = 0, condParts_1 = condParts; _11 < condParts_1.length; _11++) {
+                        var part = condParts_1[_11];
+                        // Strip leading NOT if present
+                        var compText = part.text.trim();
+                        var notOffset = 0;
+                        var notMatch = /^\s*NOT\s+/i.exec(compText);
+                        if (notMatch) {
+                            notOffset = notMatch[0].length;
+                            compText = compText.slice(notOffset);
+                        }
+                        var cmpRe = /([^<>=!]+?)\s*(=|<>|<=|>=|<|>)\s*([^<>=!]+)/g;
+                        var cmpMatch = void 0;
+                        while ((cmpMatch = cmpRe.exec(compText)) !== null) {
+                            var lhs = ((_k = cmpMatch[1]) !== null && _k !== void 0 ? _k : '').trim();
+                            var rhs_2 = ((_l = cmpMatch[3]) !== null && _l !== void 0 ? _l : '').trim();
+                            var lhsType = (0, stdFns_js_1.classifyExpr)(lhs);
+                            var rhsType = (0, stdFns_js_1.classifyExpr)(rhs_2);
+                            if ((lhsType.hasString && rhsType.hasNumeric) || (lhsType.hasNumeric && rhsType.hasString)) {
+                                var absStart = seg.start + condStart_1 + part.start + notOffset + ((_m = cmpMatch.index) !== null && _m !== void 0 ? _m : 0);
+                                if (isInString(absStart))
+                                    continue;
+                                var range = new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + cmpMatch[0].length));
+                                diags.push(new vscode.Diagnostic(range, "Type mismatch in IF comparison: ".concat(lhs, " (").concat(lhsType.hasString ? 'string' : 'numeric', ") vs ").concat(rhs_2, " (").concat(rhsType.hasString ? 'string' : 'numeric', ")"), vscode.DiagnosticSeverity.Error));
+                            }
                         }
                     }
                     // helper to compute chunk start index in seg.text (best-effort)
@@ -1150,7 +1493,7 @@ function activate(ctx) {
                 // This occurs when IF...THEN...ELSE has multiple commands between the THEN and ELSE parts
                 var elseMatch = /^\s*ELSE\s+(.+)$/i.exec(seg.text);
                 if (elseMatch) {
-                    var elseContent_1 = ((_p = elseMatch[1]) !== null && _p !== void 0 ? _p : '').trim();
+                    var elseContent_1 = ((_o = elseMatch[1]) !== null && _o !== void 0 ? _o : '').trim();
                     if (elseContent_1) {
                         var elseStart_1 = seg.start + seg.text.indexOf(elseContent_1);
                         var elseRange_1 = new vscode.Range(new vscode.Position(i, elseStart_1), new vscode.Position(i, elseStart_1 + elseContent_1.length));
@@ -1218,7 +1561,7 @@ function activate(ctx) {
                 if (forMatch) {
                     var ctrlVar = forMatch[1], startExprRaw = forMatch[2], endExprRaw = forMatch[3], stepExprRaw = forMatch[4];
                     var ctrlIsNumeric = !!ctrlVar && (0, stdFns_js_1.isValidVarName)(ctrlVar);
-                    var segBase = seg.start + ((_q = forMatch.index) !== null && _q !== void 0 ? _q : 0);
+                    var segBase = seg.start + ((_p = forMatch.index) !== null && _p !== void 0 ? _p : 0);
                     var reportForError = function (text, msg) {
                         var _a;
                         var idx = seg.text.indexOf(text, (_a = forMatch.index) !== null && _a !== void 0 ? _a : 0);
@@ -1276,14 +1619,14 @@ function activate(ctx) {
                     var selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
                     var selectorType = (0, stdFns_js_1.classifyExpr)(selectorExpr);
                     if (!selectorType.hasNumeric) {
-                        var idx = seg.text.indexOf(selectorExpr, (_r = onMatch.index) !== null && _r !== void 0 ? _r : 0);
+                        var idx = seg.text.indexOf(selectorExpr, (_q = onMatch.index) !== null && _q !== void 0 ? _q : 0);
                         var startChar = seg.start + (idx >= 0 ? idx : 0);
                         var endChar = startChar + selectorExpr.length;
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ON ".concat(branchKeyword_1, ": selector must be numeric (got \"").concat(selectorExpr, "\")"), vscode.DiagnosticSeverity.Error));
                     }
                     var targets = (0, stdFns_js_1.splitTopLevel)(targetsRaw).map(function (t) { return t.trim(); }).filter(Boolean);
                     if (targets.length === 0) {
-                        var idx = seg.text.indexOf(branchKeyword_1, (_s = onMatch.index) !== null && _s !== void 0 ? _s : 0);
+                        var idx = seg.text.indexOf(branchKeyword_1, (_r = onMatch.index) !== null && _r !== void 0 ? _r : 0);
                         var startChar = seg.start + (idx >= 0 ? idx : 0);
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + branchKeyword_1.length)), "ON ".concat(branchKeyword_1, ": requires at least one line number"), vscode.DiagnosticSeverity.Error));
                     }
@@ -1390,9 +1733,9 @@ function activate(ctx) {
                                 CODE EXCEPTION exact-match allowed form (optional lineno + CODE) — if the entire segment equals this, it's valid
                                 STILL TO ADD CAPABILITY FOR ADDING HEXADECIMAL addresses and Z80 instruction, the construct will be
                                 <16-bit hex address (2 bytes)> <label> <Z80 instruction> {; comment text}
-                                When CODE is first invoked it will automatically Aadd
+                                When CODE is first invoked it will automatically Add
                                 <16-bit address> RET  (RET = C9 in hexadecimal and 1 byte)
-                                as the original MTX inline assembler did
+                                as the original MTX inline assembler did. There will need to be some inline processing to handle the hexaddress program counter
                                 The user can then add Z80 instructions which involve looking up a table to see if the instruction is correct
                                 and to increase the hexadecimal addresss counter by <x> bytes,either 1, 2, 3 or 4.
                                 the assembler has specials, like labels, reserves for DB, DW and DS, etc.
@@ -1400,13 +1743,14 @@ function activate(ctx) {
                 {
                     if (/^\s*(?:\d+\s+)?CODE\s*$/i.test(seg.text)) {
                         /* valid; nothing to do */
+                        codeFlag = true; // set flag so generic validator block skips this segment
                     }
                     else {
                         // 2) any occurrence of the standalone word CODE (not in quotes) is an error in this context
                         var codeWordRe = /\bCODE\b/gi;
                         var cm = void 0;
                         while ((cm = codeWordRe.exec(seg.text)) !== null) {
-                            var matchIdx = (_t = cm.index) !== null && _t !== void 0 ? _t : -1;
+                            var matchIdx = (_s = cm.index) !== null && _s !== void 0 ? _s : -1;
                             if (isInString(matchIdx))
                                 continue;
                             var start = seg.start + matchIdx;
@@ -1415,7 +1759,7 @@ function activate(ctx) {
                         // 3) also flag concatenated/malformed uses like "CODE5" or "CODEPRINT" (CODE followed immediately by word-chars)
                         var codeConcatRe = /\bCODE(?=\w)/gi;
                         while ((cm = codeConcatRe.exec(seg.text)) !== null) {
-                            var matchIdx = (_u = cm.index) !== null && _u !== void 0 ? _u : -1;
+                            var matchIdx = (_t = cm.index) !== null && _t !== void 0 ? _t : -1;
                             if (isInString(matchIdx))
                                 continue;
                             // highlight the whole token starting at matchIdx
@@ -1432,7 +1776,7 @@ function activate(ctx) {
                 // Does this mean that validator.name will fail?
                 // Only run the generic validators when we haven't already handled LET/PRINT/IF
                 // and when this segment is not a REM (REM is free-form text and should be skipped)
-                if (!letFlag && !printFlag && !ifFlag && !forFlag && !onFlag && !dataFlag && !readFlag && !inputFlag && !dimFlag && !seg.text.trim().toUpperCase().startsWith('REM')) {
+                if (!letFlag && !printFlag && !ifFlag && !forFlag && !onFlag && !dataFlag && !readFlag && !inputFlag && !dimFlag && !codeFlag && !seg.text.trim().toUpperCase().startsWith('REM')) {
                     runValidatorsOnSegment(seg.text, validators, function (err, rawMatch, absoluteIdx, matchArray) {
                         var _a, _b, _c;
                         if (!err || typeof absoluteIdx !== 'number')
@@ -1465,15 +1809,128 @@ function activate(ctx) {
                 } // END of main validator error checking block
             };
             //const segments = splitLineSegments(line.text); // each { text, start }
-            for (var _v = 0, segments_1 = segments; _v < segments_1.length; _v++) {
-                var seg = segments_1[_v];
+            for (var _6 = 0, segments_1 = segments; _6 < segments_1.length; _6++) {
+                var seg = segments_1[_6];
                 _loop_5(seg);
             } // END of for (const seg of segments) loop
         };
         // run validators over each line (updated to handle multiple commands per line)
+        // STOP at NODDY trigger line - lines after it are NODDY content, not BASIC
         for (var i = 0; i < doc.lineCount; i++) {
-            _loop_4(i);
+            var state_1 = _loop_4(i);
+            if (state_1 === "break")
+                break;
         } // for (let i = 0; i < doc.lineCount; i++)
+        // Inside refreshDiagnostics function, add after the main BASIC validation loop:
+        // ============================================
+        // NODDY VALIDATION SECTION
+        // ============================================
+        // Find NODDY trigger line (e.g., "9999 NODDY")
+        // After the BASIC validation loop, add NODDY validation:
+        if (noddyStartLine >= 0) {
+            //noddyLength = computeNoddyAsciiLength(doc, noddyStartLine);
+            // UPDATED: Use byte length
+            noddyLength = computeNoddyByteLength(doc, noddyStartLine);
+            // Collect all lines from document
+            var allLines = [];
+            for (var j = 0; j < doc.lineCount; j++) {
+                allLines.push(doc.lineAt(j).text);
+            }
+            // Parse and validate NODDY content
+            var _w = (0, stdFns_js_1.parseNoddyContent)(allLines, noddyStartLine + 1), pages = _w.pages, parseErrors = _w.errors;
+            // Add parse errors to diagnostics
+            for (var _x = 0, parseErrors_1 = parseErrors; _x < parseErrors_1.length; _x++) {
+                var err = parseErrors_1[_x];
+                var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
+                diags.push(new vscode.Diagnostic(range, "NODDY: ".concat(err.message), vscode.DiagnosticSeverity.Error));
+            }
+            // Validate each program page
+            for (var _y = 0, pages_1 = pages; _y < pages_1.length; _y++) {
+                var page = pages_1[_y];
+                if (page.type === 'program') {
+                    var progErrors = (0, stdFns_js_1.validateNoddyProgram)(page, pages, page.lineStart);
+                    for (var _z = 0, progErrors_1 = progErrors; _z < progErrors_1.length; _z++) {
+                        var err = progErrors_1[_z];
+                        var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
+                        diags.push(new vscode.Diagnostic(range, "NODDY: ".concat(err.message), vscode.DiagnosticSeverity.Error));
+                    }
+                }
+            }
+            // Validate PLOD references in BASIC code point to existing program pages
+            var programPageNames = new Set(pages.filter(function (p) { return p.type === 'program'; }).map(function (p) { return p.name; }));
+            var basicLines = allLines.slice(0, noddyStartLine + 1);
+            var plodRefs = [];
+            for (var j = 0; j < basicLines.length; j++) {
+                var plodPattern = /PLOD\s+"(\w+)"/gi;
+                var match = void 0;
+                while ((match = plodPattern.exec(basicLines[j])) !== null) {
+                    var progName = match[1];
+                    plodRefs.push({ line: j, progName: progName, start: match.index });
+                    if (!programPageNames.has(progName)) {
+                        var range = new vscode.Range(new vscode.Position(j, match.index), new vscode.Position(j, match.index + match[0].length));
+                        diags.push(new vscode.Diagnostic(range, "NODDY: PLOD references undefined program \"".concat(progName, "\""), vscode.DiagnosticSeverity.Warning));
+                    }
+                }
+            }
+            // Check for unused text pages
+            var usedTextPages = new Set();
+            for (var _0 = 0, pages_2 = pages; _0 < pages_2.length; _0++) {
+                var page = pages_2[_0];
+                if (page.type === 'program') {
+                    for (var _1 = 0, _2 = page.content; _1 < _2.length; _1++) {
+                        var line = _2[_1];
+                        var displayMatch = /\*DISPLAY\s+(\w+)\./.exec(line);
+                        if (displayMatch) {
+                            usedTextPages.add(displayMatch[1]);
+                        }
+                    }
+                }
+            }
+            for (var _3 = 0, pages_3 = pages; _3 < pages_3.length; _3++) {
+                var page = pages_3[_3];
+                if (page.type === 'text' && !usedTextPages.has(page.name)) {
+                    var range = new vscode.Range(new vscode.Position(page.lineStart, 0), new vscode.Position(page.lineStart, 50));
+                    diags.push(new vscode.Diagnostic(range, "NODDY: Text page \"".concat(page.name, "\" is never displayed"), vscode.DiagnosticSeverity.Hint));
+                }
+            }
+            // Check for unused program pages (not called by PLOD)
+            var usedPrograms = new Set(plodRefs.map(function (r) { return r.progName; }));
+            for (var _4 = 0, pages_4 = pages; _4 < pages_4.length; _4++) {
+                var page = pages_4[_4];
+                if (page.type === 'program' && !usedPrograms.has(page.name)) {
+                    var range = new vscode.Range(new vscode.Position(page.lineStart, 0), new vscode.Position(page.lineStart, 50));
+                    diags.push(new vscode.Diagnostic(range, "NODDY: Program \"".concat(page.name, "\" is never called by PLOD"), vscode.DiagnosticSeverity.Hint));
+                }
+            }
+        } // END of NODDY validation section
+        // ============================================
+        // Z80 CODE BLOCK VALIDATION SECTION
+        // ============================================
+        /**
+                Need to convert the text prior to the code block into hexadecimal bytes as per MTX BASIC inline assembler rules
+                to determine the correct addresses for the Z80 instructions in the code block
+                using the validateCodeBlocks function from z80Validator module.
+         */
+        if (codeBlockRanges.length > 0) {
+            // Collect all lines for Z80 validation
+            var allDocLines = [];
+            for (var j = 0; j < doc.lineCount; j++) {
+                allDocLines.push(doc.lineAt(j).text);
+            }
+            // validateCodeBlocks takes the document lines array, not CodeBlock[]
+            var z80Errors = (0, z80codes_js_1.validateCodeBlocks)(allDocLines);
+            for (var _5 = 0, z80Errors_1 = z80Errors; _5 < z80Errors_1.length; _5++) {
+                var err = z80Errors_1[_5];
+                var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
+                var severity = err.severity === 'error'
+                    ? vscode.DiagnosticSeverity.Error
+                    : err.severity === 'warning'
+                        ? vscode.DiagnosticSeverity.Warning
+                        : vscode.DiagnosticSeverity.Information;
+                diags.push(new vscode.Diagnostic(range, "Z80: ".concat(err.message), severity));
+            }
+        } // END of Z80 CODE BLOCK VALIDATION SECTION
+        // Finally, set the diagnostics for the document
         diagCollection.set(doc.uri, diags);
     } // END of function refreshDiagnostics
     ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument(refreshDiagnostics));
@@ -1503,884 +1960,956 @@ function activate(ctx) {
             //const end = wordRange.end.character + 1; // Include the $ character
             //const extendedRange = new vscode.Range(wordRange.start.line, start, wordRange.end.line, end);
             //var word = document.getText(extendedRange);
-            //}  }     
+            //}  }
+            // Determine whether this position is inside a Z80 CODE block
+            // prefer Z80 hover info when appropriate where there is similar commands in MTX BASIC (AND, OR, OUT and IN). 
+            // Reuse validateLineNumbers to compute `codeBlockRanges` (same logic used by diagnostics).
+            var codeBlockRanges = validateLineNumbers(document).codeBlockRanges;
+            var inCodeBlockAtPos = false;
+            for (var _i = 0, codeBlockRanges_4 = codeBlockRanges; _i < codeBlockRanges_4.length; _i++) {
+                var block = codeBlockRanges_4[_i];
+                if (position.line >= block.start && position.line <= block.end) {
+                    inCodeBlockAtPos = true;
+                    break;
+                }
+            }
             // Handle specific BASIC commands            
             // MTX BASIC command match must be in capitals to comply with MTX BASIC language convention.
-            if (word === 'ABS') {
-                return new vscode.Hover("**ABS**: Gives the absolute value of the specified number.\n\n" +
-                    "Usage: ABS(number) \n\n" +
-                    "The result has the same magnitude but the sign will always be positive.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 LET A=ABS(59): PRINT \"A= \";A\n\n" +
-                    "20 LET B=ABS(-59): PRINT \"B= \";B\n\n" +
-                    "When RUN, this gives the following A= 59 B= 59");
-            }
-            if (word === 'ADJSPR') {
-                return new vscode.Hover("**ADJSPR**: Adjust a sprites value with the specified parameters.\n\n" +
-                    "Usage: ADJSPR P,N,V \n\n" +
-                    "This command adjusts a value which has been assigned to a sprite either by the SPRITE command or subsequently by ADJSPR or MVSPR.\n\n" +
-                    "The advantage of ADJSPR is that unlike SPRITE, only 1 parameter is altered at a time thereby increasing the speed of updating single values.\n\n" +
-                    "N: Sprite number\n\n" +
-                    "P = 0 : Sprite pattern. V = 0 to 31 (size 1) or 0 to 127 (size 0).\n\n" +
-                    "P = 1 : Sprite colour. V = 0 to 15 (see colour table in appendix 7).\n\n" +
-                    "P = 2 : Sprite x-position. V = 0 to 255.\n\n" +
-                    "P = 3 : Sprite y-position. V = 0 to 255.\n\n" +
-                    "P = 4 : Sprite x-speed. V = 0 to 255 (128 to 255 = negative).\n\n" +
-                    "P = 5 : Sprite y-speed. V = 0 to 255 (128 to 255 = negative).");
-            }
-            if (word === 'AND') {
-                return new vscode.Hover("**AND**: Boolean expression. compares two values to see if the condition is either True or False.\n\n" +
-                    "Usage: AND \n\n" +
-                    "Example: \n\n" +
-                    "10 IF X=1 AND Y=2 THEN STOP\n\n" +
-                    "True (-1) if X=1 and Y=2 otherwise its False (0).");
-            }
-            if (word === 'ANGLE') { // doesn't generate a MTX BASIC SE.C error if VS 4 not specified beforehand
-                return new vscode.Hover("**ANGLE**: Initialises the direction to the specified angle.\n\n" +
-                    "Usage: ANGLE angle_rad \n\n" +
-                    "The angle_rad is in radians measured in an anticlockwise direction from the horizontal.\n\n" +
-                    "The computer holds a 'direction' which is used in commands such as ARC, DRAW and MVSPR.\n\n" +
-                    "The direction is made up of two components: ANGLE and PHI (see later)\n\n" +
-                    "For conversion to degrees: degrees = radians*360/2/PI\n\n" +
-                    "For conversion to radians: radians = degrees*PI*2/360, except 0 degrees = 0 radians");
-            }
-            if (word === 'ARC') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
-                return new vscode.Hover("**ARC**:  Draws an arc of a circle with the specified parameters.\n\n" +
-                    "Usage: ARC length,angle_rads \n\n" +
-                    "draws an arc of a circle. The starting position is the current PLOT position and the initial direction\n\n" +
-                    "is the direction currently held by the computer. Both the PLOT position and the direction are updated.\n\n" +
-                    "If the ARC length + PLOT x or y coordinates are outwith 0..255 or 0..191 respectively will result in an error.\n\n" +
-                    "The angle parameter, theta in radians determines the curvature of the arc by specifying what angle is subtended.\n\n" +
-                    "In other words the larger the angle, the tighter the curve.\n\n" +
-                    "If the angle is greater than 360\u00BA or 2*pi radians, the arc will retrace its path.\n\n" +
-                    "Must be in graphics mode (VS 4) for command to exexute without an error");
-            }
-            if (word === 'ASC') {
-                return new vscode.Hover("**ASC**:  Returns the ASCII code of the first character of the string.\n\n" +
-                    "Usage: ASC(string) \n\n" +
-                    "Printable (screen displayable) ASCII codes are from 32 to 126.\n\n" +
-                    "Example: \n\n" +
-                    "10 LET A=ASC(\"TEST\")\n\n" +
-                    "20 PRINT \"A= \";A\n\n" +
-                    "When RUN, this gives the ASCII code for T which is 84 in decimal, A= 84");
-            }
-            if (word === 'ASSEM') {
-                return new vscode.Hover("**ASSEM**:  Invokes the built-in Z80 assembler to assemble at the specified BASIC line. (See CODE).\n\n" +
-                    "Usage: ASSEM \\<line number\\> \n\n" +
-                    "The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ASSEM, AUTO, or EDIT.");
-            }
-            if (word === 'ATN') {
-                return new vscode.Hover("**ATN**:  Returns the angle whose tangent is the specified number..\n\n" +
-                    "Usage: ATN(number) \n\n" +
-                    "The arc tangent. The number and the result are in radians\n\n" +
-                    "The arc tangent result is typically in the range -pi/2 to pi/2. The number and the result are in radians\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 PRINT TAN(0.785): REM TAN of 0.785 rads (45 degrees) = 1\n\n" +
-                    "20 PRINT ATN(1): REM ATN of 1 rads is 0.785 rads = 45 degress");
-            }
-            if (word === 'ATTR') {
-                return new vscode.Hover("**ATTR**:  Defines effects on the grahphics screen with the specified parameters.\n\n" +
-                    "Usage: ATTR P,state\n\n" +
-                    "ATTR determines the effect on the graphics screen of using one of the plotting commands such as PLOT, DRAW or ARC\n\n" +
-                    "The attributes are not exclusive but may be used in any combination.\n\n" +
-                    "The state of the attribute is either on or off where\n\n" +
-                    "state: 0 = OFF and 1 = ON\n\n" +
-                    "P takes the value 0,1,2 or 3.\n\n" +
-                    "P=0  Inverse print. Characters are printed in the paper colour on the ink colour.\n\n" +
-                    "P=1  Over print. Characters are merged with those already present.\n\n" +
-                    "P=2  Unplot. Plots the paper colour\n\n" +
-                    "P=3  Over-plot. Plots Plots the ink colour if paper was there before and the paper colour if ink was there before.\n\n" +
-                    "     During CLS, and other functions, text is not over written but colours may change.\n\n" +
-                    "The effect during plotting is to do nothing. This can be used to move the PLOT=SPRITE around the screen whilst leaving the screen unchanged.");
-            }
-            if (word === 'AUTO') {
-                return new vscode.Hover("**AUTO**:  Switches on the automatic line numbering.\n\n" +
-                    "Usage: AUTO \\<line number\\>,\\>increment\\> \n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ASSEM, AUTO, or EDIT.");
-            }
-            if (word === 'BAUD') {
-                return new vscode.Hover("**BAUD**:  Sets the RS232 channel 1 or 0 to the selected baud rate with the specified parameters.\n\n" +
-                    "Usage: BAUD channel,baud rate \n\n" +
-                    "Sets the RS232 channel 1 or 0 to the selected baud rate. The following rates are allowed:-\n\n" +
-                    "75, 110, 150, 300, 600, 1200, 2400, 4800, 9600, 19200\n\n" +
-                    "Example: \n\n" +
-                    "10 BAUD 0,1200\n\n" +
-                    "This sets channel 0 to 1200 baud rate");
-            }
-            if (word === 'CHR$') {
-                return new vscode.Hover("**CHR$**:  Returns  the character whose code is the specified number.\n\n" +
-                    "Usage: CHR$(number) \n\n" +
-                    "Example: \n\n" +
-                    "10 PRINT CHR$(65): REM prints A on the screen\n\n" +
-                    "Screen displayable ASCII characters are 32 to 126\n\n" +
-                    "ASCII codes 0 to 31 have special meaning and can be used to send special codes for printing to a printer.\n\n" +
-                    "These printable special codes can set printer to bold or underline for example, See LPRINT");
-            }
-            if (word === 'CIRCLE') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
-                return new vscode.Hover("**CIRCLE**: Draws a circle with the specified parameters.\n\n" +
-                    "Usage: CIRCLE X,Y,R\n\n" +
-                    "X: X coordinate of the centre of a circle.\n\n" +
-                    "Y: Y coordinate of the centre of a circle.\n\n" +
-                    "R: radius of a circle.\n\n" +
-                    "Must be in graphics mode (VS 4) for command to exexute without an error");
-            }
-            if (word === 'CLEAR') {
-                return new vscode.Hover("**CLEAR**:  CLEAR removes all of the variables.\n\n" +
-                    "Usage: CLEAR \n\n");
-            }
-            if (word === 'CLOCK') {
-                return new vscode.Hover("**CLOCK**:  The clock is initialised to the value of the string.\n\n" +
-                    "Usage: CLOCK string \n\n" +
-                    "The clock is a 100 hour clock which counts accurately in seconds minutes and hours up to 100 hours when it resets to 0.\n\n" +
-                    "To print the time see TIME$. For example: To print the time in the top left corner:\n\n" +
-                    "10 CLOCK \u201C120000\u201D: CLS\n\n" +
-                    "20 PRINT TIME$;CHR$(26);\n\n" +
-                    "30 GOTO 20: REM CHR$(26) Homes the cursor\n\n" +
-                    "see TIME$");
-            }
-            if (word === 'CLS') {
-                return new vscode.Hover("**CLS**:  Clear the screen.\n\n" +
-                    "Usage: CLS \n\n" +
-                    "In TEXT mode CLS will clear the screen (or Virtual screen).\n\n" +
-                    "in GRAPHICS mode CLS will clear the screen unless one of the screen attributes has been set using the ATTR function,\n\n" +
-                    "in which case it may be necessary to switch off the attribute before CLS will operate.");
-            }
-            if (word === 'CODE') {
-                return new vscode.Hover("**CODE**: CODE is an anchor word to indicate that the following lines are assembly language.\n\n" +
-                    "Usage: CODE \n\n" +
-                    "In the normal MTX editor mode, use ASSEM line number to create assembly CODE, note the word cannot be typed and is inserted by the assembler into the BASIC line.\n\n" +
-                    "NOTE: In this free form VS code extension, ASSEM line number is not used. Instead use \\<line number\\>  CODE (no space after it).\n\n" +
-                    "CODE command must be on a separate line and not part of a multi line, e.g. 20 CLS: CODE: PRINT \"test\"  \n\n" +
-                    "Example: \n\n" +
-                    "10 REM START OF PROGRAM\n\n" +
-                    "20 CODE\n\n" +
-                    "   LABEL: LD A,(HL)\n\n" +
-                    "\t       RET\n\n" +
-                    "The heaxadecimal line numbers for the code 8030 and 8031 are not required, these will be added once the program is RUN (compiled)\n\n" +
-                    "Refer to the MTX Series Owners Manual for details on assembler and Z80 assembly language");
-            }
-            if (word === 'COLOUR') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
-                return new vscode.Hover("**COLOUR**: Sets the colours for the graphics screen with the specified parameters.\n\n" +
-                    "Usage: COLOUR P,N\n\n" +
-                    "P: The value of p selects which areas of the screen the colour refers to.\n\n" +
-                    "Two sets of colours are defined. The print colours refer to Colours that will be used when colours are printed.\n\n" +
-                    "The non-print or PLOT colours refer to colours that will be used when colours are plotted or when screen functions are used.\n\n" +
-                    "P=0, print paper.\n\n" +
-                    "P=1, print ink.\n\n" +
-                    "P=2, non-print (plot) paper.\n\n" +
-                    "P=3, non-print ink.\n\n" +
-                    "P=4, border colour.\n\n" +
-                    "N: Selects the colour (see colour table in the appendix 7). (0 to 15)\n\n" +
-                    "Must be in graphics mode (VS 4) for command to exexute without an error");
-            }
-            if (word === 'CONT') {
-                return new vscode.Hover("**CONT**:  Used to restart a program after a STOP instruction or BRK kety pressed.\n\n" +
-                    "Usage: CONT \n\n" +
-                    "CONT can be used directly after a STOP command or after pressing the break key to restart the program.\n\n" +
-                    "Any editing or alteration of the program will prevent CONT from operating.");
-            }
-            if (word === 'COS') {
-                return new vscode.Hover("**COS**:  Returns the cosine of the angle.\n\n" +
-                    "Usage: COS(angle) \n\n" +
-                    "Returns the cosine of the angle specified in radians");
-            }
-            if (word === 'CRVS') {
-                return new vscode.Hover("**CRVS**: Creates a virtual screen with the specified parameters.\n\n" +
-                    "Usage: CRVS N,T,X,Y,W,H,S\n\n" +
-                    "N: Virtual screen reference number. (0 to 7)\n\n" +
-                    "T: Type of screen. 0=text, 1=graphics.\n\n" +
-                    "X: X coordinate of top left corner.\n\n" +
-                    "Y: Y coordinate of top left corner.\n\n" +
-                    "W: Width of virtual screen in characters.\n\n" +
-                    "H: Height of screen in lines.\n\n" +
-                    "S: Width of screen. (40 for text, 32 for graphics)\n\n" +
-                    "The virtual screen can be used for off-screen drawing and later copied to the main screen using the VS command.");
-            }
-            if (word === 'CSR') {
-                return new vscode.Hover("**CSR**:  Moves the cursor to position with the specified parameters.\n\n" +
-                    "Usage: CSR X,Y \n\n" +
-                    "X: X-coordinate (0 to 39 for text mode, 0 to 31 for graphics text mode).\n\n" +
-                    "Y: Y-coordinate (0 to 23).\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 CSR 12,10\n\n" +
-                    "Moves the cursor to position 12,10\n\n" +
-                    "Any subsequent Printing or Input will occur at the new cursor position.");
-            }
-            if (word === 'CTLSPR') {
-                return new vscode.Hover("**CTLSPR**:  Sprite control with the specified parameters.\n\n" +
-                    "Usage: CTLSPR P,X \n\n" +
-                    "P: parameter and can be any of the six below:\n\n" +
-                    "P=0  Speed (1 to 255 to 0 (1 is fastest)\n\n" +
-                    "P=1  Distance. Tells the computer to move the sprite by 'X' pixels when requested.\n\n" +
-                    "P=2  Number of sprites, 0 to 32 (The number of sprites must be at least 1)\n\n" +
-                    "P=3  Number of circling sprites. Sprites that will orbit when they go off the edge of the screen (must not exceed number of sprites)\n\n" +
-                    "P=4  Plot Sprite.A PLOT SPRITE can be chosen which will subsequently appear whenever a point is plotted. This sprite will move around the screen following any points or lines drawn by the BASIC GRAPHICS commands. This sprite can be any of the 32 defined in the normal way.\n\n" +
-                    "P=5  number of moving sprites 0 to 32. This is the number of sprites that will move by themselves according to the x-speed and y-speed set in the SPRITE and ADJSPR commands\n\n" +
-                    "P=6  magnitude (mag 1 or 2) and size (8x8 or 16x16)\n\n" +
-                    "X=0 mag 1, 8x8 ; X=1 mag 2, 8x8 ; X=2 mag 1, 16x16 and X=3 mag 2, 16x16");
-            }
-            if (word === 'DATA') {
-                return new vscode.Hover("**DATA**:  A data list construct accessible using a READ statement.\n\n" +
-                    "Usage: DATA \\<list of values\\> \n\n" +
-                    "DATA list can be a list of numbers or alphanumeric words or strings, e.g. 10 DATA 1,2,1CODE,\"test\"  20 READ A,B,C$,D$\n\n" +
-                    "DATA statements aren't themselves executed and will be ignored other than when required by a READ statement.\n\n" +
-                    "If all of the data on a line has been read by a READ statement, the computer will search for the next DATA statement and update the DATA POINTER accordingly.\n\n" +
-                    "If no more DATA is available, a No Data error will occur. DATA can be numbers of strings.\n\n" +
-                    "Example: \n\n" +
-                    "10 FOR I = 1 to 10: READ X: PRINT X: NEXT I\n\n" +
-                    "20 DATA 1,1,2,2,3,3,\n\n" +
-                    "30 DATA 4,4,5,5\n\n" +
-                    "See READ and RESTORE");
-            }
-            if (word === 'DIM') {
-                return new vscode.Hover("**DIM**:  Reserves space in the computer memeory for the specified an array(s).\n\n" +
-                    "Usage: DIM \\<array list\\> \n\n" +
-                    "Before an array can be used, space must be made in the computer memory using a DIM statement\n\n" +
-                    "Example: \n\n" +
-                    "10 DIM A(10,10),A$(1000)\n\n" +
-                    "Each element of a numeric array takes 5 bytes and each element of a character array takes 1 byte.\n\n" +
-                    "All strings are treated as character arrays rather than variable length strings. The amount of space allocated to the character array will depend on whether or not a DIM statement is used.\n\n" +
-                    "An array cannot be redimensioned unless all of the variables are cleared. See manual for more detail and examples");
-            }
-            if (word === 'DRAW') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
-                return new vscode.Hover("**DRAW**:  Draws a simple line with the specified parameter.\n\n" +
-                    "Usage: DRAW x \n\n" +
-                    "Draws a line of length X from the current plot position in the current direction The plot position is updated to the end of the line.\n\n" +
-                    "Must be in graphics mode (VS 4) for command to exexute without an error, see LINE");
-            }
-            if (word === 'DSI') {
-                return new vscode.Hover("**AA**:  Direct Screen Input.\n\n" +
-                    "Usage: DSI \n\n" +
-                    "This command allows you to roam about freely within a screen only ending when carriage return is pressed\n\n" +
-                    "Within this instruction, the break key is not operational but will generate CTL C.\n\n" +
-                    "Special CTL and ESC functions help navigate around the screenm area.\n\n" +
-                    "CTL W (TAB back) ; CTL ] (PMODE) ; CTL \\ (SMODE) ; CTL ^ (Cursor ON) ; CTL _ (Cursor off) \n\n" +
-                    "CTL D (letter A to 0 = paper A to 0 (1 to 15) ; CTL F (letter A to 0 = ink A to 0 (1 to 15)\n\n" +
-                    "ESC I (Insert Line) ; ESC J (delete line) ; ESC K (duplicate line)");
-            }
-            if (word === 'EDIT') {
-                return new vscode.Hover("**EDIT**: The specified line is to be copied into the EDIT screen for editing..\n\n" +
-                    "Usage: EDIT \\<line number\\> \n\n" +
-                    "This only works for BASIC lines. Use ASSEM line number to edit CODE.\n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ASSEM, AUTO, or EDIT.");
-            }
-            if (word === 'EDITOR') {
-                return new vscode.Hover("**EDITOR**:  Provides the programmer the facility to accept input from a defined area of the screen.\n\n" +
-                    "Usage: EDITOR \\<variable list\\> \n\n" +
-                    "The area is defined by virtual screen 0 which may be set using the CRVS command\n\n" +
-                    "Example: \n\n" +
-                    "10 CRVS 0 ,0,20 , 10, 10,1,40 \n\n" +
-                    "20 EDITOR A$\n\n" +
-                    "30 VS 5: PRINT A$: GOTO 20\n\n" +
-                    "After EDITOR input, to display the value on the main screen, need to set the screen to VS 5");
-            }
-            if (word === 'ELSE') {
-                return new vscode.Hover("**ELSE**:  Part of the IF .. THEN .. ELSE .. control construct.\n\n" +
-                    "Usage: ELSE \n\n" +
-                    "see IF");
-            }
-            if (word === 'EXP') {
-                return new vscode.Hover("**EXP**:  Exponential function.\n\n" +
-                    "Usage: EXP(number) \n\n" +
-                    "EXP is the exponential function whose value is e raised to the power of the specified number\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 PRINT EXP(1)\n\n" +
-                    "Returns 2.71828183");
-            }
-            if (word === 'FOR') {
-                return new vscode.Hover("**FOR**:  FOR .. TO .. STEP .. : NEXT control construct.\n\n" +
-                    "Usage: FOR \\<control variable\\>=\\<start\\> TO \\<limit\\> STEP \\<increment\\> : NEXT \\<control variable\\>\n\n" +
-                    "control variable is a simple numeric variable but in this instance is called the control variable.\n\n" +
-                    "Start, limit and increment are numeric expressions.\n\n" +
-                    "STEP increment is optional, default is STEP 1\n\n" +
-                    "NEXT control variable, sometimes the control variable is dropped\n\n" +
-                    "see NEXT and the manula for examples.");
-            }
-            if (word === 'GENPAT') {
-                return new vscode.Hover("**GENPAT**:  Defines a character or sprite pattern with the specified parameters.\n\n" +
-                    "Usage: GENPAT P,N,d1,d2,d3,d4,d5.d6,d7,d8 \n\n" +
-                    "The command is used to generate all types of patterns (d1 to d8) required by BASIC for characters and SPRITES.There are 5 modes:-\n\n" +
-                    "Mode 1: P=0, To redefine an ASCII character, N=32 TO 127\n\n" +
-                    "Mode 2: P=1, To define a non ASCII character (User Definable Characters, UDC),N=129 TO 154\n\n" +
-                    "Mode 3: P=2 To define ink and paper colour for each line of a character. This only applies to UDC with codes, N=147 TO 154\n\n" +
-                    "Mode 4: P=3, To define an 8 by 8 sprite pattern, N=0 TO 31\n\n" +
-                    "Mode 5. P=4 to 7. To define each quadrant of a 16 by 16 sprite (NW, SW, NE, SE respectively),N=0 TO 31\n\n" +
-                    "Pattern Byte Data: d1 to d8 in range 0 to 255\n\n" +
-                    "Refer to the manual for details");
-            }
-            if (word === 'GOSUB') {
-                return new vscode.Hover("**GOSUB**:  Jumps to BASIC code at line number, executes a subroutine and returns (see RETURN).\n\n" +
-                    "Usage: GOSUB \\<line number\\> \n\n" +
-                    "Executes a subroutine. Similar to a calling a procedure with no parameters\n\n" +
-                    "Continue execution from the specified line until a RETURN statement is encountered at which point return control to the statement following the GOSUB\n\n" +
-                    "GOSUBs may be nested up to 34 deep at which point an error will occur.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 FOR I= 1 to 10: GOSUB 100: NEXT\n\n" +
-                    "20 STOP\n\n" +
-                    "100 PRINT I, SIN(I): RETURN\n\n" +
-                    "see RETURN and ON");
-            }
-            if (word === 'GOTO') {
-                return new vscode.Hover("**GOTO**:  Control is passed to the BASIC line specified\n\n" +
-                    "Usage: GOTO \\<line number\\> \n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 GOTO 30\n\n" +
-                    "20: PRINT \"LINE 20\": STOP\n\n" +
-                    "30 PRINT \"LINE 40\"\n\n" +
-                    "If the line doesn't exist an error will occur. See also ON");
-            }
-            if (word === 'GR$') {
-                return new vscode.Hover("**GR$**:  Reads a bit pattern from a graphics screen, returning the value as a character with the specified parameters.\n\n" +
-                    "Usage: GR$(X,Y,B) \n\n" +
-                    "This function should be used if you wish to print the graphics screen to a high resolution printer.\n\n" +
-                    "X and Y: locations on the virtual screen.\n\n" +
-                    "B: the number of bits to be read, if b=1, equivalent to a POINT function.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "The bits are read in a vertical direction, ie. GR$(20,190,4) gives a character made up as follows:\n\n" +
-                    "bit 7=0 ; bit 6=0 ; bit 5=0 ; bit 4=0 ; bit 3=pixel at 20,190 ; bit 2=pixel 20,189 ; bit 1=pixel 20,188 ; bit 0=pixel 20,187");
-            }
-            if (word === 'IF') {
-                return new vscode.Hover("**IF**: IF .. THEN .. ELSE control construct.\n\n" +
-                    "Usage: IF \\<boolean expression\\> THEN \\<statement\\> ELSE \\<statement\\> \n\n" +
-                    "The IF statement allows the program to branch depending on whether a condition is true or false.\n\n" +
-                    "boolean expression is any expression which yields a truth value,e.g. Y=2 AND X=3.\n\n" +
-                    "statement is any legal BASIC statement (which may include an IF statement).\n\n" +
-                    "If the boolean expression is true, the statement after the THEN is executed.\n\n" +
-                    "If the boolean expression is false and ELSE is not present, the program continues at the next line.\n\n" +
-                    "If the boolean expression is false and ELSE is present, the program continues after the ELSE.\n\n" +
-                    "EXAMPLE: 20 IF A$=\"Y\" OR A$=\"y\" THEN GOTO 40 ELSE GOTO 100");
-            }
-            if (word === 'INK') {
-                return new vscode.Hover("**INK**:  Specifies the INK colour on the screen.\n\n" +
-                    "Usage: INK colour\n\n" +
-                    "Selects the INK colour. colour is a number in the range 0 to 15 .\n\n" +
-                    "0 = Transparent ; 1 = Black ; 2 = Medium Green ; 3 = Light Green ; 4 = Dark Blue\n\n" +
-                    "5 = Light Blue ; 6 = Dark Red ; 7 = Cyan ; 8 = Medium Red ; 9 = Light Red\n\n" +
-                    "10 = Dark Yellow ; 11 = Light Yellow ; 12 = Dark Green ; 13 = Magenta ; 14 = Grey ; 15 = White\n\n" +
-                    "Seee colour table in the appendix 7");
-            }
-            if (word === 'INKEY$') {
-                return new vscode.Hover("**INKEY$**:  Reads the keyboard for a keypress.\n\n" +
-                    "Usage: INKEY$ \n\n" +
-                    "The keyboard can be read by the use of the function INKEY$\n\n" +
-                    "This is in practice a very useful function since it enables you to write programs where the computer interacts with the person operating the keyboard.\n\n" +
-                    "10 PRINT \"PRESS Y TO CONTINUE\u201D\n\n" +
-                    "20 LET A$=INKEY$\n\n" +
-                    "30 IF A$<>\"Y\" THEN GOTO 20\n\n" +
-                    "40 PRINT \"YOU PRESSED Y\"");
-            }
-            if (word === 'INP') {
-                return new vscode.Hover("**INP**:  Read a byte from the specified port.\n\n" +
-                    "Usage: INP(port) \n\n" +
-                    "port: 0 to 255 \n\n" +
-                    "Reads a byte from the specified port.");
-            }
-            if (word === 'INPUT') {
-                return new vscode.Hover("**INPUT**:  The INPUT command is used to input information into the computer with the specified parameters.\n\n" +
-                    "Usage: INPUT string;\\<variable list\\> \n\n" +
-                    "string is optional. INPUT \"Enter your name\";A$\n\n" +
-                    "variable list can be variable or string variable, e.g. INPUT A, B, ABC$\n\n" +
-                    "If the {string} is not present, a question mark will appear as a Prompt whenever the INPUT statement is used.\n\n" +
-                    "If the (string) is present, it replaces the question mark as a Prompt. The string must be followed by a semicolon.\n\n" +
-                    "If non-numeric information is entered into a numeric variable, or the too few items are input,\n\n" +
-                    "a question mark will appear after information which means that it should all be typed in again.");
-            }
-            if (word === 'INT') {
-                return new vscode.Hover("**INT**:  Returns the integer part of the number.\n\n" +
-                    "Usage: INT(number) \n\n" +
-                    "PRINT INT(-2.5)\n\n" +
-                    "Returns -2");
-            }
-            if (word === 'LEFT$') {
-                return new vscode.Hover("**LEFT$**:  Truncates a string from the left with the specified parameters.\n\n" +
-                    "Usage: LEFT$(string,number) \n\n" +
-                    "The string is truncated after the specified number of characters from the left. \n\n" +
-                    "EXAMPLE:\n\n" +
-                    "10 PRINT LEFT$(\"abcdef\",3)\n\n" +
-                    "Returns \"abc\"");
-            }
-            if (word === 'LEN') {
-                return new vscode.Hover("**LEN**:  Returns the length of a string.\n\n" +
-                    "Usage: LEN (string) \n\n" +
-                    "Gives the length of a string.\n\n" +
-                    "Note that a space must be left between LEN and (string) otherwise LEN will be considered as a numeric array.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 PRINT LEN (\"ABC\"+\"DEF\")\n\n" +
-                    "Returns 6");
-            }
-            if (word === 'LET') {
-                return new vscode.Hover("**LET**:  Used for variable assignment.\n\n" +
-                    "Usage: LET\tvariable=value\n\n" +
-                    "The LET statement assigns a value to a variable. \n\n" +
-                    "The value and variable must be of the same type.\n\n" +
-                    "i.e. numbers cannot be assigned to string variables and strings cannot be assigned to numeric variables.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 LET X=2\n\n" +
-                    "20 LET A$=\u201Dabc\"\n\n" +
-                    "This assigns the value 2 to the variable X and the value \"abc\" to the variable A$.");
-            }
-            if (word === 'LINE') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
-                return new vscode.Hover("**LINE**:  Draws a line between 2 sets of coordinates. See also DRAW\n\n" +
-                    "Usage: LINE X1,Y1,X2,Y2 \n\n" +
-                    "Draws a line from coordinates (X1,Y1) to (X2,Y2)\n\n" +
-                    "Must be in graphics mode (VS 4) for command to exexute without an error, see LINE");
-            }
-            if (word === 'LIST') {
-                return new vscode.Hover("**LIST**:  List a program to the screen.\n\n" +
-                    "Usage: LIST \\<start line number\\>,\\<end line number\\>\n\n" +
-                    "LIST lists a program to the screen.\n\n" +
-                    "3 variations: \n\n" +
-                    "LIST, LIST start line number or LIST start line number,end line number\n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like LIST.");
-            }
-            if (word === 'LLIST') {
-                return new vscode.Hover("**LLIST**: List a program to the printer.\n\n" +
-                    "Usage: LLIST \\<start line number\\>,\\<end line number\\> \n\n" +
-                    "LLIST lists a program to the printer.\n\n" +
-                    "3 variations: \n\n" +
-                    "LLIST, LLIST start line number or LLIST start line number,end line number");
-            }
-            if (word === 'LN') {
-                return new vscode.Hover("**LN**:  Returns the natural log of the specified number.\n\n" +
-                    "Usage: LN(number) \n\n" +
-                    "Returns the natural log of the specified number");
-            }
-            if (word === 'LOAD') {
-                return new vscode.Hover("**LOAD**:  Loads a file from cassette tape into memory. (see also USER DISC for disc loading options)\n\n" +
-                    "Usage: LOAD \"tapename.extension\" \n\n" +
-                    "The tapename and extension is limited to 14 alphanumeric characters, including extension (see later for MEMU variation). e.g. LOAD \"FILENAME90.BAS\"\n\n" +
-                    "LOAD \"\" is used to reload the last save program, assuming the reset keys have not been pressed or command NEW executed. \n\n" +
-                    "The extension is optional and is typically either be \"BAS\" or \"mtx\" for MTX BASIC programs with or without built-in Z80 assembly code.\n\n" +
-                    "If using the MEMU emualator, the emulator automatically adds .mtx at the end of the filename and not part of the standard 14 character limit.\n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like LOAD.");
-            }
-            if (word === 'LPRINT') {
-                return new vscode.Hover("**LPRINT**:  Prints information to the printer.\n\n" +
-                    "Usage: LPRINT \\<expression list\\> \n\n" +
-                    "The LPRINT command is used to print information to the printer\n\n" +
-                    "LPRINT is followed by a list of expressions separated by commas or semicolons.\n\n" +
-                    "The expressions can be string expressions or mathematical expressions and any number of commas can be used to tabulate the information.\n\n" +
-                    "A comma moves the cursor to the next TAB position. A Semicolon leaves the cursor immediately after the printed information.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 LPRINT \u201CSIN of 8 = \u201C;SIN(8)\n\n" +
-                    "Sends SIN of 8 = 0.989358247 to the printer");
-            }
-            if (word === 'MID$') {
-                return new vscode.Hover("**MID$**:  Returns Y characters starting at position X in the string with the specified parameters.\n\n" +
-                    "Usage: MID$(string,X,Y) \n\n" +
-                    "Returns Y characters starting at position X in the string \n\n" +
-                    "EXAMPLE:\n\n" +
-                    "10 PRINT MID$(\u201CABCD\u201D+\u201DEFGH\u201D,3,4)\n\n" +
-                    "Returns \"CDEF\"");
-            }
-            if (word === 'MOD') {
-                return new vscode.Hover("**MOD**:  Returns the remainder on dividing X by Y.\n\n" +
-                    "Usage: MOD(X,Y) \n\n" +
-                    "Returns the remainder on dividing X by Y\n\n" +
-                    "MOD (X,Y) is equivalent to X-INT(X/Y)*Y\n\n" +
-                    "Gives an error if division by 0\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "PRINT MOD(10,7)\n\n" +
-                    "Returns a remainder of 3");
-            }
-            if (word === 'MVSPR ') {
-                return new vscode.Hover("**MVSPR**:  General purpose sprite command with the specified parameters.\n\n" +
-                    "Usage: MVSPR P,N,D \n\n" +
-                    "The functions are combined to allow complicated movements to occur whilst using only a single instruction. Add the P values together to get the movement combination required.\n\n" +
-                    "D is slightly more complicated as it must be able to reflect a value for several activities. If D is not in the range of any one of the chosen activities an error will occur.\n\n" +
-                    "P=1 , MOVEMENT of Sprite in the direction specified by D (0 to 8). The step size is set in CTLSPR 1\n\n" +
-                    "P=2 , Pattern Selection, changes the sprite pattern to pattern number D, defined by a GENPAT statement\n\n" +
-                    "P=4 , Redirect picks up the current velocity vector and switches it to the new direction.\n\n" +
-                    "P=8 , Plot at centre causes a point to be plotted at the centre of the sprite specified by N. This is not directly affected by the value of D at all.\n\n" +
-                    "N selects the sprite number (0 to 32)");
-            }
-            if (word === 'NEW') {
-                return new vscode.Hover("**NEW**:  Clears any program in memory\n\n" +
-                    "Usage: NEW \n\n" +
-                    "This command resets the computers system variables thereby preparing it to accept a new program.\n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like NEW.");
-            }
-            if (word === 'NEXT') {
-                return new vscode.Hover("**NEXT**: Next specifies the end of a FOR control loop.\n\n" +
-                    "Usage: NEXT \\<control variable\\> \n\n" +
-                    "If the control variable is specified, the NEXT is matched with FOR and all nested FOR blocks which are either complete or incomplete are terminated.\n\n" +
-                    "If the variable is not specified it is assumed that this NEXT belongs to the last active FOR statement. See FOR");
-            }
-            if (word === 'NODDY') {
-                return new vscode.Hover("**NODDY**:  Text language editor.\n\n" +
-                    "Usage: NODDY \n\n" +
-                    "Passes control to the Noddy editor. Noddy should appear at the base of the screen\n\n" +
-                    "Refer to the MTX Series Owners Manual for details on the Noddy language.\n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like NODDY.");
-            }
-            if (word === 'NOT') {
-                return new vscode.Hover("**NOT**: Boolean expression. compares two values to see if the condition is either True or False.\n\n" +
-                    "Usage: NOT \n\n" +
-                    "Example: \n\n" +
-                    "10 LET X=1:PRINT (NOT X=2)\n\n" +
-                    "Returns -1 as X is NOT equal to 2 (TRUE). If X=2 then X is equal to 2 Returns 0 (False).");
-            }
-            if (word === 'ON') {
-                return new vscode.Hover("**ON**:  Branch condition for GOTO and GOSUB.\n\n" +
-                    "Usage: ON X GOTO \\<line number list\\> or  ON X GOSUB \\<line number list\\> \n\n" +
-                    "The ON command is used when you want to GOTO or GOSUB to a part of the program depending on the value of a variable\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 LET X=2\n\n" +
-                    "20 ON X GOTO 100,200,300,400,500\n\n" +
-                    "If X=0 it would branch to 100, X=1 would branch to 200, etc\n\n" +
-                    "If line 20 was GOSUB rather than GOTO, it would jump to the subroutine and execute until it encounters a RETURN statement");
-            }
-            if (word === 'OR') {
-                return new vscode.Hover("**OR**: Boolean expression. compares two values to see if the condition is either True or False.\n\n" +
-                    "Usage: OR \n\n" +
-                    "Example: \n\n" +
-                    "10 LET X=1\n\n" +
-                    "20 IF X=1 OR X=2 THEN PRINT \"True\" ELSE PRINT \"False\"\n\n" +
-                    "30 PRINT (X=1 OR X=2)\n\n" +
-                    "In this case, returns True at line 20 and -1 at line 30.");
-            }
-            if (word === 'OUT') {
-                return new vscode.Hover("**OUT**:  Outputs the specified value to the specified port.\n\n" +
-                    "Usage: OUT port,value\n\n" +
-                    "Refer to MTX series Owners Manual, Technical Section, System Block Diagram");
-            }
-            if (word === 'PANEL') {
-                return new vscode.Hover("**PANEL**:  Z80 disasembler.\n\n" +
-                    "Usage: PANEL \n\n" +
-                    "Passes control to the PANEL dissassembler editor.\n\n" +
-                    "Refer to the MTX Series Owners Manual for details ON PANEL.\n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like PANEL.");
-            }
-            if (word === 'PAPER') {
-                return new vscode.Hover("**PAPER**:  Specifies the PAPER colour on the screen.\n\n" +
-                    "Usage: PAPER colour \n\n" +
-                    "Selects the PAPER colour. colour is a number in the range 0 to 15 .\n\n" +
-                    "0 = Transparent ; 1 = Black ; 2 = Medium Green ; 3 = Light Green ; 4 = Dark Blue\n\n" +
-                    "5 = Light Blue ; 6 = Dark Red ; 7 = Cyan ; 8 = Medium Red ; 9 = Light Red\n\n" +
-                    "10 = Dark Yellow ; 11 = Light Yellow ; 12 = Dark Green ; 13 = Magenta ; 14 = Grey ; 15 = White\n\n" +
-                    "Seee colour table in the appendix 7");
-            }
-            if (word === 'PAUSE') {
-                return new vscode.Hover("**PAUSE**:  with the specified parameters.\n\n" +
-                    "Usage: PAUSE number \n\n" +
-                    "The program will pause for a length of time dependent on number. \n\n" +
-                    "The time cannot be specified accurately but will vary according to how many incidental functions\n\n" +
-                    "the computer is performing at the same time such as flashing the cursor or updating the clock.");
-            }
-            if (word === 'PEEK') {
-                return new vscode.Hover("**PEEK**:  Returns the contents of the specified address in the current memory page.\n\n" +
-                    "Usage: PEEK memory address\n\n" +
-                    "Notice that the MTX pages its memory in 32K blocks and so care must be taken to ensure that when PEEK\n\n" +
-                    "is used you are peeking the correct page. The top 16K of memory is available to all pages");
-            }
-            if (word === 'PHI') { // doesn't generate a MTX BASIC SE.C error if VS 4 not specified beforehand
-                return new vscode.Hover("**PHI**: Adjusts the angle by a specified angle in radians.\n\n" +
-                    "Usage: PHI angle \n\n" +
-                    "Each time a PHI command is executed, the 'direction' is adjusted by the specified angle, see ANGLE.\n\n" +
-                    "EXAMPLE:\n\n" +
-                    "10 VS 4: CLS: ANGLE 0\n\n" +
-                    "20 FOR I=1 to 20\n\n" +
-                    "30 PLOT 100,100\n\n" +
-                    "40 PHI .1\n\n" +
-                    "50 DRAW 50\n\n" +
-                    "60 NEXT\n\n" +
-                    "70 GOTO 70");
-            }
-            if (word === 'PI') {
-                return new vscode.Hover("**PI**:  Constant ratio of the circumference of a circle to its diameter.\n\n" +
-                    "Usage: PI \n\n" +
-                    "The MTX stores an accurate value of PI so that it doesn't have to be calculated each time that it is needed.\n\n" +
-                    "PI can be considered as a number and used whenever a number would be used\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "PRINT PI\n\n" +
-                    "PRINT COS(PI/2)");
-            }
-            if (word === 'PLOD') {
-                return new vscode.Hover("**PLOD**:  Runs a NODDY program.\n\n" +
-                    "Usage: PLOD \"string\" \n\n" +
-                    "PLOD is used to run a Noddy program where string is the name of the Noddy page at which execution starts.\n\n" +
-                    "PLOD may be used within a BASIC program and control may be switched backwards and forwards.\n\n" +
-                    "When a Noddy program returns, execution continues at the next basic line.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 PLOD \"PROG1\"");
-            }
-            if (word === 'PLOT') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
-                return new vscode.Hover("**PLOT**:  Plots a point on the graphics screen.\n\n" +
-                    "Usage: PLOT X,Y \n\n" +
-                    "Plots a point in the graphics screen at the graphics coordinates (X,Y)\n\n" +
-                    "Must be in graphics mode (VS 4) for command to exexute without an error, see LINE, see COLOUR and ATTR");
-            }
-            if (word === 'POKE') {
-                return new vscode.Hover("**POKE**:  Stores a specified value in the computer memory.\n\n" +
-                    "Usage: POKE memory address,value \n\n" +
-                    "The POKE command loads a the specified memory location with the specified value\n\n" +
-                    "If more than 32K of memory is present, the basic program may spread over several pages (see ROM BASED MEMORY MAP).\n\n" +
-                    "The top 16K will always be present but POKE-ing into any other area may be dangerous unless other precautions are taken.\n\n" +
-                    "EXAMPLE: load 100 into memory address 50000\n\n" +
-                    "POKE 50000,100");
-            }
-            if (word === 'PRINT') {
-                return new vscode.Hover("**PRINT**:  Prints information to the television screen or monitor.\n\n" +
-                    "Usage: PRINT \\<expression list\\> \n\n" +
-                    "The PRINT command is used to print information to the screen\n\n" +
-                    "PRINT is followed by a list of expressions separated by commas or semicolons.\n\n" +
-                    "The expressions can be string expressions or mathematical expressions and any number of commas can be used to tabulate the information.\n\n" +
-                    "A comma moves the cursor to the next TAB position. A Semicolon leaves the cursor immediately after the printed information.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 PRINT \u201CSIN of 8 = \u201C;SIN(8)\n\n" +
-                    "Displays on the screen SIN of 8 = 0.989358247");
-            }
-            if (word === 'RAND') {
-                return new vscode.Hover("**RAND**:  Seeds the random number generator. (see also RND)\n\n" +
-                    "Usage: RAND number \n\n" +
-                    "This command sets the seed for the random number generator. If no number is specified the seed will be set to a random number.\n\n" +
-                    "10 RAND 1000\n\n" +
-                    "20 FOR I=1 to 100: PRINT INT(RND*50): NEXT I");
-            }
-            if (word === 'READ') {
-                return new vscode.Hover("**READ**:  Reads infdormation stored in DATA statements (see also DATA and RESTORE).\n\n" +
-                    "Usage: READ \\<variable list\\> \n\n" +
-                    "Values are read from the DATA statements (See DATA) sequentially into the variables specified in the READ statement.\n\n" +
-                    "If an invalid assignment is made to a numeric variable an error will occur.\n\n" +
-                    "Data statements may occur anywhere within a program and are accessed sequentially in order either from the start of the program or from the value specified in a RESTORE statement.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 READ A, B, A$,B $(8) \n\n" +
-                    "20 PRINT A, B, A$, B$ \n\n" +
-                    "30 DATA 1, 2, AA, BB");
-            }
-            if (word === 'REM') {
-                return new vscode.Hover("**REM**:  Used for comments and documenting the code to improve legibility.\n\n" +
-                    "Usage: REM \\<anything\\> \n\n" +
-                    "The REM command allows comments to be inserted into a program.\n\n" +
-                    "The REM command and any text associated with it doesn't need to be in double quotes but this can lead to spurious errors, like if a colon (:) which splits up statements.\n\n" +
-                    "To avoid spurious errors, .\n\n" +
-                    "The REM statement is ignored by the computer and is used only for documentation.");
-            }
-            if (word === 'RESTORE') {
-                return new vscode.Hover("**RESTORE**:  Where data is stored. (see also DATA and READ)\n\n" +
-                    "Usage: RESTORE line number \n\n" +
-                    "Restore tells the computer from which line the next READ statement should start reading the next DATA item\n\n" +
-                    "This is particularly useful if the same DATA has to be read in two or more parts of a program\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 DIM A(20)\n\n" +
-                    "20 FOR I= 1 TO 10: READ A: PRINT A: NEXT I\n\n" +
-                    "60 RESTORE 100\n\n" +
-                    "70 FOR I= 1 TO 10: READ A(I): NEXT I\n\n" +
-                    "100 DATA 1,2,3,4,5,6,7,8,9,0");
-            }
-            if (word === 'RETURN') {
-                return new vscode.Hover("**RETURN**:  When encountered, returns to the line following the calling GOSUB.\n\n" +
-                    "Usage: RETURN \n\n" +
-                    "Returns control to the line following the last GOSUB executed If no GOSUB has been executed, an error will occur.");
-            }
-            if (word === 'RIGHT$') {
-                return new vscode.Hover("**RIGHT$**:  Truncates a string from the right with the specified parameters.\n\n" +
-                    "Usage: RIGHT$(string,number) \n\n" +
-                    "The string is truncated after the specified number of characters from the right. \n\n" +
-                    "EXAMPLE:\n\n" +
-                    "10 PRINT RIGHT$(\"abcdef\",3)\n\n" +
-                    "Returns \"def\"");
-            }
-            if (word === 'RND') {
-                return new vscode.Hover("**RND**:  pseudo random number seeded by RAND.\n\n" +
-                    "Usage: RND \n\n" +
-                    "RND returns a pseudo random number.\n\n" +
-                    "see example at RAND");
-            }
-            if (word === 'ROM') {
-                return new vscode.Hover("**ROM**:  with the specified parameters.\n\n" +
-                    "Usage: ROM number \n\n" +
-                    "Passes control to an additional ROM pack for example PASCAL FORTH. Details will be supplied with the ROM.\n\n" +
-                    "It is dangerous to use this command unless the appropriate ROM actually present.\n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ROM.");
-            }
-            if (word === 'RUN') {
-                return new vscode.Hover("**RUN**:  Tells the computer to execute (run) the program in memory.\n\n" +
-                    "Usage: RUN \n\n" +
-                    "RUN tells the computer to start running the program from beginning.\n\n" +
-                    "All variables will be cleared.\n\n" +
-                    "A program can also be run by using a GOTO statement as a direct command. In this case the variables will be unaltered.\n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ROM.");
-            }
-            if (word === 'SAVE') {
-                return new vscode.Hover("**SAVE**:  Saves a program from memory to cassete tape. (see USER DISC for disc save options).\n\n" +
-                    "Usage: SAVE \"tapename.extension\" \n\n" +
-                    "The tapename is limited to 14 alphanumeric characters including extension (see later for MEMU variation). e.g. SAVE \"FILENAME90.BAS\" \n\n" +
-                    "The extension is optional and is typically either be \"BAS\" or \"MTX\" for MTX BASIC programs with or without built-in Z80 assembly code.\n\n" +
-                    "If using the MEMU emulator, the emulator automatically strips off any characters beyond 14 characters, typically this removes the MEMU added .mtx extension, unless within the 14 chars.\n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like SAVE.");
-            }
-            if (word === 'SBUF') {
-                return new vscode.Hover("**SBUF**:  Reserves a sound buffer in memory.\n\n" +
-                    "Usage: SBUF number \n\n" +
-                    "This command makes space in a sound buffer for use by the SOUND command.\n\n" +
-                    "The Buffer is made at the top of memory below the system variables\n\n" +
-                    "EXAMPLE:\n\n" +
-                    "SBUF 8\n\n" +
-                    "This will make space for 8 blocks of sound data for each of the 3 channels and the noise channel.\n\n" +
-                    "Each block takes 10 bytes. The above statement therefore takes a total of 320 bytes. i.e. 8 * 4 * 10.(8*channels*block length).");
-            }
-            if (word === 'SGN') {
-                return new vscode.Hover("**SGN**:  with the specified parameters.\n\n" +
-                    "Usage: SGN(number) \n\n" +
-                    "Returns a result depending on the sign if the specified number.\n\n" +
-                    "If the number is positive the result is +1 If the number is negative the result is \u20141 If the number is zero the result is 0.\n\n" +
-                    "10 PRINT SGN(-2.5): PRINT SGN(5): PRINT SGN(0)" +
-                    "Returns -1, 5 and 0 respectively");
-            }
-            if (word === 'SIN') {
-                return new vscode.Hover("**SIN**:  calculates the sin of the angle.\n\n" +
-                    "Usage: SIN(angle) \n\n" +
-                    "Returns the sine of the angle specified in radians.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 PRINT \u201CSIN of 8 = \u201C;SIN(8)\n\n" +
-                    "Displays on the screen SIN of 8 = 0.989358247");
-            }
-            if (word === 'SOUND') {
-                return new vscode.Hover("**SOUND**:  Generating Sound on a MTX computer.\n\n" +
-                    "Usage: SOUND \\<expression list\\> \n\n" +
-                    "The effect of the sound command depends on the number of expressions in the expression list, either 3 parameter or 7 parameter list.\n\n" +
-                    "SOUND channel,frequency,volume \n\n" +
-                    "SOUND channel,frequency,volume ,freq inc,vol inc,duration,mode\n\n" +
-                    "channel: 0,1 and 2 are pure sound and 3 is for noise.\n\n" +
-                    "frequency: frequency of the sound (0 to 1023)\n\n" +
-                    "volume: loudness (0 to 15)\n\n" +
-                    "freq_inc and vol_inc are self explanatory. Every 1/64th of a second the computer adds the frequency increment to the frequency and the volume increment to the volume.\n\n" +
-                    "duration: This continues for a length of time equal to the duration which is also measured in 1/64ths of a second\n\n" +
-                    "mode=0, freq and vol parameters will be ignored which means that the increments will increment whatever values of frequency and volume were current when the command was encountered.\n\n" +
-                    "mode=1, the freq and vol will be loaded into the sound buffer to initialise the frequency and volume of the relevant channel");
-            }
-            if (word === 'SPK$') {
-                return new vscode.Hover("**SPK$**:  Determines what the character is at the cursor.\n\n" +
-                    "Usage: SPK$(screen peek) \n\n" +
-                    "Peeks the character at the cursor location and auto increments the cursor location. The character is returned as ASCII.\n\n" +
-                    "Example: To read characters from the screen into an array, and reprint them.\n\n" +
-                    "10 CLS: FOR I=32 TO 64:PRINT CHR$(I);:NEXT I\n\n" +
-                    "20 CSR 0,0\n\n" +
-                    "30 FOR I=32 TO 64: LET A$(I)=SPK$: NEXT\n\n" +
-                    "40 PRINT\n\n" +
-                    "50 PRINT A$");
-            }
-            if (word === 'SPRITE') {
-                return new vscode.Hover("**SPRITE**:  Creating a sprite with the specified parameters.\n\n" +
-                    "Usage: SPRITE N,P,XP,YP,XS,YS,C \n\n" +
-                    "N: sprite number (1 to 32)\n\n" +
-                    "P: sprite pattern number (size 0: 0 to 127 and size 1: 0 to 31)\n\n" +
-                    "XP: position x off centre (range -4095 to 4095)\n\n" +
-                    "YP: position y off centre (range -4095 to 4095)\n\n" +
-                    "XS: speed in the x direction (-128 to 127) where 1 unit of speed moves the sprite 1/8 pixel every master speed cycle as set by CTLSPR 0\n\n" +
-                    "YS:  speed in the y direction (plus upwards) range -128 to 127\n\n" +
-                    "C: colour (0 to 15)\n\n" +
-                    "Sprite screen 0,0 is defined as bottom left hand corner of screen i.e same as for plot.\n\n" +
-                    "Sprite coordinates are absolute and do not look at virtual screen origins (i.e assume a 32\tby 24 graphic screen)");
-            }
-            if (word === 'SQR') {
-                return new vscode.Hover("**SQR**:  Calculates the square root of a number.\n\n" +
-                    "Usage: SQR(number) \n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 PRINT SQR(2)\n\n" +
-                    "Returns 1.41421356");
-            }
-            if (word === 'STEP') {
-                return new vscode.Hover("**STEP**:  Increm,ents the FOR loop. (SEE FOR-NEXT)\n\n" +
-                    "Usage: STEP \\<increment\\> \n\n" +
-                    "STEP increments can be integer or decimal.\n\n" +
-                    "If STEP is not specified in a FOR-NEXT loop, the default STEP of 1 is applied.");
-            }
-            if (word === 'STOP') {
-                return new vscode.Hover("**STOP**:  When encountered, STOPs executing the BASIC program. (see also CONT)\n\n" +
-                    "Usage: STOP \n\n" +
-                    "STOPS the BASIC program at the line number where STOP is encountered.");
-            }
-            if (word === 'STR$') {
-                return new vscode.Hover("**STR$**:  Returns the string of the specified number.\n\n" +
-                    "Usage: STR$(number) \n\n" +
-                    "Gives the string which represents the specified number.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 PRINT STR$(2+2)\n\n" +
-                    "Returns 4 as a string not a numerical value.\n\n" +
-                    "Note that STR$ has a string value and can therefore not be used in numeric expressions.");
-            }
-            if (word === 'TAN') {
-                return new vscode.Hover("**TAN**:  Returns the tangent of the angle specified in radians.\n\n" +
-                    "Usage: TAN(angle) \n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 PRINT TAN(0.785): REM TAN of 0.785 rads (45 degrees) = 1");
-            }
-            if (word === 'THEN') {
-                return new vscode.Hover("**THEN**:  execute the statement after the word THEN if the IF condition is met.\n\n" +
-                    "Usage: THEN \\<statements\\> \n\n" +
-                    "See IF-THEN-ELSE");
-            }
-            if (word === 'TIME$') {
-                return new vscode.Hover("**TIME$**: Returns  the time on the real time clock in the format. (See CLOCK)\n\n" +
-                    "Usage: TIME$ \n\n" +
-                    "Returns the time as H H M M S S\n\n" +
-                    "H H is the number of hours elapsed since the clock was started with the CLOCK command. The hours will count up to 99 before resetting.\n\n" +
-                    "M M  is the number of minutes.\n\n" +
-                    "S S is the number of seconds\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "10 CLOCK \"000000\"\n\n" +
-                    "20 CSR 10,10:PRINT TIME$ \n\n" +
-                    "30 GOTO 20");
-            }
-            if (word === 'TO') {
-                return new vscode.Hover("**TO**: See FOR-NEXT loop.\n\n" +
-                    "Usage: TO \n\n" +
-                    "");
-            }
-            if (word === 'USER') {
-                return new vscode.Hover("**USER**:  Used for Disc operations.\n\n" +
-                    "Usage: USER command \n\n" +
-                    "or BASIC Disc Operating System (BDOS) usage and utility programs.\n\n" +
-                    "see MTX Series Owners manual, technical appendices, appendix 13.");
-            }
-            if (word === 'USR') {
-                return new vscode.Hover("**USR**:  with the specified parameters.\n\n" +
-                    "Usage: USR (memory address) \n\n" +
-                    "USR causes control of the program to be transferred to the specified memory address. \n\n" +
-                    "This is the usual way of interfacing machine code to BASIC programs although the MTX assembler makes this function redundant in most cases.\n\n" +
-                    "On return to BASIC, USR has the value in the register pair BC. EXAMPLE: \n\n" +
-                    "10 CODE\n\n" +
-                    "8007 LD BC,100\n\n" +
-                    "800A RET\n\n" +
-                    "20 PRINT USR(32775):REM 32775 decimal = 8007 hexadecimal\n\n" +
-                    "100 is displayed on the screen.\n\n" +
-                    "see examples in the MTX Series Owners manual, reference section, page 171 ");
-            }
-            if (word === 'VAL') {
-                return new vscode.Hover("**VAL**: Returns the numeric value of the specified string..\n\n" +
-                    "Usage: VAL(string) \n\n" +
-                    "If the string is not a valid number, VAL will try to evaluate the string from the left hand side as a number until it can go no further.\n\n" +
-                    "EXAMPLE: \n\n" +
-                    "PRINT VAL(\"100\"): REM returns 100\n\n" +
-                    "PRINT VAL(\"100000000000\"): REM returns 1E+12\n\n" +
-                    "PRINT VAL(\"1000ABCDEF00\"): REM returns 1000\n\n" +
-                    "PRINT VAL(\"abc12\"): REM returns 0 (no number at start)\n\n" +
-                    "PRINT VAL(\"12\"+\"12\"): REM returns 1212\n\n" +
-                    "PRINT VAL(\"23\")+10: REM returns 33");
-            }
-            if (word === 'VERIFY') {
-                return new vscode.Hover("**VERIFY**:  Verifies a program in tape against the program currently in the computer.\n\n" +
-                    "Usage: VERIFY \n\n" +
-                    "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like VERIFY");
-            }
-            if (word === 'VIEW') {
-                return new vscode.Hover("**VIEW**:  The view command moves the window relative to the sprite planes whilst leaving the position of the sprites unchanged.\n\n" +
-                    "Usage: VIEW direction, distance \n\n" +
-                    "direction\t0 to 7\n\n" +
-                    "distance\t0 to 255\n\n" +
-                    "The Sprite Screen is -4095 to +4095 in both the x and y directions");
-            }
-            if (word === 'VS') {
-                return new vscode.Hover("**VS**:  Selects which virtual screen to view.\n\n" +
-                    "Usage: VS N \n\n" +
-                    "This command selects a virtual screen from those already defined or created using the CRVS command. \n\n" +
-                    "The computer will automatically switch to the type of screen selected whether graphics or text.\n\n" +
-                    "See CRVS");
-            }
-        }
-    }));
+            // If we're inside a Z80 CODE block at this position, skip MTX BASIC hovers
+            // so the Z80 hover provider (below) can take precedence for overlapping tokens like AND/OR/IN/OUT
+            if (!inCodeBlockAtPos) {
+                if (word === 'ABS') {
+                    return new vscode.Hover("**ABS**: Gives the absolute value of the specified number.\n\n" +
+                        "Usage: ABS(number) \n\n" +
+                        "The result has the same magnitude but the sign will always be positive.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 LET A=ABS(59): PRINT \"A= \";A\n\n" +
+                        "20 LET B=ABS(-59): PRINT \"B= \";B\n\n" +
+                        "When RUN, this gives the following A= 59 B= 59");
+                }
+                if (word === 'ADJSPR') {
+                    return new vscode.Hover("**ADJSPR**: Adjust a sprites value with the specified parameters.\n\n" +
+                        "Usage: ADJSPR P,N,V \n\n" +
+                        "This command adjusts a value which has been assigned to a sprite either by the SPRITE command or subsequently by ADJSPR or MVSPR.\n\n" +
+                        "The advantage of ADJSPR is that unlike SPRITE, only 1 parameter is altered at a time thereby increasing the speed of updating single values.\n\n" +
+                        "N: Sprite number\n\n" +
+                        "P = 0 : Sprite pattern. V = 0 to 31 (size 1) or 0 to 127 (size 0).\n\n" +
+                        "P = 1 : Sprite colour. V = 0 to 15 (see colour table in appendix 7).\n\n" +
+                        "P = 2 : Sprite x-position. V = 0 to 255.\n\n" +
+                        "P = 3 : Sprite y-position. V = 0 to 255.\n\n" +
+                        "P = 4 : Sprite x-speed. V = 0 to 255 (128 to 255 = negative).\n\n" +
+                        "P = 5 : Sprite y-speed. V = 0 to 255 (128 to 255 = negative).");
+                }
+                if (word === 'AND') {
+                    return new vscode.Hover("**AND**: Boolean expression. compares two values to see if the condition is either True or False.\n\n" +
+                        "Usage: AND \n\n" +
+                        "Example: \n\n" +
+                        "10 IF X=1 AND Y=2 THEN STOP\n\n" +
+                        "True (-1) if X=1 and Y=2 otherwise its False (0).");
+                }
+                if (word === 'ANGLE') { // doesn't generate a MTX BASIC SE.C error if VS 4 not specified beforehand
+                    return new vscode.Hover("**ANGLE**: Initialises the direction to the specified angle.\n\n" +
+                        "Usage: ANGLE angle_rad \n\n" +
+                        "The angle_rad is in radians measured in an anticlockwise direction from the horizontal.\n\n" +
+                        "The computer holds a 'direction' which is used in commands such as ARC, DRAW and MVSPR.\n\n" +
+                        "The direction is made up of two components: ANGLE and PHI (see later)\n\n" +
+                        "For conversion to degrees: degrees = radians*360/2/PI\n\n" +
+                        "For conversion to radians: radians = degrees*PI*2/360, except 0 degrees = 0 radians");
+                }
+                if (word === 'ARC') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
+                    return new vscode.Hover("**ARC**:  Draws an arc of a circle with the specified parameters.\n\n" +
+                        "Usage: ARC length,angle_rads \n\n" +
+                        "draws an arc of a circle. The starting position is the current PLOT position and the initial direction\n\n" +
+                        "is the direction currently held by the computer. Both the PLOT position and the direction are updated.\n\n" +
+                        "If the ARC length + PLOT x or y coordinates are outwith 0..255 or 0..191 respectively will result in an error.\n\n" +
+                        "The angle parameter, theta in radians determines the curvature of the arc by specifying what angle is subtended.\n\n" +
+                        "In other words the larger the angle, the tighter the curve.\n\n" +
+                        "If the angle is greater than 360\u00BA or 2*pi radians, the arc will retrace its path.\n\n" +
+                        "Must be in graphics mode (VS 4) for command to exexute without an error");
+                }
+                if (word === 'ASC') {
+                    return new vscode.Hover("**ASC**:  Returns the ASCII code of the first character of the string.\n\n" +
+                        "Usage: ASC(string) \n\n" +
+                        "Printable (screen displayable) ASCII codes are from 32 to 126.\n\n" +
+                        "Example: \n\n" +
+                        "10 LET A=ASC(\"TEST\")\n\n" +
+                        "20 PRINT \"A= \";A\n\n" +
+                        "When RUN, this gives the ASCII code for T which is 84 in decimal, A= 84");
+                }
+                if (word === 'ASSEM') {
+                    return new vscode.Hover("**ASSEM**:  Invokes the built-in Z80 assembler to assemble at the specified BASIC line. (See CODE).\n\n" +
+                        "Usage: ASSEM \\<line number\\> \n\n" +
+                        "The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ASSEM, AUTO, or EDIT.");
+                }
+                if (word === 'ATN') {
+                    return new vscode.Hover("**ATN**:  Returns the angle whose tangent is the specified number..\n\n" +
+                        "Usage: ATN(number) \n\n" +
+                        "The arc tangent. The number and the result are in radians\n\n" +
+                        "The arc tangent result is typically in the range -pi/2 to pi/2. The number and the result are in radians\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 PRINT TAN(0.785): REM TAN of 0.785 rads (45 degrees) = 1\n\n" +
+                        "20 PRINT ATN(1): REM ATN of 1 rads is 0.785 rads = 45 degress");
+                }
+                if (word === 'ATTR') {
+                    return new vscode.Hover("**ATTR**:  Defines effects on the grahphics screen with the specified parameters.\n\n" +
+                        "Usage: ATTR P,state\n\n" +
+                        "ATTR determines the effect on the graphics screen of using one of the plotting commands such as PLOT, DRAW or ARC\n\n" +
+                        "The attributes are not exclusive but may be used in any combination.\n\n" +
+                        "The state of the attribute is either on or off where\n\n" +
+                        "state: 0 = OFF and 1 = ON\n\n" +
+                        "P takes the value 0,1,2 or 3.\n\n" +
+                        "P=0  Inverse print. Characters are printed in the paper colour on the ink colour.\n\n" +
+                        "P=1  Over print. Characters are merged with those already present.\n\n" +
+                        "P=2  Unplot. Plots the paper colour\n\n" +
+                        "P=3  Over-plot. Plots Plots the ink colour if paper was there before and the paper colour if ink was there before.\n\n" +
+                        "     During CLS, and other functions, text is not over written but colours may change.\n\n" +
+                        "The effect during plotting is to do nothing. This can be used to move the PLOT=SPRITE around the screen whilst leaving the screen unchanged.");
+                }
+                if (word === 'AUTO') {
+                    return new vscode.Hover("**AUTO**:  Switches on the automatic line numbering.\n\n" +
+                        "Usage: AUTO \\<line number\\>,\\>increment\\> \n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ASSEM, AUTO, or EDIT.");
+                }
+                if (word === 'BAUD') {
+                    return new vscode.Hover("**BAUD**:  Sets the RS232 channel 1 or 0 to the selected baud rate with the specified parameters.\n\n" +
+                        "Usage: BAUD channel,baud rate \n\n" +
+                        "Sets the RS232 channel 1 or 0 to the selected baud rate. The following rates are allowed:-\n\n" +
+                        "75, 110, 150, 300, 600, 1200, 2400, 4800, 9600, 19200\n\n" +
+                        "Example: \n\n" +
+                        "10 BAUD 0,1200\n\n" +
+                        "This sets channel 0 to 1200 baud rate");
+                }
+                if (word === 'CHR$') {
+                    return new vscode.Hover("**CHR$**:  Returns  the character whose code is the specified number.\n\n" +
+                        "Usage: CHR$(number) \n\n" +
+                        "Example: \n\n" +
+                        "10 PRINT CHR$(65): REM prints A on the screen\n\n" +
+                        "Screen displayable ASCII characters are 32 to 126\n\n" +
+                        "ASCII codes 0 to 31 have special meaning and can be used to send special codes for printing to a printer.\n\n" +
+                        "These printable special codes can set printer to bold or underline for example, See LPRINT");
+                }
+                if (word === 'CIRCLE') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
+                    return new vscode.Hover("**CIRCLE**: Draws a circle with the specified parameters.\n\n" +
+                        "Usage: CIRCLE X,Y,R\n\n" +
+                        "X: X coordinate of the centre of a circle.\n\n" +
+                        "Y: Y coordinate of the centre of a circle.\n\n" +
+                        "R: radius of a circle.\n\n" +
+                        "Must be in graphics mode (VS 4) for command to exexute without an error");
+                }
+                if (word === 'CLEAR') {
+                    return new vscode.Hover("**CLEAR**:  CLEAR removes all of the variables.\n\n" +
+                        "Usage: CLEAR \n\n");
+                }
+                if (word === 'CLOCK') {
+                    return new vscode.Hover("**CLOCK**:  The clock is initialised to the value of the string.\n\n" +
+                        "Usage: CLOCK string \n\n" +
+                        "The clock is a 100 hour clock which counts accurately in seconds minutes and hours up to 100 hours when it resets to 0.\n\n" +
+                        "To print the time see TIME$. For example: To print the time in the top left corner:\n\n" +
+                        "10 CLOCK \u201C120000\u201D: CLS\n\n" +
+                        "20 PRINT TIME$;CHR$(26);\n\n" +
+                        "30 GOTO 20: REM CHR$(26) Homes the cursor\n\n" +
+                        "see TIME$");
+                }
+                if (word === 'CLS') {
+                    return new vscode.Hover("**CLS**:  Clear the screen.\n\n" +
+                        "Usage: CLS \n\n" +
+                        "In TEXT mode CLS will clear the screen (or Virtual screen).\n\n" +
+                        "in GRAPHICS mode CLS will clear the screen unless one of the screen attributes has been set using the ATTR function,\n\n" +
+                        "in which case it may be necessary to switch off the attribute before CLS will operate.");
+                }
+                if (word === 'CODE') {
+                    return new vscode.Hover("**CODE**: CODE is an anchor word to indicate that the following lines are assembly language.\n\n" +
+                        "Usage: CODE \n\n" +
+                        "In the normal MTX editor mode, use ASSEM line number to create assembly CODE, note the word cannot be typed and is inserted by the assembler into the BASIC line.\n\n" +
+                        "NOTE: In this free form VS code extension, ASSEM line number is not used. Instead use \\<space or TAB\\> \\<line number\\>  CODE (no space after it).\n\n" +
+                        "CODE command must be on a separate line and NOT be part of a multi line, e.g. 20 CLS: CODE: PRINT \"test\"  \n\n" +
+                        "Example: \n\n" +
+                        "10 REM START OF PROGRAM\n\n" +
+                        "20 CODE\n\n" +
+                        " 401E LABEL: LD A,(HL)\n\n" +
+                        " 401F RET\n\n" +
+                        "The hexadecimal line numbers (401E and 401F) when using VS Code are required, when saving the code (.mtx file), a check of hex address will update if incorrect\n\n" +
+                        "Note to differentiate a BASIC line number from a hexadecimal line number, the hexadecimal line number must be on a separate line and indented by either a space or a TAB.\n\n" +
+                        "Refer to the MTX Series Owners Manual for details on assembler and Z80 assembly language");
+                }
+                if (word === 'COLOUR') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
+                    return new vscode.Hover("**COLOUR**: Sets the colours for the graphics screen with the specified parameters.\n\n" +
+                        "Usage: COLOUR P,N\n\n" +
+                        "P: The value of p selects which areas of the screen the colour refers to.\n\n" +
+                        "Two sets of colours are defined. The print colours refer to Colours that will be used when colours are printed.\n\n" +
+                        "The non-print or PLOT colours refer to colours that will be used when colours are plotted or when screen functions are used.\n\n" +
+                        "P=0, print paper.\n\n" +
+                        "P=1, print ink.\n\n" +
+                        "P=2, non-print (plot) paper.\n\n" +
+                        "P=3, non-print ink.\n\n" +
+                        "P=4, border colour.\n\n" +
+                        "N: Selects the colour (see colour table in the appendix 7). (0 to 15)\n\n" +
+                        "Must be in graphics mode (VS 4) for command to exexute without an error");
+                }
+                if (word === 'CONT') {
+                    return new vscode.Hover("**CONT**:  Used to restart a program after a STOP instruction or BRK kety pressed.\n\n" +
+                        "Usage: CONT \n\n" +
+                        "CONT can be used directly after a STOP command or after pressing the break key to restart the program.\n\n" +
+                        "Any editing or alteration of the program will prevent CONT from operating.");
+                }
+                if (word === 'COS') {
+                    return new vscode.Hover("**COS**:  Returns the cosine of the angle.\n\n" +
+                        "Usage: COS(angle) \n\n" +
+                        "Returns the cosine of the angle specified in radians");
+                }
+                if (word === 'CRVS') {
+                    return new vscode.Hover("**CRVS**: Creates a virtual screen with the specified parameters.\n\n" +
+                        "Usage: CRVS N,T,X,Y,W,H,S\n\n" +
+                        "N: Virtual screen reference number. (0 to 7)\n\n" +
+                        "T: Type of screen. 0=text, 1=graphics.\n\n" +
+                        "X: X coordinate of top left corner.\n\n" +
+                        "Y: Y coordinate of top left corner.\n\n" +
+                        "W: Width of virtual screen in characters.\n\n" +
+                        "H: Height of screen in lines.\n\n" +
+                        "S: Width of screen. (40 for text, 32 for graphics)\n\n" +
+                        "The virtual screen can be used for off-screen drawing and later copied to the main screen using the VS command.");
+                }
+                if (word === 'CSR') {
+                    return new vscode.Hover("**CSR**:  Moves the cursor to position with the specified parameters.\n\n" +
+                        "Usage: CSR X,Y \n\n" +
+                        "X: X-coordinate (0 to 39 for text mode, 0 to 31 for graphics text mode).\n\n" +
+                        "Y: Y-coordinate (0 to 23).\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 CSR 12,10\n\n" +
+                        "Moves the cursor to position 12,10\n\n" +
+                        "Any subsequent Printing or Input will occur at the new cursor position.");
+                }
+                if (word === 'CTLSPR') {
+                    return new vscode.Hover("**CTLSPR**:  Sprite control with the specified parameters.\n\n" +
+                        "Usage: CTLSPR P,X \n\n" +
+                        "P: parameter and can be any of the six below:\n\n" +
+                        "P=0  Speed (1 to 255 to 0 (1 is fastest)\n\n" +
+                        "P=1  Distance. Tells the computer to move the sprite by 'X' pixels when requested.\n\n" +
+                        "P=2  Number of sprites, 0 to 32 (The number of sprites must be at least 1)\n\n" +
+                        "P=3  Number of circling sprites. Sprites that will orbit when they go off the edge of the screen (must not exceed number of sprites)\n\n" +
+                        "P=4  Plot Sprite.A PLOT SPRITE can be chosen which will subsequently appear whenever a point is plotted. This sprite will move around the screen following any points or lines drawn by the BASIC GRAPHICS commands. This sprite can be any of the 32 defined in the normal way.\n\n" +
+                        "P=5  number of moving sprites 0 to 32. This is the number of sprites that will move by themselves according to the x-speed and y-speed set in the SPRITE and ADJSPR commands\n\n" +
+                        "P=6  magnitude (mag 1 or 2) and size (8x8 or 16x16)\n\n" +
+                        "X=0 mag 1, 8x8 ; X=1 mag 2, 8x8 ; X=2 mag 1, 16x16 and X=3 mag 2, 16x16");
+                }
+                if (word === 'DATA') {
+                    return new vscode.Hover("**DATA**:  A data list construct accessible using a READ statement.\n\n" +
+                        "Usage: DATA \\<list of values\\> \n\n" +
+                        "DATA list can be a list of numbers or alphanumeric words or strings, e.g. 10 DATA 1,2,1CODE,\"test\"  20 READ A,B,C$,D$\n\n" +
+                        "DATA statements aren't themselves executed and will be ignored other than when required by a READ statement.\n\n" +
+                        "If all of the data on a line has been read by a READ statement, the computer will search for the next DATA statement and update the DATA POINTER accordingly.\n\n" +
+                        "If no more DATA is available, a No Data error will occur. DATA can be numbers of strings.\n\n" +
+                        "Example: \n\n" +
+                        "10 FOR I = 1 to 10: READ X: PRINT X: NEXT I\n\n" +
+                        "20 DATA 1,1,2,2,3,3,\n\n" +
+                        "30 DATA 4,4,5,5\n\n" +
+                        "See READ and RESTORE");
+                }
+                if (word === 'DIM') {
+                    return new vscode.Hover("**DIM**:  Reserves space in the computer memeory for the specified an array(s).\n\n" +
+                        "Usage: DIM \\<array list\\> \n\n" +
+                        "Before an array can be used, space must be made in the computer memory using a DIM statement\n\n" +
+                        "Example: \n\n" +
+                        "10 DIM A(10,10),A$(1000)\n\n" +
+                        "Each element of a numeric array takes 5 bytes and each element of a character array takes 1 byte.\n\n" +
+                        "All strings are treated as character arrays rather than variable length strings. The amount of space allocated to the character array will depend on whether or not a DIM statement is used.\n\n" +
+                        "An array cannot be redimensioned unless all of the variables are cleared. See manual for more detail and examples");
+                }
+                if (word === 'DRAW') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
+                    return new vscode.Hover("**DRAW**:  Draws a simple line with the specified parameter.\n\n" +
+                        "Usage: DRAW x \n\n" +
+                        "Draws a line of length X from the current plot position in the current direction The plot position is updated to the end of the line.\n\n" +
+                        "Must be in graphics mode (VS 4) for command to exexute without an error, see LINE");
+                }
+                if (word === 'DSI') {
+                    return new vscode.Hover("**AA**:  Direct Screen Input.\n\n" +
+                        "Usage: DSI \n\n" +
+                        "This command allows you to roam about freely within a screen only ending when carriage return is pressed\n\n" +
+                        "Within this instruction, the break key is not operational but will generate CTL C.\n\n" +
+                        "Special CTL and ESC functions help navigate around the screenm area.\n\n" +
+                        "CTL W (TAB back) ; CTL ] (PMODE) ; CTL \\ (SMODE) ; CTL ^ (Cursor ON) ; CTL _ (Cursor off) \n\n" +
+                        "CTL D (letter A to 0 = paper A to 0 (1 to 15) ; CTL F (letter A to 0 = ink A to 0 (1 to 15)\n\n" +
+                        "ESC I (Insert Line) ; ESC J (delete line) ; ESC K (duplicate line)");
+                }
+                if (word === 'EDIT') {
+                    return new vscode.Hover("**EDIT**: The specified line is to be copied into the EDIT screen for editing..\n\n" +
+                        "Usage: EDIT \\<line number\\> \n\n" +
+                        "This only works for BASIC lines. Use ASSEM line number to edit CODE.\n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ASSEM, AUTO, or EDIT.");
+                }
+                if (word === 'EDITOR') {
+                    return new vscode.Hover("**EDITOR**:  Provides the programmer the facility to accept input from a defined area of the screen.\n\n" +
+                        "Usage: EDITOR \\<variable list\\> \n\n" +
+                        "The area is defined by virtual screen 0 which may be set using the CRVS command\n\n" +
+                        "Example: \n\n" +
+                        "10 CRVS 0 ,0,20 , 10, 10,1,40 \n\n" +
+                        "20 EDITOR A$\n\n" +
+                        "30 VS 5: PRINT A$: GOTO 20\n\n" +
+                        "After EDITOR input, to display the value on the main screen, need to set the screen to VS 5");
+                }
+                if (word === 'ELSE') {
+                    return new vscode.Hover("**ELSE**:  Part of the IF .. THEN .. ELSE .. control construct.\n\n" +
+                        "Usage: ELSE \n\n" +
+                        "see IF");
+                }
+                if (word === 'EXP') {
+                    return new vscode.Hover("**EXP**:  Exponential function.\n\n" +
+                        "Usage: EXP(number) \n\n" +
+                        "EXP is the exponential function whose value is e raised to the power of the specified number\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 PRINT EXP(1)\n\n" +
+                        "Returns 2.71828183");
+                }
+                if (word === 'FOR') {
+                    return new vscode.Hover("**FOR**:  FOR .. TO .. STEP .. : NEXT control construct.\n\n" +
+                        "Usage: FOR \\<control variable\\>=\\<start\\> TO \\<limit\\> STEP \\<increment\\> : NEXT \\<control variable\\>\n\n" +
+                        "control variable is a simple numeric variable but in this instance is called the control variable.\n\n" +
+                        "Start, limit and increment are numeric expressions.\n\n" +
+                        "STEP increment is optional, default is STEP 1\n\n" +
+                        "NEXT control variable, sometimes the control variable is dropped\n\n" +
+                        "see NEXT and the manula for examples.");
+                }
+                if (word === 'GENPAT') {
+                    return new vscode.Hover("**GENPAT**:  Defines a character or sprite pattern with the specified parameters.\n\n" +
+                        "Usage: GENPAT P,N,d1,d2,d3,d4,d5.d6,d7,d8 \n\n" +
+                        "The command is used to generate all types of patterns (d1 to d8) required by BASIC for characters and SPRITES.There are 5 modes:-\n\n" +
+                        "Mode 1: P=0, To redefine an ASCII character, N=32 TO 127\n\n" +
+                        "Mode 2: P=1, To define a non ASCII character (User Definable Characters, UDC),N=129 TO 154\n\n" +
+                        "Mode 3: P=2 To define ink and paper colour for each line of a character. This only applies to UDC with codes, N=147 TO 154\n\n" +
+                        "Mode 4: P=3, To define an 8 by 8 sprite pattern, N=0 TO 31\n\n" +
+                        "Mode 5. P=4 to 7. To define each quadrant of a 16 by 16 sprite (NW, SW, NE, SE respectively),N=0 TO 31\n\n" +
+                        "Pattern Byte Data: d1 to d8 in range 0 to 255\n\n" +
+                        "Refer to the manual for details");
+                }
+                if (word === 'GOSUB') {
+                    return new vscode.Hover("**GOSUB**:  Jumps to BASIC code at line number, executes a subroutine and returns (see RETURN).\n\n" +
+                        "Usage: GOSUB \\<line number\\> \n\n" +
+                        "Executes a subroutine. Similar to a calling a procedure with no parameters\n\n" +
+                        "Continue execution from the specified line until a RETURN statement is encountered at which point return control to the statement following the GOSUB\n\n" +
+                        "GOSUBs may be nested up to 34 deep at which point an error will occur.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 FOR I= 1 to 10: GOSUB 100: NEXT\n\n" +
+                        "20 STOP\n\n" +
+                        "100 PRINT I, SIN(I): RETURN\n\n" +
+                        "see RETURN and ON");
+                }
+                if (word === 'GOTO') {
+                    return new vscode.Hover("**GOTO**:  Control is passed to the BASIC line specified\n\n" +
+                        "Usage: GOTO \\<line number\\> \n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 GOTO 30\n\n" +
+                        "20: PRINT \"LINE 20\": STOP\n\n" +
+                        "30 PRINT \"LINE 40\"\n\n" +
+                        "If the line doesn't exist an error will occur. See also ON");
+                }
+                if (word === 'GR$') {
+                    return new vscode.Hover("**GR$**:  Reads a bit pattern from a graphics screen, returning the value as a character with the specified parameters.\n\n" +
+                        "Usage: GR$(X,Y,B) \n\n" +
+                        "This function should be used if you wish to print the graphics screen to a high resolution printer.\n\n" +
+                        "X and Y: locations on the virtual screen.\n\n" +
+                        "B: the number of bits to be read, if b=1, equivalent to a POINT function.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "The bits are read in a vertical direction, ie. GR$(20,190,4) gives a character made up as follows:\n\n" +
+                        "bit 7=0 ; bit 6=0 ; bit 5=0 ; bit 4=0 ; bit 3=pixel at 20,190 ; bit 2=pixel 20,189 ; bit 1=pixel 20,188 ; bit 0=pixel 20,187");
+                }
+                if (word === 'IF') {
+                    return new vscode.Hover("**IF**: IF .. THEN .. ELSE control construct.\n\n" +
+                        "Usage: IF \\<boolean expression\\> THEN \\<statement\\> ELSE \\<statement\\> \n\n" +
+                        "The IF statement allows the program to branch depending on whether a condition is true or false.\n\n" +
+                        "boolean expression is any expression which yields a truth value,e.g. Y=2 AND X=3.\n\n" +
+                        "statement is any legal BASIC statement (which may include an IF statement).\n\n" +
+                        "If the boolean expression is true, the statement after the THEN is executed.\n\n" +
+                        "If the boolean expression is false and ELSE is not present, the program continues at the next line.\n\n" +
+                        "If the boolean expression is false and ELSE is present, the program continues after the ELSE.\n\n" +
+                        "EXAMPLE: 20 IF A$=\"Y\" OR A$=\"y\" THEN GOTO 40 ELSE GOTO 100");
+                }
+                if (word === 'INK') {
+                    return new vscode.Hover("**INK**:  Specifies the INK colour on the screen.\n\n" +
+                        "Usage: INK colour\n\n" +
+                        "Selects the INK colour. colour is a number in the range 0 to 15 .\n\n" +
+                        "0 = Transparent ; 1 = Black ; 2 = Medium Green ; 3 = Light Green ; 4 = Dark Blue\n\n" +
+                        "5 = Light Blue ; 6 = Dark Red ; 7 = Cyan ; 8 = Medium Red ; 9 = Light Red\n\n" +
+                        "10 = Dark Yellow ; 11 = Light Yellow ; 12 = Dark Green ; 13 = Magenta ; 14 = Grey ; 15 = White\n\n" +
+                        "Seee colour table in the appendix 7");
+                }
+                if (word === 'INKEY$') {
+                    return new vscode.Hover("**INKEY$**:  Reads the keyboard for a keypress.\n\n" +
+                        "Usage: INKEY$ \n\n" +
+                        "The keyboard can be read by the use of the function INKEY$\n\n" +
+                        "This is in practice a very useful function since it enables you to write programs where the computer interacts with the person operating the keyboard.\n\n" +
+                        "10 PRINT \"PRESS Y TO CONTINUE\u201D\n\n" +
+                        "20 LET A$=INKEY$\n\n" +
+                        "30 IF A$<>\"Y\" THEN GOTO 20\n\n" +
+                        "40 PRINT \"YOU PRESSED Y\"");
+                }
+                if (word === 'INP') {
+                    return new vscode.Hover("**INP**:  Read a byte from the specified port.\n\n" +
+                        "Usage: INP(port) \n\n" +
+                        "port: 0 to 255 \n\n" +
+                        "Reads a byte from the specified port.");
+                }
+                if (word === 'INPUT') {
+                    return new vscode.Hover("**INPUT**:  The INPUT command is used to input information into the computer with the specified parameters.\n\n" +
+                        "Usage: INPUT string;\\<variable list\\> \n\n" +
+                        "string is optional. INPUT \"Enter your name\";A$\n\n" +
+                        "variable list can be variable or string variable, e.g. INPUT A, B, ABC$\n\n" +
+                        "If the {string} is not present, a question mark will appear as a Prompt whenever the INPUT statement is used.\n\n" +
+                        "If the (string) is present, it replaces the question mark as a Prompt. The string must be followed by a semicolon.\n\n" +
+                        "If non-numeric information is entered into a numeric variable, or the too few items are input,\n\n" +
+                        "a question mark will appear after information which means that it should all be typed in again.");
+                }
+                if (word === 'INT') {
+                    return new vscode.Hover("**INT**:  Returns the integer part of the number.\n\n" +
+                        "Usage: INT(number) \n\n" +
+                        "PRINT INT(-2.5)\n\n" +
+                        "Returns -2");
+                }
+                if (word === 'LEFT$') {
+                    return new vscode.Hover("**LEFT$**:  Truncates a string from the left with the specified parameters.\n\n" +
+                        "Usage: LEFT$(string,number) \n\n" +
+                        "The string is truncated after the specified number of characters from the left. \n\n" +
+                        "EXAMPLE:\n\n" +
+                        "10 PRINT LEFT$(\"abcdef\",3)\n\n" +
+                        "Returns \"abc\"");
+                }
+                if (word === 'LEN') {
+                    return new vscode.Hover("**LEN**:  Returns the length of a string.\n\n" +
+                        "Usage: LEN (string) \n\n" +
+                        "Gives the length of a string.\n\n" +
+                        "Note that a space must be left between LEN and (string) otherwise LEN will be considered as a numeric array.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 PRINT LEN (\"ABC\"+\"DEF\")\n\n" +
+                        "Returns 6");
+                }
+                if (word === 'LET') {
+                    return new vscode.Hover("**LET**:  Used for variable assignment.\n\n" +
+                        "Usage: LET\tvariable=value\n\n" +
+                        "The LET statement assigns a value to a variable. \n\n" +
+                        "The value and variable must be of the same type.\n\n" +
+                        "i.e. numbers cannot be assigned to string variables and strings cannot be assigned to numeric variables.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 LET X=2\n\n" +
+                        "20 LET A$=\u201Dabc\"\n\n" +
+                        "This assigns the value 2 to the variable X and the value \"abc\" to the variable A$.");
+                }
+                if (word === 'LINE') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
+                    return new vscode.Hover("**LINE**:  Draws a line between 2 sets of coordinates. See also DRAW\n\n" +
+                        "Usage: LINE X1,Y1,X2,Y2 \n\n" +
+                        "Draws a line from coordinates (X1,Y1) to (X2,Y2)\n\n" +
+                        "Must be in graphics mode (VS 4) for command to exexute without an error, see LINE");
+                }
+                if (word === 'LIST') {
+                    return new vscode.Hover("**LIST**:  List a program to the screen.\n\n" +
+                        "Usage: LIST \\<start line number\\>,\\<end line number\\>\n\n" +
+                        "LIST lists a program to the screen.\n\n" +
+                        "3 variations: \n\n" +
+                        "LIST, LIST start line number or LIST start line number,end line number\n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like LIST.");
+                }
+                if (word === 'LLIST') {
+                    return new vscode.Hover("**LLIST**: List a program to the printer.\n\n" +
+                        "Usage: LLIST \\<start line number\\>,\\<end line number\\> \n\n" +
+                        "LLIST lists a program to the printer.\n\n" +
+                        "3 variations: \n\n" +
+                        "LLIST, LLIST start line number or LLIST start line number,end line number");
+                }
+                if (word === 'LN') {
+                    return new vscode.Hover("**LN**:  Returns the natural log of the specified number.\n\n" +
+                        "Usage: LN(number) \n\n" +
+                        "Returns the natural log of the specified number");
+                }
+                if (word === 'LOAD') {
+                    return new vscode.Hover("**LOAD**:  Loads a file from cassette tape into memory. (see also USER DISC for disc loading options)\n\n" +
+                        "Usage: LOAD \"tapename.extension\" \n\n" +
+                        "The tapename and extension is limited to 14 alphanumeric characters, including extension (see later for MEMU variation). e.g. LOAD \"FILENAME90.BAS\"\n\n" +
+                        "LOAD \"\" is used to reload the last save program, assuming the reset keys have not been pressed or command NEW executed. \n\n" +
+                        "The extension is optional and is typically either be \"BAS\" or \"mtx\" for MTX BASIC programs with or without built-in Z80 assembly code.\n\n" +
+                        "If using the MEMU emualator, the emulator automatically adds .mtx at the end of the filename and not part of the standard 14 character limit.\n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like LOAD.");
+                }
+                if (word === 'LPRINT') {
+                    return new vscode.Hover("**LPRINT**:  Prints information to the printer.\n\n" +
+                        "Usage: LPRINT \\<expression list\\> \n\n" +
+                        "The LPRINT command is used to print information to the printer\n\n" +
+                        "LPRINT is followed by a list of expressions separated by commas or semicolons.\n\n" +
+                        "The expressions can be string expressions or mathematical expressions and any number of commas can be used to tabulate the information.\n\n" +
+                        "A comma moves the cursor to the next TAB position. A Semicolon leaves the cursor immediately after the printed information.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 LPRINT \u201CSIN of 8 = \u201C;SIN(8)\n\n" +
+                        "Sends SIN of 8 = 0.989358247 to the printer");
+                }
+                if (word === 'MID$') {
+                    return new vscode.Hover("**MID$**:  Returns Y characters starting at position X in the string with the specified parameters.\n\n" +
+                        "Usage: MID$(string,X,Y) \n\n" +
+                        "Returns Y characters starting at position X in the string \n\n" +
+                        "EXAMPLE:\n\n" +
+                        "10 PRINT MID$(\u201CABCD\u201D+\u201DEFGH\u201D,3,4)\n\n" +
+                        "Returns \"CDEF\"");
+                }
+                if (word === 'MOD') {
+                    return new vscode.Hover("**MOD**:  Returns the remainder on dividing X by Y.\n\n" +
+                        "Usage: MOD(X,Y) \n\n" +
+                        "Returns the remainder on dividing X by Y\n\n" +
+                        "MOD (X,Y) is equivalent to X-INT(X/Y)*Y\n\n" +
+                        "Gives an error if division by 0\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "PRINT MOD(10,7)\n\n" +
+                        "Returns a remainder of 3");
+                }
+                if (word === 'MVSPR ') {
+                    return new vscode.Hover("**MVSPR**:  General purpose sprite command with the specified parameters.\n\n" +
+                        "Usage: MVSPR P,N,D \n\n" +
+                        "The functions are combined to allow complicated movements to occur whilst using only a single instruction. Add the P values together to get the movement combination required.\n\n" +
+                        "D is slightly more complicated as it must be able to reflect a value for several activities. If D is not in the range of any one of the chosen activities an error will occur.\n\n" +
+                        "P=1 , MOVEMENT of Sprite in the direction specified by D (0 to 8). The step size is set in CTLSPR 1\n\n" +
+                        "P=2 , Pattern Selection, changes the sprite pattern to pattern number D, defined by a GENPAT statement\n\n" +
+                        "P=4 , Redirect picks up the current velocity vector and switches it to the new direction.\n\n" +
+                        "P=8 , Plot at centre causes a point to be plotted at the centre of the sprite specified by N. This is not directly affected by the value of D at all.\n\n" +
+                        "N selects the sprite number (0 to 32)");
+                }
+                if (word === 'NEW') {
+                    return new vscode.Hover("**NEW**:  Clears any program in memory\n\n" +
+                        "Usage: NEW \n\n" +
+                        "This command resets the computers system variables thereby preparing it to accept a new program.\n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like NEW.");
+                }
+                if (word === 'NEXT') {
+                    return new vscode.Hover("**NEXT**: Next specifies the end of a FOR control loop.\n\n" +
+                        "Usage: NEXT \\<control variable\\> \n\n" +
+                        "If the control variable is specified, the NEXT is matched with FOR and all nested FOR blocks which are either complete or incomplete are terminated.\n\n" +
+                        "If the variable is not specified it is assumed that this NEXT belongs to the last active FOR statement. See FOR");
+                }
+                if (word === 'NODDY') {
+                    return new vscode.Hover("**NODDY**:  Text language editor.\n\n" +
+                        "Usage: NODDY \n\n" +
+                        "Passes control to the Noddy editor. Noddy should appear at the base of the screen, See Notes below for VS Code usage.\n\n" +
+                        "Commands: *A or *ADVANCE ; *B or *BRANCH ; *D or *DISPLAY ; *E or *ENTER ; *G or *GOTO \n\n" +
+                        "*I or *IF ; *L or *LIST ; *O or *OFF ; *P or *PAUSE ; *R or *RETURN ; *S or *STACK \n\n" +
+                        "NODDY coding language also uses \"^\" symbol followed by a label which is required for branching.\n\n" +
+                        "IF R,r\n\n" +
+                        "^r *R    (or ^r *RETURN)\n\n" +
+                        "In the above example, R and *R are different.\n\n" +
+                        "Refer to the MTX Series Owners Manual, PART 2 for details on the Noddy language.\n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like NODDY but a modification thereof.\n\n" +
+                        "NOTE: Add a newline at the very end of the program, e.g., 65535 REM NODDY\n\n" +
+                        "NOTE: Anything after the special REM NODDY statement will be treated as NODDY code/text (as above).");
+                }
+                if (word === 'NOT') {
+                    return new vscode.Hover("**NOT**: Boolean expression. compares two values to see if the condition is either True or False.\n\n" +
+                        "Usage: NOT \n\n" +
+                        "Example: \n\n" +
+                        "10 LET X=1:PRINT (NOT X=2)\n\n" +
+                        "Returns -1 as X is NOT equal to 2 (TRUE). If X=2 then X is equal to 2 Returns 0 (False).");
+                }
+                if (word === 'ON') {
+                    return new vscode.Hover("**ON**:  Branch condition for GOTO and GOSUB.\n\n" +
+                        "Usage: ON X GOTO \\<line number list\\> or  ON X GOSUB \\<line number list\\> \n\n" +
+                        "The ON command is used when you want to GOTO or GOSUB to a part of the program depending on the value of a variable\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 LET X=2\n\n" +
+                        "20 ON X GOTO 100,200,300,400,500\n\n" +
+                        "If X=0 it would branch to 100, X=1 would branch to 200, etc\n\n" +
+                        "If line 20 was GOSUB rather than GOTO, it would jump to the subroutine and execute until it encounters a RETURN statement");
+                }
+                if (word === 'OR') {
+                    return new vscode.Hover("**OR**: Boolean expression. compares two values to see if the condition is either True or False.\n\n" +
+                        "Usage: OR \n\n" +
+                        "Example: \n\n" +
+                        "10 LET X=1\n\n" +
+                        "20 IF X=1 OR X=2 THEN PRINT \"True\" ELSE PRINT \"False\"\n\n" +
+                        "30 PRINT (X=1 OR X=2)\n\n" +
+                        "In this case, returns True at line 20 and -1 at line 30.");
+                }
+                if (word === 'OUT') {
+                    return new vscode.Hover("**OUT**:  Outputs the specified value to the specified port.\n\n" +
+                        "Usage: OUT port,value\n\n" +
+                        "Refer to MTX series Owners Manual, Technical Section, System Block Diagram");
+                }
+                if (word === 'PANEL') {
+                    return new vscode.Hover("**PANEL**:  Z80 disasembler.\n\n" +
+                        "Usage: PANEL \n\n" +
+                        "Passes control to the PANEL dissassembler editor.\n\n" +
+                        "Refer to the MTX Series Owners Manual for details ON PANEL.\n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like PANEL.");
+                }
+                if (word === 'PAPER') {
+                    return new vscode.Hover("**PAPER**:  Specifies the PAPER colour on the screen.\n\n" +
+                        "Usage: PAPER colour \n\n" +
+                        "Selects the PAPER colour. colour is a number in the range 0 to 15 .\n\n" +
+                        "0 = Transparent ; 1 = Black ; 2 = Medium Green ; 3 = Light Green ; 4 = Dark Blue\n\n" +
+                        "5 = Light Blue ; 6 = Dark Red ; 7 = Cyan ; 8 = Medium Red ; 9 = Light Red\n\n" +
+                        "10 = Dark Yellow ; 11 = Light Yellow ; 12 = Dark Green ; 13 = Magenta ; 14 = Grey ; 15 = White\n\n" +
+                        "Seee colour table in the appendix 7");
+                }
+                if (word === 'PAUSE') {
+                    return new vscode.Hover("**PAUSE**:  with the specified parameters.\n\n" +
+                        "Usage: PAUSE number \n\n" +
+                        "The program will pause for a length of time dependent on number. \n\n" +
+                        "The time cannot be specified accurately but will vary according to how many incidental functions\n\n" +
+                        "the computer is performing at the same time such as flashing the cursor or updating the clock.");
+                }
+                if (word === 'PEEK') {
+                    return new vscode.Hover("**PEEK**:  Returns the contents of the specified address in the current memory page.\n\n" +
+                        "Usage: PEEK memory address\n\n" +
+                        "Notice that the MTX pages its memory in 32K blocks and so care must be taken to ensure that when PEEK\n\n" +
+                        "is used you are peeking the correct page. The top 16K of memory is available to all pages");
+                }
+                if (word === 'PHI') { // doesn't generate a MTX BASIC SE.C error if VS 4 not specified beforehand
+                    return new vscode.Hover("**PHI**: Adjusts the angle by a specified angle in radians.\n\n" +
+                        "Usage: PHI angle \n\n" +
+                        "Each time a PHI command is executed, the 'direction' is adjusted by the specified angle, see ANGLE.\n\n" +
+                        "EXAMPLE:\n\n" +
+                        "10 VS 4: CLS: ANGLE 0\n\n" +
+                        "20 FOR I=1 to 20\n\n" +
+                        "30 PLOT 100,100\n\n" +
+                        "40 PHI .1\n\n" +
+                        "50 DRAW 50\n\n" +
+                        "60 NEXT\n\n" +
+                        "70 GOTO 70");
+                }
+                if (word === 'PI') {
+                    return new vscode.Hover("**PI**:  Constant ratio of the circumference of a circle to its diameter.\n\n" +
+                        "Usage: PI \n\n" +
+                        "The MTX stores an accurate value of PI so that it doesn't have to be calculated each time that it is needed.\n\n" +
+                        "PI can be considered as a number and used whenever a number would be used\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "PRINT PI\n\n" +
+                        "PRINT COS(PI/2)");
+                }
+                if (word === 'PLOD') {
+                    return new vscode.Hover("**PLOD**:  Runs a NODDY program.\n\n" +
+                        "Usage: PLOD \"string\" \n\n" +
+                        "PLOD is used to run a Noddy program where string is the name of the Noddy page at which execution starts.\n\n" +
+                        "PLOD may be used within a BASIC program and control may be switched backwards and forwards.\n\n" +
+                        "When a Noddy program returns, execution continues at the next basic line.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 PLOD \"PROG1\"");
+                }
+                if (word === 'PLOT') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
+                    return new vscode.Hover("**PLOT**:  Plots a point on the graphics screen.\n\n" +
+                        "Usage: PLOT X,Y \n\n" +
+                        "Plots a point in the graphics screen at the graphics coordinates (X,Y)\n\n" +
+                        "Must be in graphics mode (VS 4) for command to exexute without an error, see LINE, see COLOUR and ATTR");
+                }
+                if (word === 'POKE') {
+                    return new vscode.Hover("**POKE**:  Stores a specified value in the computer memory.\n\n" +
+                        "Usage: POKE memory address,value \n\n" +
+                        "The POKE command loads a the specified memory location with the specified value\n\n" +
+                        "If more than 32K of memory is present, the basic program may spread over several pages (see ROM BASED MEMORY MAP).\n\n" +
+                        "The top 16K will always be present but POKE-ing into any other area may be dangerous unless other precautions are taken.\n\n" +
+                        "EXAMPLE: load 100 into memory address 50000\n\n" +
+                        "POKE 50000,100");
+                }
+                if (word === 'PRINT') {
+                    return new vscode.Hover("**PRINT**:  Prints information to the television screen or monitor.\n\n" +
+                        "Usage: PRINT \\<expression list\\> \n\n" +
+                        "The PRINT command is used to print information to the screen\n\n" +
+                        "PRINT is followed by a list of expressions separated by commas or semicolons.\n\n" +
+                        "The expressions can be string expressions or mathematical expressions and any number of commas can be used to tabulate the information.\n\n" +
+                        "A comma moves the cursor to the next TAB position. A Semicolon leaves the cursor immediately after the printed information.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 PRINT \u201CSIN of 8 = \u201C;SIN(8)\n\n" +
+                        "Displays on the screen SIN of 8 = 0.989358247");
+                }
+                if (word === 'RAND') {
+                    return new vscode.Hover("**RAND**:  Seeds the random number generator. (see also RND)\n\n" +
+                        "Usage: RAND number \n\n" +
+                        "This command sets the seed for the random number generator. If no number is specified the seed will be set to a random number.\n\n" +
+                        "10 RAND 1000\n\n" +
+                        "20 FOR I=1 to 100: PRINT INT(RND*50): NEXT I");
+                }
+                if (word === 'READ') {
+                    return new vscode.Hover("**READ**:  Reads infdormation stored in DATA statements (see also DATA and RESTORE).\n\n" +
+                        "Usage: READ \\<variable list\\> \n\n" +
+                        "Values are read from the DATA statements (See DATA) sequentially into the variables specified in the READ statement.\n\n" +
+                        "If an invalid assignment is made to a numeric variable an error will occur.\n\n" +
+                        "Data statements may occur anywhere within a program and are accessed sequentially in order either from the start of the program or from the value specified in a RESTORE statement.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 READ A, B, A$,B $(8) \n\n" +
+                        "20 PRINT A, B, A$, B$ \n\n" +
+                        "30 DATA 1, 2, AA, BB");
+                }
+                if (word === 'REM') {
+                    return new vscode.Hover("**REM**:  Used for comments and documenting the code to improve legibility.\n\n" +
+                        "Usage: REM \\<anything\\> \n\n" +
+                        "The REM command allows comments to be inserted into a program.\n\n" +
+                        "The REM command and any text associated with it doesn't need to be in double quotes but this can lead to spurious errors, like if a colon (:) which splits up statements.\n\n" +
+                        "To avoid spurious errors, .\n\n" +
+                        "The REM statement is ignored by the computer and is used only for documentation.");
+                }
+                if (word === 'RESTORE') {
+                    return new vscode.Hover("**RESTORE**:  Where data is stored. (see also DATA and READ)\n\n" +
+                        "Usage: RESTORE line number \n\n" +
+                        "Restore tells the computer from which line the next READ statement should start reading the next DATA item\n\n" +
+                        "This is particularly useful if the same DATA has to be read in two or more parts of a program\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 DIM A(20)\n\n" +
+                        "20 FOR I= 1 TO 10: READ A: PRINT A: NEXT I\n\n" +
+                        "60 RESTORE 100\n\n" +
+                        "70 FOR I= 1 TO 10: READ A(I): NEXT I\n\n" +
+                        "100 DATA 1,2,3,4,5,6,7,8,9,0");
+                }
+                if (word === 'RETURN') {
+                    return new vscode.Hover("**RETURN**:  When encountered, returns to the line following the calling GOSUB.\n\n" +
+                        "Usage: RETURN \n\n" +
+                        "Returns control to the line following the last GOSUB executed If no GOSUB has been executed, an error will occur.");
+                }
+                if (word === 'RIGHT$') {
+                    return new vscode.Hover("**RIGHT$**:  Truncates a string from the right with the specified parameters.\n\n" +
+                        "Usage: RIGHT$(string,number) \n\n" +
+                        "The string is truncated after the specified number of characters from the right. \n\n" +
+                        "EXAMPLE:\n\n" +
+                        "10 PRINT RIGHT$(\"abcdef\",3)\n\n" +
+                        "Returns \"def\"");
+                }
+                if (word === 'RND') {
+                    return new vscode.Hover("**RND**:  pseudo random number seeded by RAND.\n\n" +
+                        "Usage: RND \n\n" +
+                        "RND returns a pseudo random number.\n\n" +
+                        "see example at RAND");
+                }
+                if (word === 'ROM') {
+                    return new vscode.Hover("**ROM**:  with the specified parameters.\n\n" +
+                        "Usage: ROM number \n\n" +
+                        "Passes control to an additional ROM pack for example PASCAL FORTH. Details will be supplied with the ROM.\n\n" +
+                        "It is dangerous to use this command unless the appropriate ROM actually present.\n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ROM.");
+                }
+                if (word === 'RUN') {
+                    return new vscode.Hover("**RUN**:  Tells the computer to execute (run) the program in memory.\n\n" +
+                        "Usage: RUN \n\n" +
+                        "RUN tells the computer to start running the program from beginning.\n\n" +
+                        "All variables will be cleared.\n\n" +
+                        "A program can also be run by using a GOTO statement as a direct command. In this case the variables will be unaltered.\n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ROM.");
+                }
+                if (word === 'SAVE') {
+                    return new vscode.Hover("**SAVE**:  Saves a program from memory to cassete tape. (see USER DISC for disc save options).\n\n" +
+                        "Usage: SAVE \"tapename.extension\" \n\n" +
+                        "The tapename is limited to 15 alphanumeric characters including extension (see later for MEMU variation). e.g. SAVE \"FILENAME90.BAS\" \n\n" +
+                        "The extension is optional and is typically either be \".BAS\" or \".mtx\" for MTX BASIC programs with or without built-in Z80 assembly code.\n\n" +
+                        "If using the MEMU emulator, the emulator automatically strips off any characters beyond 15 characters, typically this removes the MEMU added .mtx extension, unless within the 15 chars.\n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like SAVE.");
+                }
+                if (word === 'SBUF') {
+                    return new vscode.Hover("**SBUF**:  Reserves a sound buffer in memory.\n\n" +
+                        "Usage: SBUF number \n\n" +
+                        "This command makes space in a sound buffer for use by the SOUND command.\n\n" +
+                        "The Buffer is made at the top of memory below the system variables\n\n" +
+                        "EXAMPLE:\n\n" +
+                        "SBUF 8\n\n" +
+                        "This will make space for 8 blocks of sound data for each of the 3 channels and the noise channel.\n\n" +
+                        "Each block takes 10 bytes. The above statement therefore takes a total of 320 bytes. i.e. 8 * 4 * 10.(8*channels*block length).");
+                }
+                if (word === 'SGN') {
+                    return new vscode.Hover("**SGN**:  with the specified parameters.\n\n" +
+                        "Usage: SGN(number) \n\n" +
+                        "Returns a result depending on the sign if the specified number.\n\n" +
+                        "If the number is positive the result is +1 If the number is negative the result is \u20141 If the number is zero the result is 0.\n\n" +
+                        "10 PRINT SGN(-2.5): PRINT SGN(5): PRINT SGN(0)" +
+                        "Returns -1, 5 and 0 respectively");
+                }
+                if (word === 'SIN') {
+                    return new vscode.Hover("**SIN**:  calculates the sin of the angle.\n\n" +
+                        "Usage: SIN(angle) \n\n" +
+                        "Returns the sine of the angle specified in radians.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 PRINT \u201CSIN of 8 = \u201C;SIN(8)\n\n" +
+                        "Displays on the screen SIN of 8 = 0.989358247");
+                }
+                if (word === 'SOUND') {
+                    return new vscode.Hover("**SOUND**:  Generating Sound on a MTX computer.\n\n" +
+                        "Usage: SOUND \\<expression list\\> \n\n" +
+                        "The effect of the sound command depends on the number of expressions in the expression list, either 3 parameter or 7 parameter list.\n\n" +
+                        "DIRECT SOUND (This mode plays a single note until stopped): SOUND channel,frequency,volume \n\n" +
+                        "CONTINUOUS SOUND (Sequences of notes can be played by loading them into a sound buffer): SOUND channel,frequency,volume ,freq inc,vol inc,duration,mode\n\n" +
+                        "channel: 0,1 and 2 are pure sound and 3 is for noise.\n\n" +
+                        "frequency: frequency of the sound (DIRECT: 0 to 1023, CONTINUOUS: 0 to 8192).  See Part 4, Ref. Section for SOUND & Appendix 8 of manual\n\n" +
+                        "volume: loudness (DIRECT: 0 to 15, CONTINUOUS: 0 to 1023)  See Part 4, Ref. Section for SOUND & Appendix 8 of manual \n\n" +
+                        "freq_inc (+/- 1023) and vol_inc (+/- 1023, even though +/-32767 allowed). Every 1/64th of a second the PC adds the increment to both frequency & volume increment. \n\n" +
+                        "duration: This continues for a length of time equal to the duration which is measured in 1/64ths of a second\n\n" +
+                        "mode=0, freq and vol parameters will be ignored which means that the increments will increment whatever values of frequency and volume were current when the command was encountered.\n\n" +
+                        "mode=1, the freq and vol will be loaded into the sound buffer to initialise the frequency and volume of the relevant channel");
+                }
+                if (word === 'SPK$') {
+                    return new vscode.Hover("**SPK$**:  Determines what the character is at the cursor.\n\n" +
+                        "Usage: SPK$(screen peek) \n\n" +
+                        "Peeks the character at the cursor location and auto increments the cursor location. The character is returned as ASCII.\n\n" +
+                        "Example: To read characters from the screen into an array, and reprint them.\n\n" +
+                        "10 CLS: FOR I=32 TO 64:PRINT CHR$(I);:NEXT I\n\n" +
+                        "20 CSR 0,0\n\n" +
+                        "30 FOR I=32 TO 64: LET A$(I)=SPK$: NEXT\n\n" +
+                        "40 PRINT\n\n" +
+                        "50 PRINT A$");
+                }
+                if (word === 'SPRITE') {
+                    return new vscode.Hover("**SPRITE**:  Creating a sprite with the specified parameters.\n\n" +
+                        "Usage: SPRITE N,P,XP,YP,XS,YS,C \n\n" +
+                        "N: sprite number (1 to 32)\n\n" +
+                        "P: sprite pattern number (size 0: 0 to 127 and size 1: 0 to 31)\n\n" +
+                        "XP: position x off centre (range -4095 to 4095)\n\n" +
+                        "YP: position y off centre (range -4095 to 4095)\n\n" +
+                        "XS: speed in the x direction (-128 to 127) where 1 unit of speed moves the sprite 1/8 pixel every master speed cycle as set by CTLSPR 0\n\n" +
+                        "YS:  speed in the y direction (plus upwards) range -128 to 127\n\n" +
+                        "C: colour (0 to 15)\n\n" +
+                        "Sprite screen 0,0 is defined as bottom left hand corner of screen i.e same as for plot.\n\n" +
+                        "Sprite coordinates are absolute and do not look at virtual screen origins (i.e assume a 32\tby 24 graphic screen)");
+                }
+                if (word === 'SQR') {
+                    return new vscode.Hover("**SQR**:  Calculates the square root of a number.\n\n" +
+                        "Usage: SQR(number) \n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 PRINT SQR(2)\n\n" +
+                        "Returns 1.41421356");
+                }
+                if (word === 'STEP') {
+                    return new vscode.Hover("**STEP**:  Increm,ents the FOR loop. (SEE FOR-NEXT)\n\n" +
+                        "Usage: STEP \\<increment\\> \n\n" +
+                        "STEP increments can be integer or decimal.\n\n" +
+                        "If STEP is not specified in a FOR-NEXT loop, the default STEP of 1 is applied.");
+                }
+                if (word === 'STOP') {
+                    return new vscode.Hover("**STOP**:  When encountered, STOPs executing the BASIC program. (see also CONT)\n\n" +
+                        "Usage: STOP \n\n" +
+                        "STOPS the BASIC program at the line number where STOP is encountered.");
+                }
+                if (word === 'STR$') {
+                    return new vscode.Hover("**STR$**:  Returns the string of the specified number.\n\n" +
+                        "Usage: STR$(number) \n\n" +
+                        "Gives the string which represents the specified number.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 PRINT STR$(2+2)\n\n" +
+                        "Returns 4 as a string not a numerical value.\n\n" +
+                        "Note that STR$ has a string value and can therefore not be used in numeric expressions.");
+                }
+                if (word === 'TAN') {
+                    return new vscode.Hover("**TAN**:  Returns the tangent of the angle specified in radians.\n\n" +
+                        "Usage: TAN(angle) \n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 PRINT TAN(0.785): REM TAN of 0.785 rads (45 degrees) = 1");
+                }
+                if (word === 'THEN') {
+                    return new vscode.Hover("**THEN**:  execute the statement after the word THEN if the IF condition is met.\n\n" +
+                        "Usage: THEN \\<statements\\> \n\n" +
+                        "See IF-THEN-ELSE");
+                }
+                if (word === 'TIME$') {
+                    return new vscode.Hover("**TIME$**: Returns  the time on the real time clock in the format. (See CLOCK)\n\n" +
+                        "Usage: TIME$ \n\n" +
+                        "Returns the time as H H M M S S\n\n" +
+                        "H H is the number of hours elapsed since the clock was started with the CLOCK command. The hours will count up to 99 before resetting.\n\n" +
+                        "M M  is the number of minutes.\n\n" +
+                        "S S is the number of seconds\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "10 CLOCK \"000000\"\n\n" +
+                        "20 CSR 10,10:PRINT TIME$ \n\n" +
+                        "30 GOTO 20");
+                }
+                if (word === 'TO') {
+                    return new vscode.Hover("**TO**: See FOR-NEXT loop.\n\n" +
+                        "Usage: TO \n\n" +
+                        "");
+                }
+                if (word === 'USER') {
+                    return new vscode.Hover("**USER**:  Used for Disc operations.\n\n" +
+                        "Usage: USER command \n\n" +
+                        "or BASIC Disc Operating System (BDOS) usage and utility programs.\n\n" +
+                        "see MTX Series Owners manual, technical appendices, appendix 13.");
+                }
+                if (word === 'USR') {
+                    return new vscode.Hover("**USR**:  with the specified parameters.\n\n" +
+                        "Usage: USR (memory address) \n\n" +
+                        "USR causes control of the program to be transferred to the specified memory address. \n\n" +
+                        "This is the usual way of interfacing machine code to BASIC programs although the MTX assembler makes this function redundant in most cases.\n\n" +
+                        "On return to BASIC, USR has the value in the register pair BC. EXAMPLE: \n\n" +
+                        "10 CODE\n\n" +
+                        "8007 LD BC,100\n\n" +
+                        "800A RET\n\n" +
+                        "20 PRINT USR(32775):REM 32775 decimal = 8007 hexadecimal\n\n" +
+                        "100 is displayed on the screen.\n\n" +
+                        "see examples in the MTX Series Owners manual, reference section, page 171 ");
+                }
+                if (word === 'VAL') {
+                    return new vscode.Hover("**VAL**: Returns the numeric value of the specified string..\n\n" +
+                        "Usage: VAL(string) \n\n" +
+                        "If the string is not a valid number, VAL will try to evaluate the string from the left hand side as a number until it can go no further.\n\n" +
+                        "EXAMPLE: \n\n" +
+                        "PRINT VAL(\"100\"): REM returns 100\n\n" +
+                        "PRINT VAL(\"100000000000\"): REM returns 1E+12\n\n" +
+                        "PRINT VAL(\"1000ABCDEF00\"): REM returns 1000\n\n" +
+                        "PRINT VAL(\"abc12\"): REM returns 0 (no number at start)\n\n" +
+                        "PRINT VAL(\"12\"+\"12\"): REM returns 1212\n\n" +
+                        "PRINT VAL(\"23\")+10: REM returns 33");
+                }
+                if (word === 'VERIFY') {
+                    return new vscode.Hover("**VERIFY**:  Verifies a program in tape against the program currently in the computer.\n\n" +
+                        "Usage: VERIFY \n\n" +
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like VERIFY");
+                }
+                if (word === 'VIEW') {
+                    return new vscode.Hover("**VIEW**:  The view command moves the window relative to the sprite planes whilst leaving the position of the sprites unchanged.\n\n" +
+                        "Usage: VIEW direction, distance \n\n" +
+                        "direction\t0 to 7\n\n" +
+                        "distance\t0 to 255\n\n" +
+                        "The Sprite Screen is -4095 to +4095 in both the x and y directions");
+                }
+                if (word === 'VS') {
+                    return new vscode.Hover("**VS**:  Selects which virtual screen to view.\n\n" +
+                        "Usage: VS N \n\n" +
+                        "This command selects a virtual screen from those already defined or created using the CRVS command. \n\n" +
+                        "The computer will automatically switch to the type of screen selected whether graphics or text.\n\n" +
+                        "See CRVS");
+                }
+            } // skip MTX BASIC hover support if not a BASIC file
+            // ============================================
+            // Z80 ASSEMBLY HOVER SUPPORT
+            // ============================================
+            // Check if we're inside a CODE block and provide Z80 hover info
+            var lineText = document.lineAt(position.line).text;
+            // Check if this looks like a Z80 assembly line (starts with hex address after whitespace)
+            if (/^\s+[0-9A-Fa-f]{4}\s/.test(lineText)) {
+                // Try to get Z80 instruction info
+                var z80Info = (0, z80codes_js_1.getZ80InstructionInfo)(word);
+                if (z80Info) {
+                    return new vscode.Hover(z80Info);
+                }
+                // Provide info for Z80 registers
+                var z80Registers = {
+                    'A': '**A** - Accumulator (8-bit primary register)',
+                    'B': '**B** - General purpose register (8-bit), part of BC pair',
+                    'C': '**C** - General purpose register (8-bit), part of BC pair',
+                    'D': '**D** - General purpose register (8-bit), part of DE pair',
+                    'E': '**E** - General purpose register (8-bit), part of DE pair',
+                    'H': '**H** - High byte of HL register pair',
+                    'L': '**L** - Low byte of HL register pair',
+                    'BC': '**BC** - 16-bit register pair (B=high, C=low)',
+                    'DE': '**DE** - 16-bit register pair (D=high, E=low)',
+                    'HL': '**HL** - 16-bit register pair, often used for memory addressing',
+                    'SP': '**SP** - Stack Pointer (16-bit)',
+                    'IX': '**IX** - Index Register X (16-bit)',
+                    'IY': '**IY** - Index Register Y (16-bit)',
+                    'AF': '**AF** - Accumulator and Flags register pair',
+                    'PC': '**PC** - Program Counter (16-bit)',
+                    'I': '**I** - Interrupt Vector register',
+                    'R': '**R** - Memory Refresh register'
+                };
+                var upperWord = word.toUpperCase();
+                if (z80Registers[upperWord]) {
+                    return new vscode.Hover(z80Registers[upperWord]);
+                }
+                // Provide info for assembler directives
+                var directives = {
+                    'DB': '**DB** - Define Byte\n\nDefines one or more bytes of data.\n\nUsage: `DB value1, value2, ...` or `DB "string"`',
+                    'DW': '**DW** - Define Word\n\nDefines one or more 16-bit words (little-endian).\n\nUsage: `DW value1, value2, ...`',
+                    'DS': '**DS** - Define Space\n\nReserves a block of memory.\n\nUsage: `DS count` (reserves count bytes)'
+                };
+                if (directives[upperWord]) {
+                    return new vscode.Hover(directives[upperWord]);
+                }
+            }
+            // No hover info found - return undefined implicitly by not returning anything                   
+        } // This closes provideHover
+    })); // This closes registerHoverProvider
     // Clean up resources if needed
     function deactivate() { }
 }

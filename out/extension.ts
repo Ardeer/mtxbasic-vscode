@@ -32,8 +32,52 @@ import { isHexNumber,
         splitBooleanExpression,
         trimCommaList,
         trimArray,
-        splitCommandsByColon}
- from './stdFns.js';
+        splitCommandsByColon,
+        parseNoddyContent,
+        validateNoddyProgram,
+        isNoddyTrigger,
+        findPlodReferences,
+        NoddyPage}
+from './stdFns.js';
+
+ 
+import {
+    z80Cmds,
+    Z80Error,
+    Z80ParsedLine,
+    CodeBlock,
+    LabelInfo,
+    parseZ80Line,
+    splitOperands,
+    detectCodeBlocks,
+    collectLabels,
+    normalizeInstruction,
+    findZ80Command,
+    validateZ80Instruction,
+    validateZ80InstructionWithLabels,
+    validateCodeBlock,
+    validateCodeBlocks,
+    getZ80InstructionInfo
+} from './z80codes.js';
+
+import {    mtxTokens,
+            convertTextToHex,
+            assembleCodeBlock,
+            basicTokeniseLine,
+            refineConvertTextToHex,
+            compressSpacesAndAscii,
+            findBestZ80Match,
+            convertNoddyBlock,
+            parseImmediateOperand,
+            opCodePatternToBytes,
+            processMTXDirectives,
+            processCodeBlock,
+            updateCodeBlockLength,
+            extractMTXDirectives
+ } from './mtxtokens.js';
+
+import { createHdr, initCreateHdr} from './mtxsavehdr.js';
+
 
 // ------------------------------------------------------------
 //  Types used by functions below
@@ -47,9 +91,118 @@ expectEnd?: boolean;
 validate: (groups: string[], rawMatch: string) => CheckResult[];
 };
 
+
+
+
 export function activate(ctx: vscode.ExtensionContext) {
   const diagCollection = vscode.languages.createDiagnosticCollection('mtxbasic');
   ctx.subscriptions.push(diagCollection);
+
+        // default start address for MTX BASIC programs (depends on RAM size)
+        const ramSize = 48; // assumes MTX512, if MTX500 use 32KB. Future option for user settings
+        const mtxRamSize = ramSize * 1024;
+        const hexBaseAddress = ramSize === 48 ? 0x4000 : 0x8000;
+
+        let noddyLength = 0; // Tracks ASCII characters in the current document's NODDY section
+
+
+        // Command: save converted HEX bytes from active editor to a file
+        const saveHexCmd = vscode.commands.registerCommand('mtxbasic.saveHex', async () => {
+                const editor = vscode.window.activeTextEditor;
+                if (!editor) {
+                        vscode.window.showErrorMessage('No active MTX BASIC editor');
+                        return;
+                }
+                const doc = editor.document;
+                const text = doc.getText();
+                try {
+                        initCreateHdr(); //initialize the createHdr array before populating it with updated values
+                        const { noddyStartLine } = validateLineNumbers(doc);
+                        //const noddyLengthForDoc = computeNoddyAsciiLength(doc, noddyStartLine);
+                        //noddyLength = noddyLengthForDoc;
+
+                        // FIX: Use byte length, not char length, for correct BASTOP calculation
+                        const noddyByteCount = computeNoddyByteLength(doc, noddyStartLine);
+                        noddyLength = noddyByteCount;
+
+                        /**
+                         * The calculation of BASTOPaddr and NODTOPaddr appears to be using an inclusive "start + length" approach, 
+                         * which points to the byte after the last byte of the program. Based on your expected value of 0x4962 (vs 0x4963) and the file integrity check, 
+                         * these system variables are intended to point to the last utilized byte rather than the next free address.
+                         */
+
+                        const bytes = convertTextToHex(text, hexBaseAddress);
+                        const totalBytelength=bytes.length; //calculate total BASIC length (PROGRAM, CODE and NODDY) from converted bytes                                
+                        const LSTPGsize = ramSize === 48 ? 0x01 : 0x00; // Placeholder for number of 32K pages (0x00 for MTX500 and 0x01 for MTX512)
+                        const BASBOTaddr = hexBaseAddress; // Placeholder to calculate the length of BASIC from BOTTOM to TOP of BASIC
+                        const BASTOPaddr = BASBOTaddr+(totalBytelength-noddyLength - 1); // Calculate BASIC top excluding NODDY bytes
+                        const NODTOPaddr = BASBOTaddr + totalBytelength - 1; // Calculate TOP of NODDY (End of Noddy code in memory)
+                        const ARRTOPdispl = NODTOPaddr - BASBOTaddr; // Calculate the TOP of ARRAYS (from BASIC BOTTOM to NODDY TOP)
+                        
+                        //Pass the above data to update the system variables in createHdr array before inserting the header
+                        initCreateHdr();
+                        const sysVarStart = 368;
+                        const setSysVar = (offset: number, value: number) => {
+                                createHdr[sysVarStart + offset] = value & 0xFF;
+                                createHdr[sysVarStart + offset + 1] = (value >> 8) & 0xFF;
+                        };
+
+                        createHdr[sysVarStart + 42] = LSTPGsize; // LSTPG
+                        setSysVar(84, NODTOPaddr); // NBTOP
+                        setSysVar(87, BASTOPaddr); // BASTOP
+                        setSysVar(90, BASBOTaddr); // BASBOT
+                        setSysVar(92, BASTOPaddr); // BASTPO
+                        setSysVar(124,ARRTOPdispl); // ARRTOP
+                        setSysVar(127,BASBOTaddr); // BASELIN
+                        setSysVar(134,BASTOPaddr); // PGTOP
+                        setSysVar(246,BASBOTaddr); // DATAAD
+                        
+                        //insert MTX header before the BASIC program bytes above - still to be added here
+                        const defaultFileName = doc.uri && doc.uri.fsPath ? doc.uri.fsPath.replace(/\.[^.]*$/, '') + '.mtx' : 'output.mtx';
+                        const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(defaultFileName), saveLabel: 'Save HEX' });
+                        if (!uri) return;
+
+                        // Check filename length and update createHdr
+                        let fileName = uri.fsPath.split(/[/\\]/).pop() || '';
+                        
+                        const lastDotIdx = fileName.lastIndexOf('.');
+                        let nameOnly = lastDotIdx > -1 ? fileName.substring(0, lastDotIdx) : fileName;
+                        const extension = lastDotIdx > -1 ? fileName.substring(lastDotIdx) : '';
+
+                        nameOnly = nameOnly.toUpperCase();
+                        let headerName = "";
+
+                        // 1) strip .mtx from the name saved to createHdr only
+                        // doesn't apply if extension is .BAS for example
+                        if (extension.toLowerCase() === '.mtx') {
+                                headerName = nameOnly;
+                        } else {
+                                headerName = nameOnly + extension.toUpperCase();
+                        }
+                        
+                        // 2) filename length can be 15 bytes without .mtx
+                        if (headerName.length > 15) {
+                                vscode.window.showErrorMessage(`Filename header "${headerName}" is too long. Must be 15 chars or less.`);
+                                return;
+                        }
+
+                        // Populate createHdr (bytes 1-15)
+                        for (let i = 1; i < 16; i++) {
+                                // Use (i - 1) because headerName is 0-indexed
+                                createHdr[i] = (i - 1) < headerName.length ? headerName.charCodeAt(i - 1) : 0x20;
+                        }
+
+                        const DESAVEaddr = 0xFB4E + headerName.length; 
+                        setSysVar(249,DESAVEaddr); // DESAVE 
+
+                        const data = Uint8Array.from([...createHdr, ...bytes]);
+                        await vscode.workspace.fs.writeFile(uri, data);
+                        vscode.window.showInformationMessage(`Wrote ${data.length} bytes to ${uri.fsPath}`);
+                } catch (e) {
+                        vscode.window.showErrorMessage('Failed to generate or write HEX: ' + String(e));
+                }
+        });
+        ctx.subscriptions.push(saveHexCmd);
 
         // #############################  START of REUSABLE COMMON FUNCTIONS #############################
 
@@ -154,6 +307,40 @@ export function activate(ctx: vscode.ExtensionContext) {
         }
         return s;
         } //END of stripTrailingCommentUnquoted function
+
+        // Count ASCII characters in the NODDY section (marker line excluded)
+        function computeNoddyAsciiLength(doc: vscode.TextDocument, noddyStartLine: number): number {
+        if (noddyStartLine < 0) return 0;
+        const startLine = noddyStartLine + 1;
+        if (startLine >= doc.lineCount) return 0;
+        const start = new vscode.Position(startLine, 0);
+        const end = doc.lineAt(doc.lineCount - 1).range.end;
+        const noddyText = doc.getText(new vscode.Range(start, end));
+        return noddyText.length;
+        }
+
+        // Count BYTES in the NODDY section (using Page structure)
+        function computeNoddyByteLength(doc: vscode.TextDocument, noddyStartLine: number): number {
+        // FIX: Return 0 immediately if no NODDY section serves as the fix
+        if (noddyStartLine < 0) {
+                return 0;
+        }
+
+        const startLine = noddyStartLine + 1;
+        if (startLine >= doc.lineCount) {
+                return 0; // Handle edge case where NODDY header is the last line
+        }
+        
+        const start = new vscode.Position(startLine, 0);
+        const end = doc.lineAt(doc.lineCount - 1).range.end;
+        const noddyText = doc.getText(new vscode.Range(start, end));
+        
+        const lines = noddyText.split(/\r?\n/);
+        
+        // This now returns the full binary size including Page headers (Len) and footers (0xFF)
+        const bytes = convertNoddyBlock(lines);
+        return bytes.length;
+        }
 
         // Run all validators over `segment` and call `onError` for each CheckResult.
         // - Skips matches that begin inside double-quoted strings (isIndexInQuotedString)
@@ -260,73 +447,114 @@ export function activate(ctx: vscode.ExtensionContext) {
     
         // Add this helper function before refreshDiagnostics
         // Update validateLineNumbers function to include format and range checks:
-        function validateLineNumbers(doc: vscode.TextDocument): {line: number; start: number; end: number; message: string}[] {
-                const errors: {line: number; start: number; end: number; message: string}[] = [];
-                const lineNumbers = new Map<number, number>(); // Map<lineNumber, documentLine>
-                let lastLineNo = -1;
+        // Update validateLineNumbers function to handle NODDY internally:
+        // Cleaner alternative - return an object with both errors and noddyStartLine:
 
-                // Scan document collecting line numbers
-                for (let i = 0; i < doc.lineCount; i++) {
-                        const text = doc.lineAt(i).text;
-                        const trimmed = text.trim();
-                        
-                        // Skip empty lines and comment-only lines
-                        if (trimmed.length === 0) continue;
-
-                        // Check format and presence of line number on non-empty first segments
-                        const lineNumRe = /^\s*(\d{1,5})\b/;
-                        const mLnum = lineNumRe.exec(text);
-                        if (!mLnum) {
-                        // missing leading line number -> highlight first token / first non-space column
-                        const firstNonSpace = text.search(/\S/);
-                        errors.push({
-                                line: i,
-                                start: firstNonSpace === -1 ? 0 : firstNonSpace,
-                                end: firstNonSpace === -1 ? 1 : firstNonSpace + 1,
-                                message: 'Missing line number (required, 0..65535)'
-                        });
-                        continue;
-                        }
-
-                        // Check numeric range (0..65535)
-                        const lineNo = parseInt(mLnum[1], 10);
-                        if (!Number.isInteger(lineNo) || lineNo < 0 || lineNo > 65535) {
-                        const innerIndex = mLnum[0].indexOf(mLnum[1]);
-                        errors.push({
-                                line: i,
-                                start: mLnum.index! + innerIndex,
-                                end: mLnum.index! + innerIndex + mLnum[1].length,
-                                message: `Line number out of range 0..65535 (got ${mLnum[1]})`
-                        });
-                        continue;
-                        }
-
-                        // Check for duplicates
-                        if (lineNumbers.has(lineNo)) {
-                        const prevLine = lineNumbers.get(lineNo)!;
-                        errors.push({
-                                line: i,
-                                start: mLnum.index!,
-                                end: mLnum.index! + mLnum[1].length,
-                                message: `Duplicate line number ${lineNo} (previously used on line ${prevLine + 1})`
-                        });
-                        }
-
-                        // Check sequence
-                        if (lineNo <= lastLineNo) {
-                        errors.push({
-                                line: i,
-                                start: mLnum.index!,
-                                end: mLnum.index! + mLnum[1].length,
-                                message: `Line number ${lineNo} is out of sequence (previous was ${lastLineNo})`
-                        });
-                        }
-
-                        lineNumbers.set(lineNo, i);
-                        lastLineNo = lineNo;
+        function validateLineNumbers(doc: vscode.TextDocument): { 
+        errors: { line: number; start: number; end: number; message: string }[]; 
+        noddyStartLine: number;
+        codeBlockRanges: { start: number; end: number }[];
+        } {
+        const errors: { line: number; start: number; end: number; message: string }[] = [];
+        let noddyStartLine = -1;
+        let lastLineNum = -1;
+        
+        // Detect CODE block ranges using the centralized detector from z80codes.ts.
+        // `detectCodeBlocks` returns blocks with `startLine` pointing at the
+        // numbered CODE marker and `endLine` pointing at the final assembly line.
+        // Convert these to ranges of actual assembly lines (start = startLine+1).
+        const codeBlockRanges: { start: number; end: number }[] = [];
+        const documentLines: string[] = [];
+        for (let i = 0; i < doc.lineCount; i++) documentLines.push(doc.lineAt(i).text);
+        try {
+                const blocks = detectCodeBlocks(documentLines) || [];
+                for (const b of blocks) {
+                        const s = (typeof b.startLine === 'number') ? b.startLine + 1 : -1;
+                        const e = (typeof b.endLine === 'number') ? b.endLine : -1;
+                        if (s >= 0 && e >= s) codeBlockRanges.push({ start: s, end: e });
                 }
-                return errors;
-        } // END of validateLineNumbers function
+        } catch (err) {
+                // Detection failed unexpectedly; fall back to no CODE blocks
+                // (leave codeBlockRanges empty) — errors will be reported elsewhere.
+        }
+
+        // Helper function to check if a line is inside a CODE block
+        function isInCodeBlock(lineNum: number): boolean {
+                for (const block of codeBlockRanges) {
+                        if (lineNum >= block.start && lineNum <= block.end) return true;
+                }
+                return false;
+        }
+        
+        // Second pass: validate BASIC line numbers (skip CODE block lines and NODDY section)
+        for (let i = 0; i < doc.lineCount; i++) {
+                const line = doc.lineAt(i);
+                const text = line.text;
+                const trimmed = text.trim();
+
+                // Skip empty lines
+                if (!trimmed) {
+                continue;
+                }
+
+                // Skip lines inside CODE blocks - they are assembly, not BASIC
+                if (isInCodeBlock(i)) {
+                continue;
+                }
+
+                // Check for NODDY trigger
+                //if (/^\d+\s+(?:REM\s*)?NODDY/i.test(trimmed)) {
+                if (/^\d+\s+REM\s+NODDY/i.test(trimmed)) {
+                noddyStartLine = i;
+                }
+
+                // Skip lines after NODDY trigger
+                if (noddyStartLine >= 0 && i > noddyStartLine) {
+                continue; // <-- This skips BASIC line number validation after NODDY
+                }
+
+
+
+                // Check if line starts with a BASIC line number
+                // Must be decimal digits only (not hex like 400C)
+                const lineNumMatch = /^(\d+)/.exec(trimmed);
+                if (!lineNumMatch) {
+                errors.push({
+                        line: i,
+                        start: 0,
+                        end: Math.min(10, text.length),
+                        message: 'Line must start with a BASIC line number'
+                });
+                continue;
+                }
+
+                const lineNum = parseInt(lineNumMatch[1], 10);
+
+                // Check line number is in valid range
+                if (lineNum < 1 || lineNum > 65535) {
+                errors.push({
+                        line: i,
+                        start: 0,
+                        end: lineNumMatch[1].length,
+                        message: `Line number ${lineNum} is out of valid range (1-65535)`
+                });
+                }
+
+                // Check line numbers are ascending
+                if (lineNum <= lastLineNum) {
+                errors.push({
+                        line: i,
+                        start: 0,
+                        end: lineNumMatch[1].length,
+                        message: `Line number ${lineNum} must be greater than previous line number ${lastLineNum}`
+                });
+                }
+
+                lastLineNum = lineNum;
+        } // END of BASIC line number validation loop
+
+        return { errors, noddyStartLine, codeBlockRanges };
+        } // END of validateLineNumbers function 
 
         function refreshDiagnostics(doc: vscode.TextDocument) {
                 if (doc.languageId !== 'mtxbasic') { return; }
@@ -346,6 +574,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 cmdname: string      //add an extra cmdtype = 'stdcmd', 'strcmd', 'numfn','strfn'
                 args?: ArgSpec[];     // ordered arg expectations
                 expectEnd?: boolean;
+                description?: string; // optional description for hover/documentation
                 };
                 
                 // use batticks instead of single quotes for patterns used in regex expressions. with batticks `CHR\$` rather than 'CHR\\$'. Example below uses quotes and works
@@ -416,7 +645,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 { id: 'MOD', pattern: 'MOD', cmdname:'numfn'  ,args: [{ kind: 'numeric'},{ kind: 'numeric' }], expectEnd: true }, //range to be confirmed
                 { id: 'MVSPR', pattern: 'MVSPR', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 1, max: 8 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true }, //3rd param needs for detail
                 { id: 'NEXT', pattern: 'NEXT', cmdname:'stdcmd'  ,args: [{ kind: 'expr', required:false}], expectEnd: true }, //CONTROL STRUCTURE MUST BE Alphanumeric expr. No expr is also valid
-                { id: 'NODDY', pattern: 'NODDY',  cmdname:'stdcmd'  ,args: [], expectEnd: true  }, //setup similar to CODE
+                { id: 'NODDY', pattern: 'NODDY',  cmdname:'stdcmd'  ,args: [], expectEnd: true,description: 'Marks the start of NODDY text language section'  }, //setup similar to CODE
                 { id: 'NOT', pattern: 'NOT',  cmdname:'stdcmd'  ,args: [] },// removed , expectEnd: true so that A=NOT*5 is valid
                 //{ id: 'ON', pattern: 'ON', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}] }, //CONTROL STRUCTURE and associated with GOTO or GOSUB
                 { id: 'OR', pattern: 'OR',  cmdname:'stdcmd'  ,args: [] }, // removed , expectEnd: true so that A=OR*5 is valid
@@ -426,11 +655,11 @@ export function activate(ctx: vscode.ExtensionContext) {
                 { id: 'PEEK', pattern: 'PEEK', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 0, max: 65535}], expectEnd: true },
                 { id: 'PHI', pattern: 'PHI',  cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 0}], expectEnd: true }, //float number, angle in radians
                 { id: 'PI', pattern: 'PI',  cmdname:'stdcmd'  ,args: [] }, //removed , expectEnd: true so that A=PI*5 is valid
-                { id: 'PLOD', pattern: 'PLOD',  cmdname:'strcmd'  ,args: [{ kind: 'string' }], expectEnd: true },
+                { id: 'PLOD', pattern: 'PLOD',  cmdname:'strcmd'  ,args: [{ kind: 'string' }], expectEnd: true,description: 'Execute a NODDY program' },
                 { id: 'PLOT', pattern: 'PLOT', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 0, max: 255},{ kind: 'numeric', min: 0, max: 191}], expectEnd: true },
                 { id: 'POKE', pattern: 'POKE', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 0, max: 65535},{ kind: 'numeric', min: 0, max: 255}], expectEnd: true },
                 //{ id: 'PRINT', pattern: 'PRINT',  cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, // allows comma and semicolon between exprs and at end of line. Only allows ; or , before a : if another command after it (common to all)
-                { id: 'RAND', pattern: 'RAND', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 1, max: 65535}], expectEnd: true }, //range to be confirmed
+                { id: 'RAND', pattern: 'RAND', cmdname:'stdcmd'  ,args: [{ kind: 'numeric',min: -1E+38, max: 1E+38}], expectEnd: true }, //range to be confirmed
                 { id: 'READ', pattern: 'READ',  cmdname:'stdcmd'  ,args: [], expectEnd: false },   //requires at least one value or expr. no error checking as data can be anything but it must match up with the DATA statements (typically a run time error)     
                 { id: 'REM', pattern: 'REM',  cmdname:'strcmd'  ,args: [{ kind: 'string' }], expectEnd: true }, // can be anything - how do we avoid false positives like REM valid information where code determines that valid or Valid or VALID is part of VAL!
                 { id: 'RESTORE', pattern: 'RESTORE', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 0, max: 65535}], expectEnd: true },
@@ -442,10 +671,10 @@ export function activate(ctx: vscode.ExtensionContext) {
                 { id: 'SBUF', pattern: 'SBUF', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 1, max: 8160}], expectEnd: true }, //range confirmed, see appendix 8
                 { id: 'SGN', pattern: 'SGN', cmdname:'numfn'  ,args: [{ kind: 'numeric', min: -1, max: 1}], expectEnd: true }, //-1 if -ve 0 if 0 and +1 if +ve
                 { id: 'SIN', pattern: 'SIN', cmdname:'numfn'  ,args: [{ kind: 'numeric', min: -1E-9, max: 1E+9 }], expectEnd: true }, //float number, range to avoid div by 0 overflow
-                { id: 'SOUND', pattern: 'SOUND',  cmdname:'stdcmd'  , // 3 or 7 parameter options allowed
-                        args: [{ kind: 'numeric', min: 0, max: 4 }, { kind: 'numeric', min: 0, max: 1023 },
-                        { kind: 'numeric', min: 0, max: 15 }, { kind: 'numeric', min: 1/64},
-                        { kind: 'numeric', min: 1/64  }, { kind: 'numeric', min: 1/64 }, //maxs to be confirmed
+                { id: 'SOUND', pattern: 'SOUND',  cmdname:'stdcmd'  , // 3 (direct sound) or 7 parameter continuous sound, more flexible options allowed
+                        args: [{ kind: 'numeric', min: 0, max: 4 }, { kind: 'numeric', min: 0, max: 8192 }, //0-1023 for direct and 0 to 8192 for continuous sound
+                        { kind: 'numeric', min: 0, max: 1023 }, { kind: 'numeric', min: -8192, max: 8192}, //vol 0-15 for direct sound, 0-1023 for continuous sound. Frequency change +/-8192
+                        { kind: 'numeric', min: -1023, max: 1023 }, { kind: 'numeric', min: 0, max:65536 }, //vol change +/- 32767 but recommend +/-1023. For time, measured in 1/64ths of a second, max duration of 1024s over 17mins
                         { kind: 'numeric', min: 0, max: 1 }] 
                         , expectEnd: true },
                 { id: 'SPK$', pattern: 'SPK\\$',  cmdname:'strcmd'  ,args: [] , expectEnd: true },
@@ -727,19 +956,97 @@ export function activate(ctx: vscode.ExtensionContext) {
         
         ); // END of validator
 
-                // Check line numbers first
-                const lineNumErrors = validateLineNumbers(doc);
+                // Check line numbers first and suppress NODDY lines
+                // Check line numbers first - also detects NODDY trigger line AND CODE block ranges
+                const { errors: lineNumErrors, noddyStartLine,codeBlockRanges } = validateLineNumbers(doc);
+
                 for (const err of lineNumErrors) {
-                        const range = new vscode.Range(
+                const range = new vscode.Range(
                         new vscode.Position(err.line, err.start),
                         new vscode.Position(err.line, err.end)
-                        );
-                        diags.push(new vscode.Diagnostic(range, err.message, vscode.DiagnosticSeverity.Error));
+                );
+                diags.push(new vscode.Diagnostic(range, err.message, vscode.DiagnosticSeverity.Error));
                 }  // END of line number errors check
 
+                // Helper function to check if a line is inside a CODE block
+                function isInCodeBlock(lineNum: number): boolean {
+                        for (const block of codeBlockRanges) {
+                        if (lineNum >= block.start && lineNum <= block.end) {
+                                return true;
+                        }
+                        }
+                        return false;
+                }
+
+                // ============================================
+                // Z80 CODE BLOCK VALIDATION
+                // Validate assembly lines BEFORE the main BASIC loop
+                // ============================================
+                
+                for (const block of codeBlockRanges) {
+                        for (let i = block.start; i <= block.end; i++) {
+                        const lineText = doc.lineAt(i).text;
+                        const trimmed = lineText.trim();
+                        
+                        // Skip empty lines
+                        if (!trimmed) continue;
+                        
+                        // Parse and validate Z80 assembly line
+                        // This is where your Z80 validation goes
+                        // For now, just skip - no errors for assembly lines
+                        
+                        // Optional: Add Z80 validation here using z80codes.ts functions
+                        // const parsed = parseZ80Line(lineText, i);
+                        // if (parsed) {
+                        //     const z80Errors = validateZ80Instruction(parsed);
+                        //     for (const err of z80Errors) {
+                        //         diags.push(new vscode.Diagnostic(...));
+                        //     }
+                        // }
+                        }
+                }
+
+                // ============================================
+                // MAIN BASIC VALIDATION LOOP
+                // ============================================
+
+                // GOSUB nesting counter: count occurrences of GOSUB segments
+                // encountered during static validation. If the count exceeds the
+                // MTX BASIC limit of 34 nested GOSUBs, emit an error on the
+                // offending segment. This is a conservative static check.
+                let gosubCount = 0;
+
                 // run validators over each line (updated to handle multiple commands per line)
+                // STOP at NODDY trigger line - lines after it are NODDY content, not BASIC
                 for (let i = 0; i < doc.lineCount; i++) {
-                const line = doc.lineAt(i);
+                        // Skip lines after NODDY trigger
+                        if (noddyStartLine >= 0 && i > noddyStartLine) {
+                        break;
+                        }
+
+                        // Skip lines inside CODE blocks - these are Z80 assembly, not BASIC
+                        if (isInCodeBlock(i)) {
+                        continue; // Skip entire line - already validated above
+                        }
+
+                        const line = doc.lineAt(i);
+                        const lineText = line.text;
+                        const trimmedLine = lineText.trim();
+
+                        // Skip empty lines
+                        if (!trimmedLine) {
+                        continue;
+                        }
+
+                        // Check if this is a single-line numbered CODE marker (e.g. "57 CODE").
+                        // This line is a valid BASIC directive that signals the start of a Z80
+                        // assembly block; the assembly lines inside the block are validated
+                        // earlier via `codeBlockRanges`. Skip generic BASIC validators for
+                        // this marker only so we don't flag the correct form as an error.
+                        if (/^\d+\s+CODE\s*$/i.test(trimmedLine)) {
+                                // valid marker - nothing more to check here
+                                continue;
+                        }
 
                 // MTX BASIC inline editor has a max line length of 159 characters
                 if (line.text.length>=159){ // range is 0 to 158 (159 characters max)
@@ -857,6 +1164,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 let readFlag: boolean = false;
                 let inputFlag: boolean = false;
                 let dimFlag: boolean = false;
+                let codeFlag: boolean = false;
 
                 // Match assignments not preceded by LET (BareAssignment) when they should
                 const bareAss= /^\s*(?:\d+\s+)?(?!LET\b)([A-Za-z][A-Za-z0-9]*\$?)\s*=/i.exec(seg.text);
@@ -895,7 +1203,25 @@ export function activate(ctx: vscode.ExtensionContext) {
                         vscode.DiagnosticSeverity.Error
                 ));
                 }
-               
+                
+                // GOSUB nested-call counter: if this segment is a GOSUB command - THIS CODE ONLY COUNTS TOTAL NUMBER OF GOSUBS
+                //NESTED is when a GOSUB is called within another GOSUB subroutine. This is hard to determine with static analysis.
+                // (not inside a REM or a quoted string) increment the counter and
+                // report an error when it exceeds 34.
+/**                 const gosubStartMatch = /^\s*GOSUB\b/i.exec(seg.text);
+                if (gosubStartMatch) {
+                        // Ensure this occurrence is not inside a quoted string
+                        const gosubIdx = seg.text.toUpperCase().indexOf('GOSUB');
+                        if (!isInString(gosubIdx)) {
+                                gosubCount++;
+                                if (gosubCount > 34) {
+                                        const absIdx = seg.start + gosubIdx;
+                                        const range = new vscode.Range(new vscode.Position(i, absIdx), new vscode.Position(i, absIdx + 6));
+                                        diags.push(new vscode.Diagnostic(range, 'Too many nested GOSUBs (maximum 34)', vscode.DiagnosticSeverity.Error));
+                                }
+                        }
+                }
+*/               
 
                 // Check LET assignments for type compatibility helper
                 const letMatch = /^\s*LET\s+([A-Za-z][A-Za-z0-9]*\$?)\s*=\s*(.+)$/i.exec(seg.text);
@@ -1131,8 +1457,8 @@ export function activate(ctx: vscode.ExtensionContext) {
                 });
 
                 // Validate comparisons in condition (skip comparisons inside quoted strings)
-                const cmpRe = /([^<>=!]+?)\s*(=|<>|<=|>=|<|>)\s*([^<>=!]+)/g;
-                let cm: RegExpExecArray | null;
+//                const cmpRe = /([^<>=!]+?)\s*(=|<>|<=|>=|<|>)\s*([^<>=!]+)/g;
+//                let cm: RegExpExecArray | null;
 
                 const condSpans = splitBooleanExpression(cond);
                 validateBooleanConnectors(cond, condSpans, (spanStart: number, spanEnd: number, bad: string) => {
@@ -1145,34 +1471,100 @@ export function activate(ctx: vscode.ExtensionContext) {
                 ));
                 });
 
-                while ((cm = cmpRe.exec(cond)) !== null) {
-                        const relIdx = cm.index ?? 0;
-                        // skip matches that occur inside quoted strings in the condition
-                        if (isIndexInQuotedString(cond, relIdx)) continue;
-
-                        const lhs = (cm[1] ?? '').trim();
-                        const rhs = (cm[3] ?? '').trim();
-/**                       The mismatch happens because the IF comparison logic currently decides “string vs. numeric” 
-                        by running stringExprParts / varExprParts on the whole side. For ASC(SPK$) that returns 
-                        “string” (it sees the $ argument) before varExprParts ever marks it numeric, so the comparison
-                        trips the (lhsHasStr && rhsHasNum) rule.
-                        Fix: classify each side with a helper that looks at the top-level expression 
-                        (simple variable vs. known string / numeric functions) before falling back to the 
-                        expansive part-scans. Use classifyExpr to get lhsType and rhsType.
+/**             The mismatch happens because the IF comparison logic currently decides “string vs. numeric” 
+                by running stringExprParts / varExprParts on the whole side. For ASC(SPK$) that returns 
+                “string” (it sees the $ argument) before varExprParts ever marks it numeric, so the comparison
+                trips the (lhsHasStr && rhsHasNum) rule.
+                Fix: classify each side with a helper that looks at the top-level expression 
+                (simple variable vs. known string / numeric functions) before falling back to the 
+                expansive part-scans. Use classifyExpr to get lhsType and rhsType.
 */
-                        const lhsType = classifyExpr(lhs);
-                        const rhsType = classifyExpr(rhs);
-                        if ((lhsType.hasString && rhsType.hasNumeric) || (lhsType.hasNumeric && rhsType.hasString)) {
-                            // compute absolute range for this comparison in seg.text
-                            const absIdx = condStart + relIdx;
-                            if (isInString(absIdx)) continue;
-                            const startChar = seg.start + absIdx;
-                            const endChar = startChar + (cm[0]?.length || 1);
-                            const range = new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar));
-                            diags.push(new vscode.Diagnostic(range, `Type mismatch in IF comparison: ${lhs} ${cm[2]} ${rhs}`, 
-                                vscode.DiagnosticSeverity.Error));
+                // Split condition by AND/OR first, then validate each comparison
+                const condUpper = cond.toUpperCase();
+                let inString = false;
+                let currentPart = '';
+                let currentStart = 0;
+                const condParts: { text: string; start: number }[] = [];
+
+                for (let j = 0; j <= cond.length; j++) {
+                    if (j < cond.length && cond[j] === '"') {
+                        inString = !inString;
+                        currentPart += cond[j];
+                        continue;
+                    }
+                    
+                    if (inString) {
+                        if (j < cond.length) currentPart += cond[j];
+                        continue;
+                    }
+                    
+                    // Check for AND/OR at word boundary
+                    const slice = condUpper.slice(j);
+                    let matched = false;
+                    
+                    for (const op of [' AND ', ' OR ']) {
+                        if (slice.startsWith(op)) {
+                            if (currentPart.trim()) {
+                                condParts.push({ text: currentPart.trim(), start: currentStart });
+                            }
+                            j += op.length - 1;
+                            currentStart = j + 1;
+                            currentPart = '';
+                            matched = true;
+                            break;
                         }
                     }
+                    
+                    if (!matched && j < cond.length) {
+                        if (currentPart === '') {
+                            currentStart = j;
+                        }
+                        currentPart += cond[j];
+                    }
+                }
+
+                // Don't forget the last part
+                if (currentPart.trim()) {
+                    condParts.push({ text: currentPart.trim(), start: currentStart });
+                }
+
+                // Now validate each individual comparison
+                for (const part of condParts) {
+                    // Strip leading NOT if present
+                    let compText = part.text.trim();
+                    let notOffset = 0;
+                    const notMatch = /^\s*NOT\s+/i.exec(compText);
+                    if (notMatch) {
+                        notOffset = notMatch[0].length;
+                        compText = compText.slice(notOffset);
+                    }
+                    
+                    const cmpRe = /([^<>=!]+?)\s*(=|<>|<=|>=|<|>)\s*([^<>=!]+)/g;
+                    let cmpMatch: RegExpExecArray | null;
+                    
+                    while ((cmpMatch = cmpRe.exec(compText)) !== null) {
+                        const lhs = (cmpMatch[1] ?? '').trim();
+                        const rhs = (cmpMatch[3] ?? '').trim();
+                        
+                        const lhsType = classifyExpr(lhs);
+                        const rhsType = classifyExpr(rhs);
+                        
+                        if ((lhsType.hasString && rhsType.hasNumeric) || (lhsType.hasNumeric && rhsType.hasString)) {
+                            const absStart = seg.start + condStart + part.start + notOffset + (cmpMatch.index ?? 0);
+                            if (isInString(absStart)) continue;
+                            const range = new vscode.Range(
+                                new vscode.Position(i, absStart),
+                                new vscode.Position(i, absStart + cmpMatch[0].length)
+                            );
+                            diags.push(new vscode.Diagnostic(
+                                range,
+                                `Type mismatch in IF comparison: ${lhs} (${lhsType.hasString ? 'string' : 'numeric'}) vs ${rhs} (${rhsType.hasString ? 'string' : 'numeric'})`,
+                                vscode.DiagnosticSeverity.Error
+                            ));
+                        }
+                    }
+                }
+
 
                     // helper to compute chunk start index in seg.text (best-effort)
                     const chunkStartIndex = (piece: string) => {
@@ -1605,15 +1997,16 @@ export function activate(ctx: vscode.ExtensionContext) {
                 CODE EXCEPTION exact-match allowed form (optional lineno + CODE) — if the entire segment equals this, it's valid
                 STILL TO ADD CAPABILITY FOR ADDING HEXADECIMAL addresses and Z80 instruction, the construct will be
                 <16-bit hex address (2 bytes)> <label> <Z80 instruction> {; comment text}
-                When CODE is first invoked it will automatically Aadd
+                When CODE is first invoked it will automatically Add
                 <16-bit address> RET  (RET = C9 in hexadecimal and 1 byte)
-                as the original MTX inline assembler did
+                as the original MTX inline assembler did. There will need to be some inline processing to handle the hexaddress program counter
                 The user can then add Z80 instructions which involve looking up a table to see if the instruction is correct 
                 and to increase the hexadecimal addresss counter by <x> bytes,either 1, 2, 3 or 4.
                 the assembler has specials, like labels, reserves for DB, DW and DS, etc.
 */                
                 { if (/^\s*(?:\d+\s+)?CODE\s*$/i.test(seg.text)) {
                         /* valid; nothing to do */
+                        codeFlag=true; // set flag so generic validator block skips this segment
                 } else {
                         // 2) any occurrence of the standalone word CODE (not in quotes) is an error in this context
                         const codeWordRe = /\bCODE\b/gi;
@@ -1651,7 +2044,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 // Does this mean that validator.name will fail?
                 // Only run the generic validators when we haven't already handled LET/PRINT/IF
                 // and when this segment is not a REM (REM is free-form text and should be skipped)
-                if (!letFlag && !printFlag && !ifFlag && !forFlag && !onFlag && !dataFlag && !readFlag && !inputFlag && !dimFlag && !seg.text.trim().toUpperCase().startsWith('REM')) {
+                if (!letFlag && !printFlag && !ifFlag && !forFlag && !onFlag && !dataFlag && !readFlag && !inputFlag && !dimFlag &&  !codeFlag && !seg.text.trim().toUpperCase().startsWith('REM')) {
 
                 runValidatorsOnSegment(seg.text, validators, (err, rawMatch, absoluteIdx, matchArray) => {
                 if (!err || typeof absoluteIdx !== 'number') return;
@@ -1687,7 +2080,170 @@ export function activate(ctx: vscode.ExtensionContext) {
         } // END of for (const seg of segments) loop
         } // for (let i = 0; i < doc.lineCount; i++)
 
+        // Inside refreshDiagnostics function, add after the main BASIC validation loop:
 
+        // ============================================
+        // NODDY VALIDATION SECTION
+        // ============================================
+
+        // Find NODDY trigger line (e.g., "9999 NODDY")
+
+        // After the BASIC validation loop, add NODDY validation:
+        if (noddyStartLine >= 0) {
+                //noddyLength = computeNoddyAsciiLength(doc, noddyStartLine);
+                // UPDATED: Use byte length
+                noddyLength = computeNoddyByteLength(doc, noddyStartLine);
+                // Collect all lines from document
+                const allLines: string[] = [];
+                for (let j = 0; j < doc.lineCount; j++) {
+                        allLines.push(doc.lineAt(j).text);
+        }
+        
+        // Parse and validate NODDY content
+        const { pages, errors: parseErrors } = parseNoddyContent(allLines, noddyStartLine + 1);
+        
+        // Add parse errors to diagnostics
+        for (const err of parseErrors) {
+                const range = new vscode.Range(
+                new vscode.Position(err.line, err.start),
+                new vscode.Position(err.line, err.end)
+                );
+                diags.push(new vscode.Diagnostic(
+                range,
+                `NODDY: ${err.message}`,
+                vscode.DiagnosticSeverity.Error
+                ));
+        }
+        
+        // Validate each program page
+        for (const page of pages) {
+                if (page.type === 'program') {
+                const progErrors = validateNoddyProgram(page, pages, page.lineStart);
+                for (const err of progErrors) {
+                        const range = new vscode.Range(
+                        new vscode.Position(err.line, err.start),
+                        new vscode.Position(err.line, err.end)
+                        );
+                        diags.push(new vscode.Diagnostic(
+                        range,
+                        `NODDY: ${err.message}`,
+                        vscode.DiagnosticSeverity.Error
+                        ));
+                }
+                }
+        }
+        
+        // Validate PLOD references in BASIC code point to existing program pages
+        const programPageNames = new Set(pages.filter(p => p.type === 'program').map(p => p.name));
+        const basicLines = allLines.slice(0, noddyStartLine + 1);
+        const plodRefs: { line: number; progName: string; start: number }[] = [];
+        
+        for (let j = 0; j < basicLines.length; j++) {
+                const plodPattern = /PLOD\s+"(\w+)"/gi;
+                let match;
+                while ((match = plodPattern.exec(basicLines[j])) !== null) {
+                const progName = match[1];
+                plodRefs.push({ line: j, progName, start: match.index });
+                if (!programPageNames.has(progName)) {
+                        const range = new vscode.Range(
+                        new vscode.Position(j, match.index),
+                        new vscode.Position(j, match.index + match[0].length)
+                        );
+                        diags.push(new vscode.Diagnostic(
+                        range,
+                        `NODDY: PLOD references undefined program "${progName}"`,
+                        vscode.DiagnosticSeverity.Warning
+                        ));
+                }
+                }
+        }
+
+        // Check for unused text pages
+        const usedTextPages = new Set<string>();
+        for (const page of pages) {
+                if (page.type === 'program') {
+                for (const line of page.content) {
+                        const displayMatch = /\*DISPLAY\s+(\w+)\./.exec(line);
+                        if (displayMatch) {
+                        usedTextPages.add(displayMatch[1]);
+                        }
+                }
+                }
+        }
+        
+        for (const page of pages) {
+                if (page.type === 'text' && !usedTextPages.has(page.name)) {
+                const range = new vscode.Range(
+                        new vscode.Position(page.lineStart, 0),
+                        new vscode.Position(page.lineStart, 50)
+                );
+                diags.push(new vscode.Diagnostic(
+                        range,
+                        `NODDY: Text page "${page.name}" is never displayed`,
+                        vscode.DiagnosticSeverity.Hint
+                ));
+                }
+        }
+        
+        // Check for unused program pages (not called by PLOD)
+        const usedPrograms = new Set(plodRefs.map(r => r.progName));
+        for (const page of pages) {
+                if (page.type === 'program' && !usedPrograms.has(page.name)) {
+                const range = new vscode.Range(
+                        new vscode.Position(page.lineStart, 0),
+                        new vscode.Position(page.lineStart, 50)
+                );
+                diags.push(new vscode.Diagnostic(
+                        range,
+                        `NODDY: Program "${page.name}" is never called by PLOD`,
+                        vscode.DiagnosticSeverity.Hint
+                ));
+                }
+        }
+        } // END of NODDY validation section
+
+        // ============================================
+        // Z80 CODE BLOCK VALIDATION SECTION
+        // ============================================
+
+/**
+        Need to convert the text prior to the code block into hexadecimal bytes as per MTX BASIC inline assembler rules
+        to determine the correct addresses for the Z80 instructions in the code block
+        using the validateCodeBlocks function from z80Validator module.
+ */
+
+        if (codeBlockRanges.length > 0) {
+                // Collect all lines for Z80 validation
+                const allDocLines: string[] = [];
+                for (let j = 0; j < doc.lineCount; j++) {
+                        allDocLines.push(doc.lineAt(j).text);
+                }
+                
+                // validateCodeBlocks takes the document lines array, not CodeBlock[]
+                const z80Errors = validateCodeBlocks(allDocLines);
+        
+                for (const err of z80Errors) {
+                        const range = new vscode.Range(
+                                new vscode.Position(err.line, err.start),
+                                new vscode.Position(err.line, err.end)
+                        );
+                        
+                        const severity = err.severity === 'error' 
+                                ? vscode.DiagnosticSeverity.Error
+                                : err.severity === 'warning'
+                                        ? vscode.DiagnosticSeverity.Warning
+                                        : vscode.DiagnosticSeverity.Information;
+                        
+                        diags.push(new vscode.Diagnostic(
+                                range,
+                                `Z80: ${err.message}`,
+                                severity
+                        ));
+                }
+        } // END of Z80 CODE BLOCK VALIDATION SECTION
+
+
+        // Finally, set the diagnostics for the document
         diagCollection.set(doc.uri, diags);
                 
         } // END of function refreshDiagnostics
@@ -1723,9 +2279,24 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     //const extendedRange = new vscode.Range(wordRange.start.line, start, wordRange.end.line, end);
                     //var word = document.getText(extendedRange);
 
-                //}  }     
+                //}  }
+
+            // Determine whether this position is inside a Z80 CODE block
+            // prefer Z80 hover info when appropriate where there is similar commands in MTX BASIC (AND, OR, OUT and IN). 
+            // Reuse validateLineNumbers to compute `codeBlockRanges` (same logic used by diagnostics).
+            const { codeBlockRanges } = validateLineNumbers(document);
+            let inCodeBlockAtPos = false;
+            for (const block of codeBlockRanges) {
+                if (position.line >= block.start && position.line <= block.end) {
+                    inCodeBlockAtPos = true;
+                    break;
+                }
+            }
             // Handle specific BASIC commands            
             // MTX BASIC command match must be in capitals to comply with MTX BASIC language convention.
+            // If we're inside a Z80 CODE block at this position, skip MTX BASIC hovers
+            // so the Z80 hover provider (below) can take precedence for overlapping tokens like AND/OR/IN/OUT
+            if (!inCodeBlockAtPos) {
             if (word === 'ABS') {
 		return new vscode.Hover(`**ABS**: Gives the absolute value of the specified number.\n\n` +
                     `Usage: ABS(number) \n\n` +
@@ -1869,14 +2440,15 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**CODE**: CODE is an anchor word to indicate that the following lines are assembly language.\n\n` +
                     `Usage: CODE \n\n` +
                     `In the normal MTX editor mode, use ASSEM line number to create assembly CODE, note the word cannot be typed and is inserted by the assembler into the BASIC line.\n\n` + 
-                    `NOTE: In this free form VS code extension, ASSEM line number is not used. Instead use \\<line number\\>  CODE (no space after it).\n\n` + 
-                    `CODE command must be on a separate line and not part of a multi line, e.g. 20 CLS: CODE: PRINT "test"  \n\n` +
+                    `NOTE: In this free form VS code extension, ASSEM line number is not used. Instead use \\<space or TAB\\> \\<line number\\>  CODE (no space after it).\n\n` + 
+                    `CODE command must be on a separate line and NOT be part of a multi line, e.g. 20 CLS: CODE: PRINT "test"  \n\n` +
                     `Example: \n\n` +
                     `10 REM START OF PROGRAM\n\n` +                    
                     `20 CODE\n\n` + 
-                    `   LABEL: LD A,(HL)\n\n` +
-                    `	       RET\n\n` +   
-                    `The heaxadecimal line numbers for the code 8030 and 8031 are not required, these will be added once the program is RUN (compiled)\n\n` +                      
+                    ` 401E LABEL: LD A,(HL)\n\n` +
+                    ` 401F RET\n\n` +   
+                    `The hexadecimal line numbers (401E and 401F) when using VS Code are required, when saving the code (.mtx file), a check of hex address will update if incorrect\n\n` +                      
+                    `Note to differentiate a BASIC line number from a hexadecimal line number, the hexadecimal line number must be on a separate line and indented by either a space or a TAB.\n\n` + 
                     `Refer to the MTX Series Owners Manual for details on assembler and Z80 assembly language`);
             }            
             if (word === 'COLOUR') {// generates a MTX BASIC SE.C error if VS 4 not specified beforehand
@@ -2229,9 +2801,17 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
             if (word === 'NODDY') {
 		return new vscode.Hover(`**NODDY**:  Text language editor.\n\n` +
                     `Usage: NODDY \n\n` +
-                    `Passes control to the Noddy editor. Noddy should appear at the base of the screen\n\n` + 
-                    `Refer to the MTX Series Owners Manual for details on the Noddy language.\n\n` +                    
-                    `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like NODDY.`);
+                    `Passes control to the Noddy editor. Noddy should appear at the base of the screen, See Notes below for VS Code usage.\n\n` + 
+                    `Commands: *A or *ADVANCE ; *B or *BRANCH ; *D or *DISPLAY ; *E or *ENTER ; *G or *GOTO \n\n` + 
+                    `*I or *IF ; *L or *LIST ; *O or *OFF ; *P or *PAUSE ; *R or *RETURN ; *S or *STACK \n\n` + 
+                    `NODDY coding language also uses "^" symbol followed by a label which is required for branching.\n\n` +
+                    `IF R,r\n\n` +
+                    `^r *R    (or ^r *RETURN)\n\n` +
+                    `In the above example, R and *R are different.\n\n` +
+                    `Refer to the MTX Series Owners Manual, PART 2 for details on the Noddy language.\n\n` +  
+                    `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like NODDY but a modification thereof.\n\n` +                  
+                    `NOTE: Add a newline at the very end of the program, e.g., 65535 REM NODDY\n\n` +
+                    `NOTE: Anything after the special REM NODDY statement will be treated as NODDY code/text (as above).`);
             } 
             if (word === 'NOT') {
 		return new vscode.Hover(`**NOT**: Boolean expression. compares two values to see if the condition is either True or False.\n\n` +
@@ -2425,9 +3005,9 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
             if (word === 'SAVE') {
 		return new vscode.Hover(`**SAVE**:  Saves a program from memory to cassete tape. (see USER DISC for disc save options).\n\n` +  
 		    `Usage: SAVE "tapename.extension" \n\n` +
-                    `The tapename is limited to 14 alphanumeric characters including extension (see later for MEMU variation). e.g. SAVE "FILENAME90.BAS" \n\n` +                       
-                    `The extension is optional and is typically either be "BAS" or "MTX" for MTX BASIC programs with or without built-in Z80 assembly code.\n\n` +
-                    `If using the MEMU emulator, the emulator automatically strips off any characters beyond 14 characters, typically this removes the MEMU added .mtx extension, unless within the 14 chars.\n\n` +                      
+                    `The tapename is limited to 15 alphanumeric characters including extension (see later for MEMU variation). e.g. SAVE "FILENAME90.BAS" \n\n` +                       
+                    `The extension is optional and is typically either be ".BAS" or ".mtx" for MTX BASIC programs with or without built-in Z80 assembly code.\n\n` +
+                    `If using the MEMU emulator, the emulator automatically strips off any characters beyond 15 characters, typically this removes the MEMU added .mtx extension, unless within the 15 chars.\n\n` +                      
                     `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like SAVE.`);
             }              
             if (word === 'SBUF') {
@@ -2460,13 +3040,13 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**SOUND**:  Generating Sound on a MTX computer.\n\n` +
                     `Usage: SOUND \\<expression list\\> \n\n` +
                     `The effect of the sound command depends on the number of expressions in the expression list, either 3 parameter or 7 parameter list.\n\n` + 
-                    `SOUND channel,frequency,volume \n\n` + 
-                    `SOUND channel,frequency,volume ,freq inc,vol inc,duration,mode\n\n` + 
+                    `DIRECT SOUND (This mode plays a single note until stopped): SOUND channel,frequency,volume \n\n` + 
+                    `CONTINUOUS SOUND (Sequences of notes can be played by loading them into a sound buffer): SOUND channel,frequency,volume ,freq inc,vol inc,duration,mode\n\n` + 
                     `channel: 0,1 and 2 are pure sound and 3 is for noise.\n\n` + 
-                    `frequency: frequency of the sound (0 to 1023)\n\n` + 
-                    `volume: loudness (0 to 15)\n\n` + 
-                    `freq_inc and vol_inc are self explanatory. Every 1/64th of a second the computer adds the frequency increment to the frequency and the volume increment to the volume.\n\n` + 
-                    `duration: This continues for a length of time equal to the duration which is also measured in 1/64ths of a second\n\n` + 
+                    `frequency: frequency of the sound (DIRECT: 0 to 1023, CONTINUOUS: 0 to 8192).  See Part 4, Ref. Section for SOUND & Appendix 8 of manual\n\n` + 
+                    `volume: loudness (DIRECT: 0 to 15, CONTINUOUS: 0 to 1023)  See Part 4, Ref. Section for SOUND & Appendix 8 of manual \n\n` + 
+                    `freq_inc (+/- 1023) and vol_inc (+/- 1023, even though +/-32767 allowed). Every 1/64th of a second the PC adds the increment to both frequency & volume increment. \n\n` + 
+                    `duration: This continues for a length of time equal to the duration which is measured in 1/64ths of a second\n\n` + 
                     `mode=0, freq and vol parameters will be ignored which means that the increments will increment whatever values of frequency and volume were current when the command was encountered.\n\n` +                     
                     `mode=1, the freq and vol will be loaded into the sound buffer to initialise the frequency and volume of the relevant channel`);
             }
@@ -2598,9 +3178,66 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `This command selects a virtual screen from those already defined or created using the CRVS command. \n\n` + 
                     `The computer will automatically switch to the type of screen selected whether graphics or text.\n\n` +                    
                     `See CRVS`);
-            }            
-        }
-    }));
+            }
+        } // skip MTX BASIC hover support if not a BASIC file
+        
+            // ============================================
+            // Z80 ASSEMBLY HOVER SUPPORT
+            // ============================================
+            
+            // Check if we're inside a CODE block and provide Z80 hover info
+            const lineText = document.lineAt(position.line).text;
+
+            // Check if this looks like a Z80 assembly line (starts with hex address after whitespace)
+            if (/^\s+[0-9A-Fa-f]{4}\s/.test(lineText)) {
+                // Try to get Z80 instruction info
+                const z80Info = getZ80InstructionInfo(word);
+                if (z80Info) {
+                    return new vscode.Hover(z80Info);
+                }
+                
+                // Provide info for Z80 registers
+                const z80Registers: { [key: string]: string } = {
+                    'A': '**A** - Accumulator (8-bit primary register)',
+                    'B': '**B** - General purpose register (8-bit), part of BC pair',
+                    'C': '**C** - General purpose register (8-bit), part of BC pair',
+                    'D': '**D** - General purpose register (8-bit), part of DE pair',
+                    'E': '**E** - General purpose register (8-bit), part of DE pair',
+                    'H': '**H** - High byte of HL register pair',
+                    'L': '**L** - Low byte of HL register pair',
+                    'BC': '**BC** - 16-bit register pair (B=high, C=low)',
+                    'DE': '**DE** - 16-bit register pair (D=high, E=low)',
+                    'HL': '**HL** - 16-bit register pair, often used for memory addressing',
+                    'SP': '**SP** - Stack Pointer (16-bit)',
+                    'IX': '**IX** - Index Register X (16-bit)',
+                    'IY': '**IY** - Index Register Y (16-bit)',
+                    'AF': '**AF** - Accumulator and Flags register pair',
+                    'PC': '**PC** - Program Counter (16-bit)',
+                    'I': '**I** - Interrupt Vector register',
+                    'R': '**R** - Memory Refresh register'
+                };
+                
+                const upperWord = word.toUpperCase();
+                if (z80Registers[upperWord]) {
+                    return new vscode.Hover(z80Registers[upperWord]);
+                }
+                
+                // Provide info for assembler directives
+                const directives: { [key: string]: string } = {
+                    'DB': '**DB** - Define Byte\n\nDefines one or more bytes of data.\n\nUsage: `DB value1, value2, ...` or `DB "string"`',
+                    'DW': '**DW** - Define Word\n\nDefines one or more 16-bit words (little-endian).\n\nUsage: `DW value1, value2, ...`',
+                    'DS': '**DS** - Define Space\n\nReserves a block of memory.\n\nUsage: `DS count` (reserves count bytes)'
+                };
+                
+                if (directives[upperWord]) {
+                    return new vscode.Hover(directives[upperWord]);
+                }
+            }       
+        // No hover info found - return undefined implicitly by not returning anything                   
+        } // This closes provideHover
+        
+    })); // This closes registerHoverProvider
+
 
 
 // Clean up resources if needed

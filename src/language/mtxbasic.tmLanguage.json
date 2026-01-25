@@ -4,7 +4,8 @@
   "scopeName": "source.mtxbasic",
   "patterns": [
     { "include": "#keywords" },
-    { "include": "#strings" }
+    { "include": "#strings" },
+    { "include": "#z80assembly" }
   ],
   "repository": {
     "keywords": {
@@ -15,7 +16,7 @@
           },
           {
             "name": "keyword.command.mtxbasic",
-            "match": "\\b(ADJSPR|ANGLE|ARC|ATTR|BAUD|CIRCLE|CLOCK|CLEAR|CLS|CODE|COLOUR|CRVS|CSR|CTLSPR|DATA|DIM|DRAW|DSI|EDITOR|GENPAT|INK|INPUT|LEN|LET|LINE|LLIST|LPRINT|LOAD|MVSPR|NODDY|OUT|PAPER|PEEK|PHI|PI|PLOD|PLOT|POKE|PRINT|RAND|READ|REM|RESTORE|RND|SAVE|SBUF|SOUND|SPRITE|USER|VIEW|VS)\\b"
+            "match": "\\b(ADJSPR|ANGLE|ARC|ATTR|BAUD|CIRCLE|CLOCK|CLEAR|CLS|CODE|COLOUR|CRVS|CSR|CTLSPR|DATA|DIM|DRAW|DSI|EDITOR|GENPAT|INK|INPUT|LEN|LET|LINE|LLIST|LPRINT|LOAD|MVSPR|NEW|NODDY|OUT|PAPER|PEEK|PHI|PI|PLOD|PLOT|POKE|PRINT|RAND|READ|REM|RESTORE|RND|SAVE|SBUF|SOUND|SPRITE|USER|VIEW|VS)\\b"
           },
           {
             "name": "keyword.other.mtxbasic",
@@ -31,8 +32,20 @@
           },           
           {
             "name": "illegal.keyword.control.mtxbasic",
-            "match": "\\b(ASSEM|AUTO|EDIT|FRE|LIST|LLIST|NEW|PANEL|RUN|VERIFY)\\b"
+            "match": "\\b(ASSEM|AUTO|EDIT|FRE|LIST|LLIST|PANEL|RUN|VERIFY)\\b"
           },
+          {
+            "name": "keyword.control.noddy.mtxbasic",
+            "match": "\\*(?:ADVANCE|BRANCH|DISPLAY|ENTER|GOTO|IF|LIST|OFF|PAUSE|RETURN|RETURN)\\b"
+        },
+        {
+            "name": "entity.name.tag.noddy.mtxbasic", 
+            "match": "\\^\\w+"
+        },
+        {
+            "name": "string.unquoted.noddy-title.mtxbasic",
+            "match": "^Noddy page title is \\w+$"
+        },
           {
             "name": "constant.numeric.line-number.mtxbasic",
             "match": "^(\\d{1,5})(?=\\s)"
@@ -62,7 +75,7 @@
             "match": "-?\\b((([0-9]+\\.?[0-9]*)|(\\.[0-9]+))((e|E)(\\+|-)?[0-9]+)?)\\b"
           },
           { "name": "constant.hexadecimal.mtxbasic",
-            "match": "\\b(#|£[0-9A-Fa-f]+)\\b"
+            "match": "\\b(#[0-9A-Fa-f]+|£[0-9A-Fa-f]+)\\b"
           },
           {
             "name": "keyword.control.mtxbasic",
@@ -92,7 +105,38 @@
             "match": "\\\\."
             }
         ]
-      }
-
+      }, 
+    "z80assembly": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex-address.z80",
+          "match": "^\\s+([0-9A-Fa-f]{4})\\b"
+        },
+        {
+          "name": "entity.name.label.z80",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*):"
+        },
+        {
+          "name": "keyword.mnemonic.z80",
+          "match": "\\b(ADC|ADD|AND|BIT|CALL|CCF|CP|CPD|CPDR|CPI|CPIR|CPL|DAA|DEC|DI|DJNZ|EI|EX|EXX|HALT|IM|IN|INC|IND|INDR|INI|INIR|JP|JR|LD|LDD|LDDR|LDI|LDIR|NEG|NOP|OR|OTDR|OTIR|OUT|OUTD|OUTI|POP|PUSH|RES|RET|RETI|RETN|RL|RLA|RLC|RLCA|RLD|RR|RRA|RRC|RRCA|RRD|RST|SBC|SCF|SET|SLA|SRA|SRL|SUB|XOR)\\b"
+        },
+        {
+          "name": "storage.register.z80",
+          "match": "\\b(A|B|C|D|E|H|L|AF|BC|DE|HL|IX|IY|SP|PC|I|R)\\b"
+        },
+        {
+          "name": "keyword.directive.z80",
+          "match": "\\b(DB|DW|DS)\\b"
+        },
+        {
+          "name": "constant.numeric.hex.mtxbasic",
+          "match": "#[0-9A-Fa-f]+"
+        },
+        {
+          "name": "comment.line.semicolon.z80",
+          "match": ";.*$"
+        }
+      ]
+    }
   }
 }

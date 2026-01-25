@@ -859,33 +859,51 @@ function findBooleanOperatorSpacingIssues(expr: string) {
 } // END of findBooleanOperatorSpacingIssues
 
 function validateBooleanConnectors(
-        expr: string,
-        spans: BoolSpan[],
-        report: (spanStart: number, spanEnd: number, fragment: string) => void
-        ) {
-        let cursor = 0;
-        const flushGap = (nextStart: number) => {
-                if (nextStart <= cursor) return;
-                const rawGap = expr.slice(cursor, nextStart);
-                const trimmed = rawGap.trim();
-                if (!trimmed || /^(AND|OR|NOT)$/i.test(trimmed)) return;
-                const leading = rawGap.length - rawGap.replace(/^\s+/, '').length;
-                const trailing = rawGap.replace(/\s+$/, '').length;
-                const startIdx = cursor + leading;
-                const endIdx = cursor + trailing;
-                report(startIdx, endIdx, trimmed);
-        };
+    expr: string,
+    spans: BoolSpan[],
+    report: (spanStart: number, spanEnd: number, fragment: string) => void
+) {
+    // If there are 0 or 1 spans, there are no connectors to validate
+    if (spans.length <= 1) {
+        return;
+    }
 
-        spans.forEach(span => {
-                flushGap(span.spanStart ?? cursor);
-                cursor = span.spanEnd ?? cursor;
-        });
-        flushGap(expr.length);
-        } // END of validateBooleanConnectors
+    let cursor = 0;
+    const flushGap = (nextStart: number) => {
+        if (nextStart <= cursor) return;
+        const rawGap = expr.slice(cursor, nextStart);
+        const trimmed = rawGap.trim();
+        
+        // Empty gap or valid boolean connector - OK
+        if (!trimmed || /^(AND|OR|NOT)$/i.test(trimmed)) return;
+        
+        // Skip if the gap contains only arithmetic operators and operands
+        // This handles cases like "B+C+3" which is part of a comparison RHS
+        // Pattern: variables, numbers, arithmetic operators (+,-,*,/,^), parentheses, commas, spaces
+        if (/^[\s\w\d.+\-*/^(),]+$/.test(trimmed)) {
+            // Additional check: must not contain standalone AND/OR/NOT as words
+            // (they would be invalid if not properly separated)
+            if (!/\b(AND|OR|NOT)\b/i.test(trimmed)) {
+                return; // It's a valid arithmetic expression, not an invalid connector
+            }
+        }
+        
+        const leading = rawGap.length - rawGap.replace(/^\s+/, '').length;
+        const trailing = rawGap.replace(/\s+$/, '').length;
+        const startIdx = cursor + leading;
+        const endIdx = cursor + trailing;
+        report(startIdx, endIdx, trimmed);
+    };
+
+    spans.forEach(span => {
+        flushGap(span.spanStart ?? cursor);
+        cursor = span.spanEnd ?? cursor;
+    });
+    flushGap(expr.length);
+} // END of validateBooleanConnectors
 
 function splitBooleanExpression(expr: string): BoolSpan[] {
     const spans: BoolSpan[] = [];
-    //const cmpRe = /([^<>=!]+?)\s*(=|<>|<=|>=|<|>)\s*([^<>=!]+?)(?=\s+(?:AND|OR|NOT)\b|$)/g;
     let inString = false;
     let depth = 0;
     let clauseStart = -1;
@@ -908,50 +926,68 @@ function splitBooleanExpression(expr: string): BoolSpan[] {
         if (ch === '(') { depth++; continue; }
         if (ch === ')') {
             if (depth > 0) depth--;
-            if (depth === 0) flushClause(i + 1);
             continue;
         }
 
         if (depth !== 0) continue;
 
+        // Start a new clause on first non-whitespace
         if (clauseStart === -1 && !/\s/.test(ch)) clauseStart = i;
 
-        if ('=<>' .includes(ch)) {
+        // Detect relational operators
+        if ('=<>'.includes(ch)) {
             relopSeen = true;
-            if ((ch === '<' || ch === '>') && (expr[i + 1] === '=' || expr[i + 1] === '>')) i++;
+            // Handle two-character operators like <=, >=, <>
+            if ((ch === '<' || ch === '>') && i + 1 < expr.length && 
+                (expr[i + 1] === '=' || expr[i + 1] === '>')) {
+                i++;
+            }
             continue;
         }
 
-        if (!relopSeen) continue;
+        // Arithmetic operators are part of the expression, not separators
+        if ('+-*/^'.includes(ch)) {
+            continue;
+        }
 
-
-        if (/\s/.test(ch)) continue;
-
+        // Check for boolean keywords (AND, OR, NOT) at word boundaries
         if (/[A-Za-z]/.test(ch)) {
             let j = i + 1;
-            while (j < expr.length && /[A-Za-z]/.test(expr[j])) j++;
+            while (j < expr.length && /[A-Za-z0-9_$]/.test(expr[j])) j++;
             const word = expr.slice(i, j).toUpperCase();
 
-            flushClause(i);          // close the comparison ending just before the word
-
-            if (word === 'AND' || word === 'OR' || word === 'NOT') {
+            if (word === 'AND' || word === 'OR') {
+                // Flush current clause before the boolean operator
+                flushClause(i);
                 clauseStart = -1;
                 relopSeen = false;
-            } else {
-                // leave clauseStart unset so the next comparison sets a new start,
-                // allowing validateBooleanConnectors to see this word in the gap
+                i = j - 1; // Skip the rest of the word
+                continue;
+            }
+            
+            if (word === 'NOT') {
+                // NOT can appear at the start of a clause or after AND/OR
+                // Flush current clause if we have one
+                if (clauseStart !== -1 && relopSeen) {
+                    flushClause(i);
+                }
                 clauseStart = -1;
                 relopSeen = false;
+                i = j - 1; // Skip the rest of the word
+                continue;
             }
 
-            i = j - 1;               // skip the rest of the word; gap will include the whole token
+            // It's a regular identifier (variable/function name)
+            // Skip to end of identifier
+            i = j - 1;
             continue;
         }
     }
 
+    // Flush any remaining clause
     flushClause(expr.length);
     return spans;
-} //END of splitBooleanExpression
+} // END of splitBooleanExpression //END of splitBooleanExpression
 
 //a -ve number trims from the last entry backwards. A +ve trims from the 1st entry forward
  function trimCommaList(s: string, n = 3): string { 
@@ -997,6 +1033,432 @@ function splitCommandsByColon(text: string): string[] {
     return chunks;
 } // END of splitCommandsByColon
 
+
+// NODDY command specification
+interface NoddyCommand {
+    id: string;
+    pattern: RegExp;
+    hasArg: boolean;
+    argType?: 'pagename' | 'label' | 'char_label' | 'none';
+    description: string;
+}
+
+// NODDY page types
+interface NoddyPage {
+    name: string;
+    lineStart: number;
+    lineEnd: number;
+    type: 'text' | 'program';
+    content: string[];
+}
+
+// NODDY command specification
+interface NoddyCommand {
+    id: string;
+    pattern: RegExp;
+    hasArg: boolean;
+    argType?: 'pagename' | 'label' | 'char_label' | 'none';
+    description: string;
+}
+
+// NODDY label pattern - labels are prefixed with ^
+const noddyLabelPattern = /^\^(\w+)\s*/;
+
+// NODDY page title pattern
+const noddyPageTitlePattern = /^Noddy page title is (\w+)\s*$/;
+
+// NODDY command definitions - includes full names and abbreviations
+const noddyCommands: NoddyCommand[] = [
+    // *A or *ADVANCE - advance to next page
+    { id: 'ADVANCE', pattern: /^\*(?:A|ADVANCE)\s*$/, hasArg: false, argType: 'none', description: 'Advance to next page' },
+    
+    // *B or *BRANCH <label> - unconditional branch to label
+    { id: 'BRANCH', pattern: /^\*(?:B|BRANCH)\s+(\w+)\s*$/, hasArg: true, argType: 'label', description: 'Unconditional branch to label' },
+    
+    // *D or *DISPLAY <pagename>. - display a text page (note the trailing period)
+    { id: 'DISPLAY', pattern: /^\*(?:D|DISPLAY)\s+(\w+)\.\s*$/, hasArg: true, argType: 'pagename', description: 'Display a text page' },
+    
+    // *E or *ENTER - wait for user input
+    { id: 'ENTER', pattern: /^\*(?:E|ENTER)\s*$/, hasArg: false, argType: 'none', description: 'Wait for user input' },
+    
+    // *G or *GOTO <label> - goto label (similar to BRANCH)
+    { id: 'GOTO', pattern: /^\*(?:G|GOTO)\s+(\w+)\s*$/, hasArg: true, argType: 'label', description: 'Go to label' },
+    
+    // *I or *IF <char>,<label> - conditional branch on character input
+    { id: 'IF', pattern: /^\*(?:I|IF)\s+([A-Za-z0-9]),(\w+)\s*$/, hasArg: true, argType: 'char_label', description: 'Conditional branch on character input' },
+    
+    // *L or *LIST - list the noddy program
+    { id: 'LIST', pattern: /^\*(?:L|LIST)\s*$/, hasArg: false, argType: 'none', description: 'List the Noddy program' },
+    
+    // *O or *OFF - turn off/exit noddy
+    { id: 'OFF', pattern: /^\*(?:O|OFF)\s*$/, hasArg: false, argType: 'none', description: 'Turn off/exit Noddy' },
+    
+    // *P or *PAUSE - wait for keypress
+    { id: 'PAUSE', pattern: /^\*(?:P|PAUSE)\s*$/, hasArg: false, argType: 'none', description: 'Wait for keypress' },
+    
+    // *R or *RETURN - return to BASIC
+    { id: 'RETURN', pattern: /^\*(?:R|RETURN)\s*$/, hasArg: false, argType: 'none', description: 'Return to BASIC program' },
+    
+    // *S or *STACK - stack operation (push current position)
+    { id: 'STACK', pattern: /^\*(?:S|STACK)\s*$/, hasArg: false, argType: 'none', description: 'Stack current position for later return' },
+];
+
+
+/**
+ * Parse NODDY content from document starting at a given line
+ */
+// Update parseNoddyContent to validate program page first line:
+
+function parseNoddyContent(lines: string[], startLine: number): {
+    pages: NoddyPage[];
+    errors: { line: number; message: string; start: number; end: number }[];
+} {
+    const pages: NoddyPage[] = [];
+    const errors: { line: number; message: string; start: number; end: number }[] = [];
+    
+    let currentPage: NoddyPage | null = null;
+    let textLineCount = 0;
+    let isFirstContentLine = false;
+    
+    for (let i = startLine; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        
+        // Check for page title
+        const titleMatch = noddyPageTitlePattern.exec(line);
+        if (titleMatch) {
+            // Save previous page
+            if (currentPage) {
+                currentPage.lineEnd = i - 1;
+                pages.push(currentPage);
+            }
+            
+            // Start new page
+            currentPage = {
+                name: titleMatch[1],
+                lineStart: i,
+                lineEnd: i,
+                type: 'text', // Will be updated if we find NODDY commands
+                content: []
+            };
+            textLineCount = 0;
+            isFirstContentLine = true; // Next non-empty line is the first content line
+            continue;
+        }
+        
+        if (currentPage) {
+            // Skip empty lines for first content line check
+            if (isFirstContentLine && trimmed.length === 0) {
+                currentPage.content.push(line);
+                continue;
+            }
+            
+            // Check if this is a NODDY command or label (indicates program page)
+            if (trimmed.startsWith('*') || trimmed.startsWith('^')) {
+                currentPage.type = 'program';
+            }
+            
+            // For program pages, validate first content line matches page name
+            if (isFirstContentLine && trimmed.length > 0) {
+                isFirstContentLine = false;
+                
+                // Check if first content line is the program name (indicates program page)
+                // The first line should be JUST the program name with no other text
+                if (trimmed === currentPage.name) {
+                    currentPage.type = 'program';
+                }
+                // If first line has commands/labels, it's a program but missing the name line
+                else if (trimmed.startsWith('*') || trimmed.startsWith('^')) {
+                    currentPage.type = 'program';
+                    errors.push({
+                        line: i,
+                        message: `Program page "${currentPage.name}" must have "${currentPage.name}" as the first line (before any commands)`,
+                        start: 0,
+                        end: trimmed.length
+                    });
+                }
+                // Otherwise it's a text page - no validation needed for first line
+            }
+            
+            currentPage.content.push(line);
+            textLineCount++;
+            
+            // Text pages have max 24 rows
+            if (currentPage.type === 'text' && textLineCount > 24) {
+                errors.push({
+                    line: i,
+                    message: `Text page "${currentPage.name}" exceeds maximum of 24 rows`,
+                    start: 0,
+                    end: line.length
+                });
+            }
+            
+            // Text pages have max 40 characters per line
+            if (currentPage.type === 'text' && line.length > 40) {
+                errors.push({
+                    line: i,
+                    message: `Text line exceeds maximum of 40 characters (got ${line.length})`,
+                    start: 40,
+                    end: line.length
+                });
+            }
+        }
+    }
+    
+    // Don't forget the last page
+    if (currentPage) {
+        currentPage.lineEnd = lines.length - 1;
+        pages.push(currentPage);
+    }
+    
+    return { pages, errors };
+} 
+
+
+/**
+ * Validate a NODDY program page
+ */
+/**
+ * Validate a NODDY program page
+ */
+function validateNoddyProgram(
+    page: NoddyPage,
+    allPages: NoddyPage[],
+    lineOffset: number
+): { line: number; message: string; start: number; end: number }[] {
+    const errors: { line: number; message: string; start: number; end: number }[] = [];
+    const definedLabels = new Set<string>();
+    const usedLabels: { label: string; line: number; start: number }[] = [];
+    const textPageNames = new Set(allPages.filter(p => p.type === 'text').map(p => p.name));
+    
+    // First content line should be the program name - skip it for command validation
+    let foundProgramName = false;
+    let programNameLineIndex = -1;
+    
+    // Find and validate program name line
+    for (let i = 0; i < page.content.length; i++) {
+        const trimmed = page.content[i].trim();
+        if (trimmed.length === 0) continue; // Skip empty lines
+        
+        if (trimmed === page.name) {
+            foundProgramName = true;
+            programNameLineIndex = i;
+            break;
+        } else {
+            // First non-empty line is not the program name
+            errors.push({
+                line: lineOffset + i + 1,
+                message: `Program page must start with "${page.name}" on its own line`,
+                start: 0,
+                end: trimmed.length
+            });
+            break;
+        }
+    }
+    
+    if (!foundProgramName && programNameLineIndex === -1) {
+        errors.push({
+            line: lineOffset + 1,
+            message: `Program page "${page.name}" is missing the program name as first line`,
+            start: 0,
+            end: page.name.length
+        });
+    }
+    
+    // First pass: collect defined labels (skip program name line)
+    for (let i = 0; i < page.content.length; i++) {
+        // Skip the program name line
+        if (i === programNameLineIndex) continue;
+        
+        const line = page.content[i].trim();
+        const labelMatch = noddyLabelPattern.exec(line);
+        if (labelMatch) {
+            const labelName = labelMatch[1];
+            if (definedLabels.has(labelName)) {
+                errors.push({
+                    line: lineOffset + i + 1,
+                    message: `Duplicate label "^${labelName}"`,
+                    start: 0,
+                    end: labelMatch[0].length
+                });
+            }
+            definedLabels.add(labelName);
+        }
+    }
+    
+    // Second pass: validate commands and collect used labels (skip program name line)
+    for (let i = 0; i < page.content.length; i++) {
+        // Skip the program name line
+        if (i === programNameLineIndex) continue;
+        
+        const line = page.content[i];
+        const trimmed = line.trim();
+        const actualLine = lineOffset + i + 1;
+        
+        // Skip empty lines
+        if (!trimmed) continue;
+        
+        // Handle labels - can have commands on the same line after the label
+        let commandPart = trimmed;
+        if (trimmed.startsWith('^')) {
+            const labelMatch = noddyLabelPattern.exec(trimmed);
+            if (!labelMatch) {
+                errors.push({
+                    line: actualLine,
+                    message: `Invalid label syntax: "${trimmed}"`,
+                    start: 0,
+                    end: trimmed.length
+                });
+                continue;
+            }
+            // Get the part after the label
+            commandPart = trimmed.slice(labelMatch[0].length).trim();
+            if (!commandPart) continue; // Label only line is valid
+        }
+        
+        // Handle commands - can have multiple per line
+        const cmdParts = commandPart.split(/(?=\*)/);
+        let charPos = line.indexOf(commandPart);
+        
+        for (const part of cmdParts) {
+            const cmd = part.trim();
+            if (!cmd) continue;
+            
+            if (!cmd.startsWith('*')) {
+                // Text after label without command is invalid in program pages
+                errors.push({
+                    line: actualLine,
+                    message: `Invalid NODDY syntax: "${cmd}" (commands must start with *)`,
+                    start: charPos,
+                    end: charPos + cmd.length
+                });
+                charPos += cmd.length;
+                continue;
+            }
+            
+            // Try to match against known commands
+            let matched = false;
+            for (const noddyCmd of noddyCommands) {
+                const match = noddyCmd.pattern.exec(cmd);
+                if (match) {
+                    matched = true;
+                    
+                    // Validate arguments based on type
+                    if (noddyCmd.argType === 'pagename') {
+                        const pageName = match[1];
+                        if (!textPageNames.has(pageName)) {
+                            errors.push({
+                                line: actualLine,
+                                message: `Unknown text page "${pageName}" in *${noddyCmd.id}`,
+                                start: charPos,
+                                end: charPos + cmd.length
+                            });
+                        }
+                    } else if (noddyCmd.argType === 'label') {
+                        const labelName = match[1];
+                        usedLabels.push({ label: labelName, line: actualLine, start: charPos });
+                    } else if (noddyCmd.argType === 'char_label') {
+                        // For *IF char,label - validate both parts
+                        const charInput = match[1];
+                        const labelName = match[2];
+                        
+                        // Validate character is single alphanumeric
+                        if (!/^[A-Za-z0-9]$/.test(charInput)) {
+                            errors.push({
+                                line: actualLine,
+                                message: `*IF: character must be single alphanumeric (got "${charInput}")`,
+                                start: charPos,
+                                end: charPos + cmd.length
+                            });
+                        }
+                        
+                        usedLabels.push({ label: labelName, line: actualLine, start: charPos });
+                    }
+                    break;
+                }
+            }
+            
+            if (!matched) {
+                // Check for common errors
+                const displayNoperiod = /^\*(?:D|DISPLAY)\s+\w+\s*$/.exec(cmd);
+                if (displayNoperiod) {
+                    errors.push({
+                        line: actualLine,
+                        message: `*DISPLAY command missing trailing period: "${cmd}" (should end with ".")`,
+                        start: charPos,
+                        end: charPos + cmd.length
+                    });
+                } else if (/^\*(?:B|BRANCH|G|GOTO)\s*$/.exec(cmd)) {
+                    errors.push({
+                        line: actualLine,
+                        message: `*${cmd.slice(1)} requires a label argument`,
+                        start: charPos,
+                        end: charPos + cmd.length
+                    });
+                } else if (/^\*(?:I|IF)\s*$/.exec(cmd) || /^\*(?:I|IF)\s+[^,]+\s*$/.exec(cmd)) {
+                    errors.push({
+                        line: actualLine,
+                        message: `*IF requires format: *IF <char>,<label>`,
+                        start: charPos,
+                        end: charPos + cmd.length
+                    });
+                } else {
+                    errors.push({
+                        line: actualLine,
+                        message: `Unknown or malformed NODDY command: "${cmd}"`,
+                        start: charPos,
+                        end: charPos + cmd.length
+                    });
+                }
+            }
+            
+            charPos += cmd.length + 1;
+        }
+    }
+    
+    // Check for undefined labels
+    for (const used of usedLabels) {
+        if (!definedLabels.has(used.label)) {
+            errors.push({
+                line: used.line,
+                message: `Undefined label "^${used.label}"`,
+                start: used.start,
+                end: used.start + used.label.length + 1
+            });
+        }
+    }
+    
+    return errors;
+}
+
+/**
+ * Check if a line is a NODDY trigger line
+ */
+function isNoddyTrigger(line: string): boolean {
+    return /^\s*\d+\s+NODDY\s*$/i.test(line);
+}
+
+/**
+ * Get all PLOD references from BASIC code
+ */
+function findPlodReferences(lines: string[]): { line: number; progName: string; start: number }[] {
+    const refs: { line: number; progName: string; start: number }[] = [];
+    const plodPattern = /PLOD\s+"(\w+)"/gi;
+    
+    for (let i = 0; i < lines.length; i++) {
+        let match;
+        while ((match = plodPattern.exec(lines[i])) !== null) {
+            refs.push({
+                line: i,
+                progName: match[1],
+                start: match.index
+            });
+        }
+    }
+    
+    return refs;
+}
+
 // Exports: named exports so other files can import what they need
 export {
         isHexNumber,
@@ -1029,5 +1491,10 @@ export {
         splitBooleanExpression,
         trimCommaList,
         trimArray,
-        splitCommandsByColon
+        splitCommandsByColon,
+        parseNoddyContent,
+        validateNoddyProgram,
+        isNoddyTrigger,
+        findPlodReferences,
+        NoddyPage
 };
