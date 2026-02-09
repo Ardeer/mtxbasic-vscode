@@ -21,6 +21,69 @@ exports.validateZ80InstructionWithLabels = validateZ80InstructionWithLabels;
 exports.validateCodeBlock = validateCodeBlock;
 exports.validateCodeBlocks = validateCodeBlocks;
 exports.getZ80InstructionInfo = getZ80InstructionInfo;
+exports.getInstructionLength = getInstructionLength;
+exports.getDirectiveLength = getDirectiveLength;
+/** z80 hex to mnemomic conversion table notes
+no CB30 to CB37
+no DDCB ZZ 36
+no FDCB ZZ 36
+MTX assembler includes the following directives:
+DB n ; define byte, e.g.  n=10 or #0A or "A"
+DW XXXX ; define 16-bit word
+DS n254 ; define space, where n254 = 0 to 254 as 255 (#FF) is reserved for end of program marker
+*/
+/** z80 format within the CODE structure
+<TABspace> <hex_addr><space> {<label>:} <z80 assembly command> {;<comment>}
+1) no line number (same exception as used for NODDY)
+2) TAB space indent
+3) 16-bit hexadecimal address (0000) - no prefix or postfix to indicate a number
+4) space
+5) optional label followed by a colon
+6) z80 assembly command
+7) optional semicolon followed by text comment (no quotes or double quotes required, same as for REM in MTX BASIC
+8) end of line
+
+Notes:
+a) Initially, whenever CODE is encountered, it should automatically generate the following default line as per the MTX assembler.
+<linenumber> CODE
+    0000 RET
+The user can overwrite this default line with their own z80 assembly code lines.
+b) The 16-bit hexadecimal address initially to always start at 0000 but internally be coded as hexAddr = baseAddr+offsetAddr
+baseAddr = 0000 (default) until machine type determined then either 4000 (MTX512, 64KB machine) or 8000 (MTX500, 32KB machine)
+offsetAddr = 0000 (default). A separate function to be created to scan the MTX BASIC listing prior to CODE and convert text into hexadecimal and use this to generate a new offset
+c) where XXXX or n or e or d is used in the z80Cmds below, these are only placeholders to ensure the correct format is used by the user, e.g. XXXX = 16-bit hexadecimal value, n = 8-bit hexadecimal value, e = 8-bit signed value, d = 8-bit offset value
+d) where XXXX or n or e or d placeholders are to be replaced by the appropriate hexadecimal values (prefixed by #) or integer values (no # prefix) or labels
+*/
+/** z80 assembly specifications
+column 0 = hexadecimal code (string) plus additional information
+    XXXX = 16-bit hexadecimal address
+    XX = 8-bit unsigned (1-byte)
+    YY = 8-bit signed (1-byte)
+    ZZ = offset (1-byte)
+    
+column 1 = z80 assembly command (string) plus additional information
+    XXXX = XXXX (2-byte)
+    n = XX (1-byte)
+    e = YY signed (1-byte)
+    d = offset (1-byte)
+column 2 = total number of bytes for complete z80 command including additional information
+
+Note: initially only column 1 is used within the MTX BASIC CODE command. Columns 0 and 2 will be used later for a different purpose.
+*/
+/**
+
+1)From the list of z80Cmds, create a sub-set that contains the z80 commands that contain XXXX, (XXXX), n, (n), e and d. These will be the outliers which can be confused with labels.
+2) Check the command entry against an exact match in the z80Cmds list (excluding the sub-set), only z80 commands like PUSH AF or LD A,D will be correct. Else generate an error,
+so PUSH AFA would be an error.
+3) then compare against the sub-set that could be a number or a label
+3a) if # prefix present then following digits are hexadecimal. Compare against XXXX or n to see if 16 or 8-bit
+3b) if [0-9] then its a decimal number.
+3c) if [A-Z] then assume its a label (store, the line number where labels are used, so that these can be checked at 4)
+4) at the end of the codeblock, cross-check commands that use labels against actual labels. If a label is used in a command and label not found, then report error "label not found".
+5) final check, where relative jumps (Jr & DJNZ) are used, these limit the forward and backward jumps to -128 to 127 + 2 to account for the command byte and the displacement byte.
+Using z80Cmds length bytes to dtermine if the jumps are within the correct range (-126 to 129, accounting for the 2 bytes for the command+displacement),
+if not, the report error, relative jump too big.
+ */
 var z80Cmds = [
     { opCode: "00", z80: "NOP", length: 1 },
     { opCode: "01 XXXX", z80: "LD BC,XXXX", length: 3 },
@@ -811,7 +874,7 @@ function parseZ80Line(lineText, lineNumber) {
         return null;
     }
     // If it's a CODE marker like "10 CODE", treat as non-assembly
-    if (/^\d+\s+CODE\s*$/i.test(trimmed)) {
+    if (/^\d+\s+CODE\s*$/.test(trimmed)) {
         return null;
     }
     // We will try to extract a 4-hex address below. If no address is present
@@ -839,14 +902,28 @@ function parseZ80Line(lineText, lineNumber) {
     // one space, then the rest of the line. If no address is present, return a
     // parsed result flagged with `missingAddress` so the validator can report
     // a clear error.
-    var addrMatch = /^\s*([0-9A-Fa-f]{4})\s+(.*)$/.exec(workingText);
+    // Extract address - try to match anything that looks address-like first
+    var addrMatch = /^([0-9A-Za-z_]+)(?:\s+(.*))?$/.exec(workingText);
     if (addrMatch) {
-        result.address = addrMatch[1].toUpperCase();
-        workingText = addrMatch[2].trim();
+        var addr = addrMatch[1];
+        // Check if it's valid format (exactly 4 hex digits, no underscore)
+        if (/^[0-9A-F]{4}$/.test(addr) && !/_/.test(addr)) {
+            result.address = addr.toUpperCase();
+            // Store original if it contained lowercase (for validation)
+            if (addr !== result.address) {
+                result.originalAddress = addr;
+            }
+            workingText = (addrMatch[2] || '').trim();
+        }
+        else {
+            // Malformed address
+            result.raw = lineText;
+            result.malformedAddress = addr;
+            return result;
+        }
     }
     else {
-        // No valid hex address found — return minimal parsed result with flag
-        // so validateCodeBlock can emit a "missing hex address" diagnostic.
+        // No address-like pattern found at all
         result.missingAddress = true;
         result.raw = lineText;
         return result;
@@ -858,14 +935,18 @@ function parseZ80Line(lineText, lineNumber) {
     var colonIdx = workingText.indexOf(':');
     if (colonIdx >= 0) {
         var candidate = workingText.slice(0, colonIdx).trim();
-        if (/^[A-Za-z][A-Za-z0-9]*$/.test(candidate)) {
+        if (/^[A-Z][A-Z0-9]*$/.test(candidate)) {
             result.label = candidate.toUpperCase();
+            // Store original if it wasn't uppercase (for validation)
+            if (candidate !== result.label) {
+                result.originalLabel = candidate;
+            }
         }
         // Remove label and colon from working text (anything after colon is instruction)
         workingText = workingText.slice(colonIdx + 1).trim();
     }
     // Check for directives
-    var directiveMatch = /^(DB|DW|DS)\s+(.*)$/i.exec(workingText);
+    var directiveMatch = /^(DB|DW|DS)\s+(.*)$/.exec(workingText);
     if (directiveMatch) {
         result.isDirective = true;
         result.directiveType = directiveMatch[1].toUpperCase();
@@ -876,10 +957,20 @@ function parseZ80Line(lineText, lineNumber) {
     if (workingText) {
         var spaceIdx = workingText.search(/\s/);
         if (spaceIdx === -1) {
+            var originalMnemonic = workingText;
             result.mnemonic = workingText.toUpperCase();
+            // Store original if it wasn't uppercase (for validation)
+            if (originalMnemonic !== result.mnemonic) {
+                result.originalMnemonic = originalMnemonic;
+            }
         }
         else {
-            result.mnemonic = workingText.slice(0, spaceIdx).toUpperCase();
+            var originalMnemonic = workingText.slice(0, spaceIdx);
+            result.mnemonic = originalMnemonic.toUpperCase();
+            // Store original if it wasn't uppercase (for validation)
+            if (originalMnemonic !== result.mnemonic) {
+                result.originalMnemonic = originalMnemonic;
+            }
             var operandStr = workingText.slice(spaceIdx).trim();
             if (operandStr) {
                 result.operands = splitOperands(operandStr);
@@ -904,8 +995,12 @@ function detectCodeBlocks(lines) {
     var blocks = [];
     var inCodeBlock = false;
     var currentBlock = null;
-    // Regex to capture assembly lines: indent + 4 hex digits + optional label + rest
-    var asmLineRe = /^\s+([0-9A-Fa-f]{4})\s*(?:([A-Za-z][A-Za-z0-9]*):\s*)?(.*)$/;
+    // Regex to capture assembly lines: indent + address-like sequence + rest
+    // This will capture any hex-like sequence (even malformed ones like 40_AF, 400Z, 40ab),
+    // and then the validation in parseZ80Line and validateCodeBlock will catch the errors later.
+    // The block will continue instead of terminating early on malformed addresses.
+    // Using [0-9A-Za-z_]+ to match any alphanumeric or underscore sequence that looks like an address
+    var asmLineRe = /^\s+([0-9A-Za-z_]+)\s+(.*)$/;
     for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
         var trimmed = line.trim();
@@ -920,7 +1015,7 @@ function detectCodeBlocks(lines) {
             continue;
         }
         // Detect CODE marker (e.g. "10 CODE"). Start assembly on the next line.
-        if (/^\d+\s+CODE\s*$/i.test(trimmed)) {
+        if (/^\d+\s+CODE\s*$/.test(trimmed)) {
             if (inCodeBlock && currentBlock) {
                 currentBlock.endLine = i - 1;
                 blocks.push(currentBlock);
@@ -946,20 +1041,22 @@ function detectCodeBlocks(lines) {
                 currentBlock = null;
                 continue;
             }
-            // m[1] = address, m[2] = optional label, m[3] = instruction+comment
-            var afterLabel = (m[3] || '').trim();
-            if (!afterLabel) {
-                // No instruction after address/label -> end block
+            // NEW REGEX: m[1] = address (or malformed address), m[2] = everything else (label + instruction)
+            // Parse m[2] to extract optional label and instruction
+            var restOfLine = (m[2] || '').trim();
+            if (!restOfLine) {
+                // No instruction after address -> end block
                 currentBlock.endLine = i - 1;
                 blocks.push(currentBlock);
                 inCodeBlock = false;
                 currentBlock = null;
                 continue;
             }
-            // Disallow additional ':' inside the instruction (would indicate multiple commands)
-            // Allow one colon for the optional label only.
-            if (afterLabel.indexOf(':') >= 0) {
-                // Invalid assembly line for our strict format -> end block
+            // Check if there's a label (ends with ':')
+            // Allow one colon for the optional label, but disallow additional colons in the instruction
+            var colonCount = (restOfLine.match(/:/g) || []).length;
+            if (colonCount > 1) {
+                // Multiple colons -> invalid assembly line -> end block
                 currentBlock.endLine = i - 1;
                 blocks.push(currentBlock);
                 inCodeBlock = false;
@@ -986,7 +1083,7 @@ function detectCodeBlocks(lines) {
  * Check if operand is a hex number (#prefix)
  */
 function isHexOperand(op) {
-    return /^[#][0-9A-Fa-f]+$/.test(op.trim());
+    return /^[#][0-9A-F]+$/.test(op.trim());
 }
 /**
  * Check if operand is a decimal number
@@ -1014,7 +1111,7 @@ function isLabelOperand(op) {
  * Parse hex value from operand
  */
 function parseHexValue(op) {
-    var match = /^[#]([0-9A-Fa-f]+)$/.exec(op.trim());
+    var match = /^[#]([0-9A-F]+)$/.exec(op.trim());
     if (match) {
         return parseInt(match[1], 16);
     }
@@ -1024,7 +1121,7 @@ function parseHexValue(op) {
  * Get hex digit count
  */
 function getHexDigitCount(op) {
-    var match = /^[#]([0-9A-Fa-f]+)$/.exec(op.trim());
+    var match = /^[#]([0-9A-F]+)$/.exec(op.trim());
     return match ? match[1].length : 0;
 }
 /**
@@ -1035,11 +1132,11 @@ function getHexDigitCount(op) {
 function validateOperandSize(op, placeholder) {
     var trimmed = op.trim().toUpperCase();
     // Labels are assumed valid (validated in label cross-check phase)
-    if (/^[A-Z][A-Z0-9]*$/i.test(trimmed)) {
+    if (/^[A-Z][A-Z0-9]*$/.test(trimmed)) {
         return null;
     }
     // Extract hex value
-    var hexMatch = /^[#]([0-9A-Fa-f]+)$/.exec(trimmed);
+    var hexMatch = /^[#]([0-9A-F]+)$/.exec(trimmed);
     if (hexMatch) {
         var hexValue = parseInt(hexMatch[1], 16);
         var hexStr = hexMatch[1].toUpperCase();
@@ -1136,12 +1233,12 @@ function replaceWithPlaceholders(mnemonic, operands) {
         }
         // Indirect port number for IN/OUT: (xx) -> (XX)
         if (upperMnemonic === 'OUT' || upperMnemonic === 'IN') {
-            if (/^\([#]?[0-9A-Fa-f]+\)$/.test(upper) || /^\([0-9]+\)$/.test(upper)) {
+            if (/^\([#]?[0-9A-F]+\)$/.test(upper) || /^\([0-9]+\)$/.test(upper)) {
                 return '(XX)';
             }
         }
         // Indirect address: (#XXXX) or (decimal) or (label) -> (XXXX)
-        if (/^\([#][0-9A-Fa-f]+\)$/.test(upper)) {
+        if (/^\([#][0-9A-F]+\)$/.test(upper)) {
             return '(XXXX)';
         }
         if (/^\([0-9]+\)$/.test(upper)) {
@@ -1258,8 +1355,8 @@ function operandPositionAllowsLabel(mnemonic, operands, opIdx) {
             }
             // indexed addressing patterns: (IX+ZZ), (IX-ZZ), (IY+ZZ), (IY-ZZ)
             // Match operand like (IX+#2F) against pattern part (IX+ZZ)
-            var indexedPattern = /^\((IX|IY)([+-])ZZ\)$/i;
-            var indexedOperand = /^\((IX|IY)([+-])(#[0-9A-Fa-f]+|[0-9]+|[A-Za-z_]\w*)\)$/i;
+            var indexedPattern = /^\((IX|IY)([+-])ZZ\)$/;
+            var indexedOperand = /^\((IX|IY)([+-])(#[0-9A-F]+|[0-9]+|[A-Z]\w*)\)$/;
             if (indexedPattern.test(part)) {
                 var patternMatch = part.match(indexedPattern);
                 var opMatch = op.match(indexedOperand);
@@ -1290,7 +1387,7 @@ function operandPositionAllowsLabel(mnemonic, operands, opIdx) {
  * Validate a single CODE block
  */
 function validateCodeBlock(lines, startLine) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     var errors = [];
     // `lines` here are expected to be the assembly lines for a single CODE block.
     // The wrapper `validateCodeBlocks` is responsible for finding blocks and
@@ -1308,16 +1405,55 @@ function validateCodeBlock(lines, startLine) {
         var parsed = parseZ80Line(lines[i], startLine + i);
         if (!parsed)
             continue;
+        // Check for malformed address
+        if (parsed.malformedAddress) {
+            var addr = parsed.malformedAddress;
+            errors.push({
+                line: startLine + i,
+                start: 0,
+                end: ((_a = lines[i]) === null || _a === void 0 ? void 0 : _a.length) || 0,
+                message: "Invalid hex address: \"".concat(addr, "\". Address must be exactly 4 hex digits [0-9A-F], no underscores allowed"),
+                severity: 'error'
+            });
+            continue;
+        }
+        // Check for lowercase in address
+        if (parsed.originalAddress) {
+            var original = parsed.originalAddress;
+            errors.push({
+                line: startLine + i,
+                start: 0,
+                end: Math.max(0, lines[i].indexOf(original) + original.length),
+                message: "Z80 address must be uppercase: \"".concat(original, "\" should be \"").concat(parsed.address, "\""),
+                severity: 'error'
+            });
+        }
         // If parse flagged a missing address, report it and skip further processing
         if (parsed.missingAddress) {
             errors.push({
                 line: startLine + i,
                 start: 0,
-                end: ((_a = lines[i]) === null || _a === void 0 ? void 0 : _a.length) || 0,
+                end: ((_b = lines[i]) === null || _b === void 0 ? void 0 : _b.length) || 0,
                 message: 'Missing hex address in CODE line',
                 severity: 'error'
             });
             continue;
+        }
+        // Check address sequence (skip first line which establishes base address)
+        if (i > 0 && parsed.address) {
+            var actualAddress = parseInt(parsed.address, 16);
+            var expectedAddress = currentAddress;
+            if (actualAddress !== expectedAddress) {
+                var expectedHex = expectedAddress.toString(16).toUpperCase().padStart(4, '0');
+                var actualHex = parsed.address.toUpperCase();
+                errors.push({
+                    line: startLine + i,
+                    start: 0,
+                    end: Math.max(0, lines[i].indexOf(parsed.address) + parsed.address.length),
+                    message: "Address out of sequence: expected ".concat(expectedHex, ", found ").concat(actualHex),
+                    severity: 'error'
+                });
+            }
         }
         // Use address from line if present
         if (parsed.address) {
@@ -1325,6 +1461,17 @@ function validateCodeBlock(lines, startLine) {
         }
         // Record label definition
         if (parsed.label) {
+            // Check if label was originally mixed-case
+            if (parsed.originalLabel) {
+                var original = parsed.originalLabel;
+                errors.push({
+                    line: startLine + i,
+                    start: Math.max(0, lines[i].indexOf(original)),
+                    end: Math.max(0, lines[i].indexOf(original) + original.length),
+                    message: "Z80 label must be uppercase: \"".concat(original, "\" should be \"").concat(parsed.label, "\""),
+                    severity: 'error'
+                });
+            }
             labelDefs.set(parsed.label, {
                 name: parsed.label,
                 lineNumber: startLine + i,
@@ -1369,6 +1516,18 @@ function validateCodeBlock(lines, startLine) {
         */
         if (!parsed || !parsed.mnemonic || parsed.isDirective)
             continue;
+        // Check for lowercase/mixed-case mnemonic
+        if (parsed.originalMnemonic) {
+            var original = parsed.originalMnemonic;
+            errors.push({
+                line: startLine + i,
+                start: Math.max(0, lines[i].indexOf(original)),
+                end: Math.max(0, lines[i].indexOf(original) + original.length),
+                message: "Z80 mnemonic must be uppercase: \"".concat(original, "\" should be \"").concat(parsed.mnemonic, "\""),
+                severity: 'error'
+            });
+            continue;
+        }
         // Update current address
         if (parsed.address) {
             currentAddress = parseInt(parsed.address, 16);
@@ -1485,8 +1644,8 @@ function validateCodeBlock(lines, startLine) {
         */
         var matched = false;
         var matchedPattern = null;
-        for (var _d = 0, patterns_2 = patterns; _d < patterns_2.length; _d++) {
-            var p = patterns_2[_d];
+        for (var _e = 0, patterns_2 = patterns; _e < patterns_2.length; _e++) {
+            var p = patterns_2[_e];
             if (p.pattern === withPlaceholders) {
                 matched = true;
                 matchedPattern = p;
@@ -1530,7 +1689,7 @@ function validateCodeBlock(lines, startLine) {
                     }
                     else {
                         // For indexed addressing like (IX+#2F), validate the offset part
-                        var indexedMatch = /^\((IX|IY)([+-])(#[0-9A-Fa-f]+|[0-9]+|[A-Za-z_]\w*)\)$/i.exec(op.toUpperCase());
+                        var indexedMatch = /^\((IX|IY)([+-])(#[0-9A-F]+|[0-9]+|[A-Z]\w*)\)$/.exec(op.toUpperCase());
                         if (indexedMatch && placeholder === 'ZZ') {
                             var offsetOp = indexedMatch[3];
                             var sizeError = validateOperandSize(offsetOp, 'ZZ');
@@ -1553,13 +1712,13 @@ function validateCodeBlock(lines, startLine) {
     // ============================================
     // STEP 5: Cross-check label usages
     // ============================================
-    for (var _e = 0, labelUsages_1 = labelUsages; _e < labelUsages_1.length; _e++) {
-        var usage = labelUsages_1[_e];
+    for (var _f = 0, labelUsages_1 = labelUsages; _f < labelUsages_1.length; _f++) {
+        var usage = labelUsages_1[_f];
         if (!labelDefs.has(usage.name)) {
             errors.push({
                 line: usage.lineNumber,
                 start: 0,
-                end: ((_b = lines[usage.lineNumber - startLine]) === null || _b === void 0 ? void 0 : _b.length) || 0,
+                end: ((_c = lines[usage.lineNumber - startLine]) === null || _c === void 0 ? void 0 : _c.length) || 0,
                 message: "Label not found: ".concat(usage.name),
                 severity: 'error'
             });
@@ -1568,8 +1727,8 @@ function validateCodeBlock(lines, startLine) {
     // ============================================
     // STEP 6: Check relative jump ranges
     // ============================================
-    for (var _f = 0, labelUsages_2 = labelUsages; _f < labelUsages_2.length; _f++) {
-        var usage = labelUsages_2[_f];
+    for (var _g = 0, labelUsages_2 = labelUsages; _g < labelUsages_2.length; _g++) {
+        var usage = labelUsages_2[_g];
         if (!usage.isRelativeJump)
             continue;
         var labelDef = labelDefs.get(usage.name);
@@ -1585,7 +1744,7 @@ function validateCodeBlock(lines, startLine) {
             errors.push({
                 line: usage.lineNumber,
                 start: 0,
-                end: ((_c = lines[usage.lineNumber - startLine]) === null || _c === void 0 ? void 0 : _c.length) || 0,
+                end: ((_d = lines[usage.lineNumber - startLine]) === null || _d === void 0 ? void 0 : _d.length) || 0,
                 message: "Relative jump to ".concat(usage.name, " is out of range (offset: ").concat(offset, ", valid: -128 to +127)"),
                 severity: 'error'
             });
@@ -1628,11 +1787,43 @@ function getDirectiveLength(parsed) {
         return 0;
     switch (parsed.directiveType) {
         case 'DB':
-            // Count bytes: strings count characters, numbers count 1 each
-            if (parsed.directiveValue.startsWith('"')) {
-                return parsed.directiveValue.length - 2; // Minus quotes
+            // Count bytes: parse comma-separated values
+            // Strings count characters, numbers count 1 each
+            var totalBytes = 0;
+            var values = [];
+            var inString = false;
+            var current = '';
+            // Parse comma-separated values, respecting quoted strings
+            for (var i = 0; i < parsed.directiveValue.length; i++) {
+                var ch = parsed.directiveValue[i];
+                if (ch === '"') {
+                    inString = !inString;
+                    current += ch;
+                }
+                else if (ch === ',' && !inString) {
+                    if (current.trim())
+                        values.push(current.trim());
+                    current = '';
+                }
+                else {
+                    current += ch;
+                }
             }
-            return 1;
+            if (current.trim())
+                values.push(current.trim());
+            // Count bytes for each value
+            for (var _i = 0, values_1 = values; _i < values_1.length; _i++) {
+                var val = values_1[_i];
+                if (val.startsWith('"') && val.endsWith('"')) {
+                    // String: count characters inside quotes
+                    totalBytes += val.length - 2;
+                }
+                else {
+                    // Number or hex: 1 byte
+                    totalBytes += 1;
+                }
+            }
+            return totalBytes || 1;
         case 'DW':
             return 2;
         case 'DS':

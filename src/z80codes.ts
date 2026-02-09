@@ -74,9 +74,6 @@ Using z80Cmds length bytes to dtermine if the jumps are within the correct range
 if not, the report error, relative jump too big. 
  */
 
-// Import hex functions from stdFns
-import { isHexNumber, parseHex } from './stdFns.js';
-
 const z80Cmds: {opCode: string, z80: string, length: number}[] = [
 {opCode: "00", z80: "NOP", length: 1},
 {opCode: "01 XXXX", z80: "LD BC,XXXX", length: 3},
@@ -937,7 +934,7 @@ function parseZ80Line(lineText: string, lineNumber: number): Z80ParsedLine | nul
         return null;
     }
     // If it's a CODE marker like "10 CODE", treat as non-assembly
-    if (/^\d+\s+CODE\s*$/i.test(trimmed)) {
+    if (/^\d+\s+CODE\s*$/.test(trimmed)) {
         return null;
     }
 
@@ -964,19 +961,34 @@ function parseZ80Line(lineText: string, lineNumber: number): Z80ParsedLine | nul
     if (!workingText) {
         return result;
     }
+
     
     // Extract 4-digit hex address (may be preceded by optional whitespace or line number)
     // Strict pattern: optional leading whitespace, then 4 hex digits, then at least
     // one space, then the rest of the line. If no address is present, return a
     // parsed result flagged with `missingAddress` so the validator can report
     // a clear error.
-    const addrMatch = /^\s*([0-9A-Fa-f]{4})\s+(.*)$/.exec(workingText);
+    // Extract address - try to match anything that looks address-like first
+    const addrMatch = /^([0-9A-Za-z_]+)(?:\s+(.*))?$/.exec(workingText);
     if (addrMatch) {
-        result.address = addrMatch[1].toUpperCase();
-        workingText = addrMatch[2].trim();
+        const addr = addrMatch[1];
+        
+        // Check if it's valid format (exactly 4 hex digits, no underscore)
+        if (/^[0-9A-F]{4}$/.test(addr) && !/_/.test(addr)) {
+            result.address = addr.toUpperCase();
+            // Store original if it contained lowercase (for validation)
+            if (addr !== result.address) {
+                (result as any).originalAddress = addr;
+            }
+            workingText = (addrMatch[2] || '').trim();
+        } else {
+            // Malformed address
+            result.raw = lineText;
+            (result as any).malformedAddress = addr;
+            return result;
+        }
     } else {
-        // No valid hex address found — return minimal parsed result with flag
-        // so validateCodeBlock can emit a "missing hex address" diagnostic.
+        // No address-like pattern found at all
         (result as any).missingAddress = true;
         result.raw = lineText;
         return result;
@@ -989,15 +1001,19 @@ function parseZ80Line(lineText: string, lineNumber: number): Z80ParsedLine | nul
     const colonIdx = workingText.indexOf(':');
     if (colonIdx >= 0) {
         const candidate = workingText.slice(0, colonIdx).trim();
-        if (/^[A-Za-z][A-Za-z0-9]*$/.test(candidate)) {
+        if (/^[A-Z][A-Z0-9]*$/.test(candidate)) {
             result.label = candidate.toUpperCase();
+            // Store original if it wasn't uppercase (for validation)
+            if (candidate !== result.label) {
+                (result as any).originalLabel = candidate;
+            }
         }
         // Remove label and colon from working text (anything after colon is instruction)
         workingText = workingText.slice(colonIdx + 1).trim();
     }
     
     // Check for directives
-    const directiveMatch = /^(DB|DW|DS)\s+(.*)$/i.exec(workingText);
+    const directiveMatch = /^(DB|DW|DS)\s+(.*)$/.exec(workingText);
     if (directiveMatch) {
         result.isDirective = true;
         result.directiveType = directiveMatch[1].toUpperCase() as 'DB' | 'DW' | 'DS';
@@ -1010,9 +1026,19 @@ function parseZ80Line(lineText: string, lineNumber: number): Z80ParsedLine | nul
         const spaceIdx = workingText.search(/\s/);
         
         if (spaceIdx === -1) {
+            const originalMnemonic = workingText;
             result.mnemonic = workingText.toUpperCase();
+            // Store original if it wasn't uppercase (for validation)
+            if (originalMnemonic !== result.mnemonic) {
+                (result as any).originalMnemonic = originalMnemonic;
+            }
         } else {
-            result.mnemonic = workingText.slice(0, spaceIdx).toUpperCase();
+            const originalMnemonic = workingText.slice(0, spaceIdx);
+            result.mnemonic = originalMnemonic.toUpperCase();
+            // Store original if it wasn't uppercase (for validation)
+            if (originalMnemonic !== result.mnemonic) {
+                (result as any).originalMnemonic = originalMnemonic;
+            }
             const operandStr = workingText.slice(spaceIdx).trim();
             if (operandStr) {
                 result.operands = splitOperands(operandStr);
@@ -1041,8 +1067,12 @@ function detectCodeBlocks(lines: string[]): CodeBlock[] {
     let inCodeBlock = false;
     let currentBlock: CodeBlock | null = null;
 
-    // Regex to capture assembly lines: indent + 4 hex digits + optional label + rest
-    const asmLineRe = /^\s+([0-9A-Fa-f]{4})\s*(?:([A-Za-z][A-Za-z0-9]*):\s*)?(.*)$/;
+    // Regex to capture assembly lines: indent + address-like sequence + rest
+    // This will capture any hex-like sequence (even malformed ones like 40_AF, 400Z, 40ab),
+    // and then the validation in parseZ80Line and validateCodeBlock will catch the errors later.
+    // The block will continue instead of terminating early on malformed addresses.
+    // Using [0-9A-Za-z_]+ to match any alphanumeric or underscore sequence that looks like an address
+    const asmLineRe = /^\s+([0-9A-Za-z_]+)\s+(.*)$/;
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -1059,7 +1089,7 @@ function detectCodeBlocks(lines: string[]): CodeBlock[] {
         }
 
         // Detect CODE marker (e.g. "10 CODE"). Start assembly on the next line.
-        if (/^\d+\s+CODE\s*$/i.test(trimmed)) {
+        if (/^\d+\s+CODE\s*$/.test(trimmed)) {
             if (inCodeBlock && currentBlock) {
                 currentBlock.endLine = i - 1;
                 blocks.push(currentBlock);
@@ -1087,10 +1117,11 @@ function detectCodeBlocks(lines: string[]): CodeBlock[] {
                 continue;
             }
 
-            // m[1] = address, m[2] = optional label, m[3] = instruction+comment
-            const afterLabel = (m[3] || '').trim();
-            if (!afterLabel) {
-                // No instruction after address/label -> end block
+            // NEW REGEX: m[1] = address (or malformed address), m[2] = everything else (label + instruction)
+            // Parse m[2] to extract optional label and instruction
+            const restOfLine = (m[2] || '').trim();
+            if (!restOfLine) {
+                // No instruction after address -> end block
                 currentBlock.endLine = i - 1;
                 blocks.push(currentBlock);
                 inCodeBlock = false;
@@ -1098,10 +1129,11 @@ function detectCodeBlocks(lines: string[]): CodeBlock[] {
                 continue;
             }
 
-            // Disallow additional ':' inside the instruction (would indicate multiple commands)
-            // Allow one colon for the optional label only.
-            if (afterLabel.indexOf(':') >= 0) {
-                // Invalid assembly line for our strict format -> end block
+            // Check if there's a label (ends with ':')
+            // Allow one colon for the optional label, but disallow additional colons in the instruction
+            const colonCount = (restOfLine.match(/:/g) || []).length;
+            if (colonCount > 1) {
+                // Multiple colons -> invalid assembly line -> end block
                 currentBlock.endLine = i - 1;
                 blocks.push(currentBlock);
                 inCodeBlock = false;
@@ -1133,7 +1165,7 @@ function detectCodeBlocks(lines: string[]): CodeBlock[] {
  * Check if operand is a hex number (#prefix)
  */
 function isHexOperand(op: string): boolean {
-    return /^[#][0-9A-Fa-f]+$/.test(op.trim());
+    return /^[#][0-9A-F]+$/.test(op.trim());
 }
 
 /**
@@ -1164,7 +1196,7 @@ function isLabelOperand(op: string): boolean {
  * Parse hex value from operand
  */
 function parseHexValue(op: string): number {
-    const match = /^[#]([0-9A-Fa-f]+)$/.exec(op.trim());
+    const match = /^[#]([0-9A-F]+)$/.exec(op.trim());
     if (match) {
         return parseInt(match[1], 16);
     }
@@ -1175,7 +1207,7 @@ function parseHexValue(op: string): number {
  * Get hex digit count
  */
 function getHexDigitCount(op: string): number {
-    const match = /^[#]([0-9A-Fa-f]+)$/.exec(op.trim());
+    const match = /^[#]([0-9A-F]+)$/.exec(op.trim());
     return match ? match[1].length : 0;
 }
 
@@ -1188,12 +1220,12 @@ function validateOperandSize(op: string, placeholder: string): string | null {
     const trimmed = op.trim().toUpperCase();
     
     // Labels are assumed valid (validated in label cross-check phase)
-    if (/^[A-Z][A-Z0-9]*$/i.test(trimmed)) {
+    if (/^[A-Z][A-Z0-9]*$/.test(trimmed)) {
         return null;
     }
     
     // Extract hex value
-    const hexMatch = /^[#]([0-9A-Fa-f]+)$/.exec(trimmed);
+    const hexMatch = /^[#]([0-9A-F]+)$/.exec(trimmed);
     if (hexMatch) {
         const hexValue = parseInt(hexMatch[1], 16);
         const hexStr = hexMatch[1].toUpperCase();
@@ -1292,13 +1324,13 @@ function replaceWithPlaceholders(mnemonic: string, operands: string[]): string {
         
         // Indirect port number for IN/OUT: (xx) -> (XX)
         if (upperMnemonic === 'OUT' || upperMnemonic === 'IN') {
-            if (/^\([#]?[0-9A-Fa-f]+\)$/.test(upper) || /^\([0-9]+\)$/.test(upper)) {
+            if (/^\([#]?[0-9A-F]+\)$/.test(upper) || /^\([0-9]+\)$/.test(upper)) {
                 return '(XX)';
             }
         }
         
         // Indirect address: (#XXXX) or (decimal) or (label) -> (XXXX)
-        if (/^\([#][0-9A-Fa-f]+\)$/.test(upper)) {
+        if (/^\([#][0-9A-F]+\)$/.test(upper)) {
             return '(XXXX)';
         }
         if (/^\([0-9]+\)$/.test(upper)) {
@@ -1420,8 +1452,8 @@ function operandPositionAllowsLabel(mnemonic: string, operands: string[], opIdx:
 
             // indexed addressing patterns: (IX+ZZ), (IX-ZZ), (IY+ZZ), (IY-ZZ)
             // Match operand like (IX+#2F) against pattern part (IX+ZZ)
-            const indexedPattern = /^\((IX|IY)([+-])ZZ\)$/i;
-            const indexedOperand = /^\((IX|IY)([+-])(#[0-9A-Fa-f]+|[0-9]+|[A-Za-z_]\w*)\)$/i;
+            const indexedPattern = /^\((IX|IY)([+-])ZZ\)$/;
+            const indexedOperand = /^\((IX|IY)([+-])(#[0-9A-F]+|[0-9]+|[A-Z]\w*)\)$/;
             
             if (indexedPattern.test(part)) {
                 const patternMatch = part.match(indexedPattern);
@@ -1477,6 +1509,31 @@ function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
         
         if (!parsed) continue;
 
+        // Check for malformed address
+        if ((parsed as any).malformedAddress) {
+            const addr = (parsed as any).malformedAddress;
+            errors.push({
+                line: startLine + i,
+                start: 0,
+                end: lines[i]?.length || 0,
+                message: `Invalid hex address: "${addr}". Address must be exactly 4 hex digits [0-9A-F], no underscores allowed`,
+                severity: 'error'
+            });
+            continue;
+        }
+
+        // Check for lowercase in address
+        if ((parsed as any).originalAddress) {
+            const original = (parsed as any).originalAddress;
+            errors.push({
+                line: startLine + i,
+                start: 0,
+                end: Math.max(0, lines[i].indexOf(original) + original.length),
+                message: `Z80 address must be uppercase: "${original}" should be "${parsed.address}"`,
+                severity: 'error'
+            });
+        }
+
         // If parse flagged a missing address, report it and skip further processing
         if ((parsed as any).missingAddress) {
             errors.push({
@@ -1489,6 +1546,24 @@ function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
             continue;
         }
         
+        // Check address sequence (skip first line which establishes base address)
+        if (i > 0 && parsed.address) {
+            const actualAddress = parseInt(parsed.address, 16);
+            const expectedAddress = currentAddress;
+            
+            if (actualAddress !== expectedAddress) {
+                const expectedHex = expectedAddress.toString(16).toUpperCase().padStart(4, '0');
+                const actualHex = parsed.address.toUpperCase();
+                errors.push({
+                    line: startLine + i,
+                    start: 0,
+                    end: Math.max(0, lines[i].indexOf(parsed.address) + parsed.address.length),
+                    message: `Address out of sequence: expected ${expectedHex}, found ${actualHex}`,
+                    severity: 'error'
+                });
+            }
+        }
+        
         // Use address from line if present
         if (parsed.address) {
             currentAddress = parseInt(parsed.address, 16);
@@ -1496,6 +1571,17 @@ function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
         
         // Record label definition
         if (parsed.label) {
+            // Check if label was originally mixed-case
+            if ((parsed as any).originalLabel) {
+                const original = (parsed as any).originalLabel;
+                errors.push({
+                    line: startLine + i,
+                    start: Math.max(0, lines[i].indexOf(original)),
+                    end: Math.max(0, lines[i].indexOf(original) + original.length),
+                    message: `Z80 label must be uppercase: "${original}" should be "${parsed.label}"`,
+                    severity: 'error'
+                });
+            }
             labelDefs.set(parsed.label, {
                 name: parsed.label,
                 lineNumber: startLine + i,
@@ -1545,6 +1631,18 @@ function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
 
         if (!parsed || !parsed.mnemonic || parsed.isDirective) continue;
         
+        // Check for lowercase/mixed-case mnemonic
+        if ((parsed as any).originalMnemonic) {
+            const original = (parsed as any).originalMnemonic;
+            errors.push({
+                line: startLine + i,
+                start: Math.max(0, lines[i].indexOf(original)),
+                end: Math.max(0, lines[i].indexOf(original) + original.length),
+                message: `Z80 mnemonic must be uppercase: "${original}" should be "${parsed.mnemonic}"`,
+                severity: 'error'
+            });
+            continue;
+        }
         // Update current address
         if (parsed.address) {
             currentAddress = parseInt(parsed.address, 16);
@@ -1722,7 +1820,7 @@ function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
                         }
                     } else {
                         // For indexed addressing like (IX+#2F), validate the offset part
-                        const indexedMatch = /^\((IX|IY)([+-])(#[0-9A-Fa-f]+|[0-9]+|[A-Za-z_]\w*)\)$/i.exec(op.toUpperCase());
+                        const indexedMatch = /^\((IX|IY)([+-])(#[0-9A-F]+|[0-9]+|[A-Z]\w*)\)$/.exec(op.toUpperCase());
                         if (indexedMatch && placeholder === 'ZZ') {
                             const offsetOp = indexedMatch[3];
                             const sizeError = validateOperandSize(offsetOp, 'ZZ');
@@ -1828,11 +1926,40 @@ function getDirectiveLength(parsed: Z80ParsedLine): number {
     
     switch (parsed.directiveType) {
         case 'DB':
-            // Count bytes: strings count characters, numbers count 1 each
-            if (parsed.directiveValue.startsWith('"')) {
-                return parsed.directiveValue.length - 2;  // Minus quotes
+            // Count bytes: parse comma-separated values
+            // Strings count characters, numbers count 1 each
+            let totalBytes = 0;
+            const values = [];
+            let inString = false;
+            let current = '';
+            
+            // Parse comma-separated values, respecting quoted strings
+            for (let i = 0; i < parsed.directiveValue.length; i++) {
+                const ch = parsed.directiveValue[i];
+                if (ch === '"') {
+                    inString = !inString;
+                    current += ch;
+                } else if (ch === ',' && !inString) {
+                    if (current.trim()) values.push(current.trim());
+                    current = '';
+                } else {
+                    current += ch;
+                }
             }
-            return 1;
+            if (current.trim()) values.push(current.trim());
+            
+            // Count bytes for each value
+            for (const val of values) {
+                if (val.startsWith('"') && val.endsWith('"')) {
+                    // String: count characters inside quotes
+                    totalBytes += val.length - 2;
+                } else {
+                    // Number or hex: 1 byte
+                    totalBytes += 1;
+                }
+            }
+            
+            return totalBytes || 1;
         case 'DW':
             return 2;
         case 'DS':
@@ -1959,5 +2086,7 @@ export {
     validateZ80InstructionWithLabels,
     validateCodeBlock,
     validateCodeBlocks,
-    getZ80InstructionInfo
+    getZ80InstructionInfo,
+    getInstructionLength,
+    getDirectiveLength
 };

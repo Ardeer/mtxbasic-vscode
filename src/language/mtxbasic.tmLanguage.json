@@ -65,17 +65,17 @@
           {
             "name": "keyword.operator.relational.mtxbasic",
             "match":"(<>|<=|>=|=|<|>)"
-          },       
+          },
           {
              "name": "variable.name.mtxbasic",
-             "match": "\\b[A-Za-z][A-Za-z0-9]*\\$?\\b"
+             "match": "\\b[A-Za-z0-9_][A-Za-z0-9_]*\\$?\\b"
           },            
           {
             "name": "constant.numeric.mtxbasic",
             "match": "-?\\b((([0-9]+\\.?[0-9]*)|(\\.[0-9]+))((e|E)(\\+|-)?[0-9]+)?)\\b"
           },
           { "name": "constant.hexadecimal.mtxbasic",
-            "match": "\\b(#[0-9A-Fa-f]+|£[0-9A-Fa-f]+)\\b"
+            "match": "\\b(#[0-9A-Fa-f_]+|£[0-9A-Fa-f_]+)\\b"
           },
           {
             "name": "keyword.control.mtxbasic",
@@ -83,11 +83,11 @@
           },        
           {
             "name": "variable.parameter.mtxbasic",
-            "match": "(?<=\\bON)\\s([A-Za-z][A-Za-z0-9]*|\\d+)"
+            "match": "(?<=\\bON)\\s([A-Za-z0-9_][A-Za-z0-9_]*|\\d+)"
           },
           {
             "name": "keyword.control.mtxbasic",
-            "match": "(?<=\\bON\\s(?:[A-Za-z][A-Za-z0-9]*|\\d+)\\s)(GOTO|GOSUB)\\b"
+            "match": "(?<=\\bON\\s(?:[A-Za-z0-9_][A-Za-z0-9_]*|\\d+)\\s)(GOTO|GOSUB)\\b"
           },
           {
             "name": "constant.numeric.line-number.mtxbasic",
@@ -110,11 +110,11 @@
       "patterns": [
         {
           "name": "constant.numeric.hex-address.z80",
-          "match": "^\\s+([0-9A-Fa-f]{4})\\b"
+          "match": "^\\s+([0-9A-Fa-f_]{4})\\b"
         },
         {
           "name": "entity.name.label.z80",
-          "match": "\\b([A-Za-z_][A-Za-z0-9_]*):"
+          "match": "\\b([A-Za-z0-9_][A-Za-z0-9_]*):"
         },
         {
           "name": "keyword.mnemonic.z80",
@@ -129,8 +129,8 @@
           "match": "\\b(DB|DW|DS)\\b"
         },
         {
-          "name": "constant.numeric.hex.mtxbasic",
-          "match": "#[0-9A-Fa-f]+"
+          "name": "constant.numeric.hex.z80",
+          "match": "#[0-9A-Fa-f_]+"
         },
         {
           "name": "comment.line.semicolon.z80",

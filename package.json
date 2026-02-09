@@ -40,12 +40,33 @@
         "scopeName": "source.mtxbasic",
         "path": "./src/language/mtxbasic.tmLanguage.json"
       }
-    ]
-  ,
+    ],
+    "configurationDefaults": {
+      "[mtxbasic]": {
+        "editor.hover.enabled": "on",
+        "editor.renderWhitespace": "all",
+        "editor.renderControlCharacters": true,
+        "editor.colorDecorators": false,
+        "editor.suggest.showWords": false,
+        "editor.wordBasedSuggestions": "off",
+        "editor.quickSuggestions": {
+          "other": false,
+          "comments": false,
+          "strings": false
+        },
+        "editor.inlineSuggest.enabled": false,
+        "editor.suggestOnTriggerCharacters": true,
+        "editor.acceptSuggestionOnEnter": "off"
+      }
+    },
     "commands": [
       {
         "command": "mtxbasic.saveHex",
         "title": "MTX: Save HEX from active editor"
+      },
+      {
+        "command": "mtxbasic.renumberZ80",
+        "title": "MTX: Renumber Z80 Addresses in CODE Block"
       }
     ],
     "menus": {
@@ -53,9 +74,34 @@
         {
           "command": "mtxbasic.saveHex",
           "when": "editorLangId == mtxbasic"
+        },
+        {
+          "command": "mtxbasic.renumberZ80",
+          "when": "editorLangId == mtxbasic"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "mtxbasic.renumberZ80",
+          "when": "editorLangId == mtxbasic",
+          "group": "mtxbasic"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "mtxbasic.saveHex",
+        "key": "ctrl+shift+h",
+        "mac": "cmd+shift+h",
+        "when": "editorLangId == mtxbasic"
+      },
+      {
+        "command": "mtxbasic.renumberZ80",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorLangId == mtxbasic"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

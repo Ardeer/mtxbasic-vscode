@@ -48,7 +48,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 // Import the VS Code extensibility API
 var vscode = require("vscode");
-var stdFns_js_1 = require("./stdFns.js");
+var mtxstdfns_js_1 = require("./mtxstdfns.js");
 var z80codes_js_1 = require("./z80codes.js");
 var mtxtokens_js_1 = require("./mtxtokens.js");
 var mtxsavehdr_js_1 = require("./mtxsavehdr.js");
@@ -56,6 +56,29 @@ function activate(ctx) {
     var _this = this;
     var diagCollection = vscode.languages.createDiagnosticCollection('mtxbasic');
     ctx.subscriptions.push(diagCollection);
+    // Returns the address (baseAddr + offset) of a BASIC line number inside tokenized bytes.
+    // Stops safely if it reaches non-BASIC data (e.g., NODDY bytes).
+    function findAddressForLineNumber(targetLine, bytes, baseAddr) {
+        var i = 0;
+        while (i < bytes.length) {
+            // Program terminator (single 0xFF at end)
+            if (i === bytes.length - 1 && bytes[i] === 0xff)
+                break;
+            if (i + 3 >= bytes.length)
+                break;
+            var len = bytes[i] | (bytes[i + 1] << 8);
+            if (len < 4)
+                break; // invalid/guard
+            if (i + len > bytes.length)
+                break; // beyond buffer -> likely non-BASIC section
+            var lineNum = bytes[i + 2] | (bytes[i + 3] << 8);
+            if (lineNum === targetLine) {
+                return baseAddr + i;
+            }
+            i += len;
+        }
+        return null;
+    }
     // default start address for MTX BASIC programs (depends on RAM size)
     var ramSize = 48; // assumes MTX512, if MTX500 use 32KB. Future option for user settings
     var mtxRamSize = ramSize * 1024;
@@ -63,7 +86,7 @@ function activate(ctx) {
     var noddyLength = 0; // Tracks ASCII characters in the current document's NODDY section
     // Command: save converted HEX bytes from active editor to a file
     var saveHexCmd = vscode.commands.registerCommand('mtxbasic.saveHex', function () { return __awaiter(_this, void 0, void 0, function () {
-        var editor, doc, text, noddyStartLine, noddyByteCount, bytes, totalBytelength, LSTPGsize, BASBOTaddr, BASTOPaddr, NODTOPaddr, ARRTOPdispl, sysVarStart_1, setSysVar, defaultFileName, uri, fileName, lastDotIdx, nameOnly, extension, headerName, i, DESAVEaddr, data, e_1;
+        var editor, doc, text, noddyStartLine, noddyByteCount, bytes, totalBytelength, LSTPGsize, BASBOTaddr, BASTOPaddr, NODTOPaddr, ARRTOPdispl, maxBasicAddr, maxCode_noBasicAddr, sysVarStart_1, setSysVar, defaultFileName, uri, fileName, lastDotIdx, nameOnly, extension, headerName, i, DESAVEaddr, desavePrompt, input, trimmed, addr, lineNum, addr, data, e_1;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -76,7 +99,7 @@ function activate(ctx) {
                     text = doc.getText();
                     _a.label = 1;
                 case 1:
-                    _a.trys.push([1, 4, , 5]);
+                    _a.trys.push([1, 8, , 9]);
                     (0, mtxsavehdr_js_1.initCreateHdr)(); //initialize the createHdr array before populating it with updated values
                     noddyStartLine = validateLineNumbers(doc).noddyStartLine;
                     noddyByteCount = computeNoddyByteLength(doc, noddyStartLine);
@@ -88,6 +111,8 @@ function activate(ctx) {
                     BASTOPaddr = BASBOTaddr + (totalBytelength - noddyLength - 1);
                     NODTOPaddr = BASBOTaddr + totalBytelength - 1;
                     ARRTOPdispl = NODTOPaddr - BASBOTaddr;
+                    maxBasicAddr = 0xC000 - 1;
+                    maxCode_noBasicAddr = 0xFA50 - 1;
                     //Pass the above data to update the system variables in createHdr array before inserting the header
                     (0, mtxsavehdr_js_1.initCreateHdr)();
                     sysVarStart_1 = 368;
@@ -99,7 +124,7 @@ function activate(ctx) {
                     setSysVar(84, NODTOPaddr); // NBTOP
                     setSysVar(87, BASTOPaddr); // BASTOP
                     setSysVar(90, BASBOTaddr); // BASBOT
-                    setSysVar(92, BASTOPaddr); // BASTPO
+                    setSysVar(92, NODTOPaddr); // BASTPO
                     setSysVar(124, ARRTOPdispl); // ARRTOP
                     setSysVar(127, BASBOTaddr); // BASELIN
                     setSysVar(134, BASTOPaddr); // PGTOP
@@ -135,18 +160,73 @@ function activate(ctx) {
                         mtxsavehdr_js_1.createHdr[i] = (i - 1) < headerName.length ? headerName.charCodeAt(i - 1) : 0x20;
                     }
                     DESAVEaddr = 0xFB4E + headerName.length;
-                    setSysVar(249, DESAVEaddr); // DESAVE 
+                    return [4 /*yield*/, vscode.window.showQuickPick(['Yes', 'No'], { placeHolder: 'Is this an auto-run program? (affects DESAVE address)' })];
+                case 3:
+                    desavePrompt = _a.sent();
+                    if (!desavePrompt) {
+                        return [2 /*return*/];
+                    }
+                    if (!(desavePrompt === 'Yes')) return [3 /*break*/, 5];
+                    DESAVEaddr = hexBaseAddress; //default auto-run DESAVE address to start of BASIC program
+                    return [4 /*yield*/, vscode.window.showInputBox({
+                            prompt: 'Enter BASIC line number (decimal) or hex address (#xxxx)',
+                            placeHolder: 'e.g. 120 or #401B'
+                        })];
+                case 4:
+                    input = _a.sent();
+                    if (!input) {
+                        return [2 /*return*/];
+                    }
+                    trimmed = input.trim();
+                    // Hex address in #xxxx format
+                    if (/^#([0-9A-F]{1,4})$/.test(trimmed)) {
+                        addr = parseInt(trimmed.slice(1), 16);
+                        if (Number.isNaN(addr)) {
+                            vscode.window.showErrorMessage('Invalid hex address.');
+                            return [2 /*return*/];
+                        }
+                        // Optional bounds check
+                        if (addr < hexBaseAddress || addr > (hexBaseAddress + bytes.length - 1)) {
+                            vscode.window.showErrorMessage('Hex address is outside the BASIC program range.');
+                            return [2 /*return*/];
+                        }
+                        DESAVEaddr = addr; //USER input hex address for DESAVE
+                    }
+                    else if (/^\d+$/.test(trimmed)) {
+                        lineNum = parseInt(trimmed, 10);
+                        if (lineNum < 0 || lineNum > 65535) {
+                            vscode.window.showErrorMessage('Line number must be in the range 0 to 65535.');
+                            return [2 /*return*/];
+                        }
+                        addr = findAddressForLineNumber(lineNum, bytes, hexBaseAddress);
+                        if (addr == null) {
+                            vscode.window.showErrorMessage("Line number ".concat(lineNum, " not found in tokenized BASIC bytes."));
+                            return [2 /*return*/];
+                        }
+                        DESAVEaddr = addr - 1; //count is from 4000 or 8000 need to minus 1 to get correct DESAVE address
+                    }
+                    else {
+                        vscode.window.showErrorMessage('Invalid input. Use decimal line number or #xxxx hex address.');
+                        return [2 /*return*/];
+                    }
+                    return [3 /*break*/, 6];
+                case 5:
+                    DESAVEaddr = 0xFB4E + headerName.length; //non auto-run DESAVE address
+                    _a.label = 6;
+                case 6:
+                    vscode.window.showInformationMessage("Setting DESAVE for non-auto-run program at 0x".concat(DESAVEaddr.toString(16).toUpperCase()));
+                    setSysVar(249, DESAVEaddr); // DESAVE address
                     data = Uint8Array.from(__spreadArray(__spreadArray([], mtxsavehdr_js_1.createHdr, true), bytes, true));
                     return [4 /*yield*/, vscode.workspace.fs.writeFile(uri, data)];
-                case 3:
+                case 7:
                     _a.sent();
                     vscode.window.showInformationMessage("Wrote ".concat(data.length, " bytes to ").concat(uri.fsPath));
-                    return [3 /*break*/, 5];
-                case 4:
+                    return [3 /*break*/, 9];
+                case 8:
                     e_1 = _a.sent();
                     vscode.window.showErrorMessage('Failed to generate or write HEX: ' + String(e_1));
-                    return [3 /*break*/, 5];
-                case 5: return [2 /*return*/];
+                    return [3 /*break*/, 9];
+                case 9: return [2 /*return*/];
             }
         });
     }); });
@@ -156,16 +236,21 @@ function activate(ctx) {
     // Functions that require vscode or less common
     function letCheck(lhsCheck, rhsCheck, vsRange, vsDiags) {
         // Check LET assignments for type compatibility helper
-        //const letMatch = /^\s*LET\s+([A-Za-z][A-Za-z0-9]*\$?)\s*=\s*(.+)$/i.exec(letStr); // removed \s*:\s* for end of line
+        //const letMatch = /^\s*LET\s+([A-Z][A-Z0-9]*\$?)\s*=\s*(.+)$/.exec(letStr); // removed \s*:\s* for end of line
         if (lhsCheck && rhsCheck) {
             // The leading comma skips element 0 (the full match)
             // lhs receives element 1 (the identifier after LET).
             // rhs receives element 2 (the expression after =).
-            var lhsIsString = (0, stdFns_js_1.isValidStrVarName)(lhsCheck); //lhs.endsWith('$');
-            var lhsIsVariable = (0, stdFns_js_1.isValidVarName)(lhsCheck);
+            var lhsIsString = (0, mtxstdfns_js_1.isValidStrVarName)(lhsCheck); //lhs.endsWith('$');
+            var lhsIsVariable = (0, mtxstdfns_js_1.isValidVarName)(lhsCheck);
+            // Validate variable name format (must start with [A-Z], followed by [A-Z0-9])
+            if (!lhsIsString && !lhsIsVariable) {
+                vsDiags.push(new vscode.Diagnostic(vsRange, "Invalid variable name: \"".concat(lhsCheck, "\". Variable names must start with uppercase letter [A-Z] and contain only uppercase letters and digits [A-Z0-9]"), vscode.DiagnosticSeverity.Error));
+                return [];
+            }
             var rhsNonNull = rhsCheck !== null && rhsCheck !== void 0 ? rhsCheck : ''; // ensure a string for downstream validators
-            var rhsIsString = (0, stdFns_js_1.stringExprParts)(rhsNonNull);
-            var rhsIsNumeric = (0, stdFns_js_1.varExprParts)(rhsNonNull); //checks for numeric variables and numeric expressions
+            var rhsIsString = (0, mtxstdfns_js_1.stringExprParts)(rhsNonNull);
+            var rhsIsNumeric = (0, mtxstdfns_js_1.varExprParts)(rhsNonNull); //checks for numeric variables and numeric expressions
             // Treat parenthesised boolean/comparison expressions (e.g. "(PX=31)") as numeric subparts
             // so they don't trigger a type-mismatch when used inside arithmetic: 32*(PX=31)
             var rhsIsNumericAdjusted = rhsIsNumeric.map(function (_a) {
@@ -173,7 +258,7 @@ function activate(ctx) {
                 if (ok)
                     return [text, ok];
                 // isParenthesisedBooleanExpression is imported from stdFns.js
-                if ((0, stdFns_js_1.isParenthesisedBooleanExpression)(text))
+                if ((0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(text))
                     return [text, true];
                 return [text, ok];
             });
@@ -278,6 +363,7 @@ function activate(ctx) {
     function runValidatorsOnSegment(segment, validatorsList, onError, baseOffset) {
         var _a;
         if (baseOffset === void 0) { baseOffset = 0; }
+        var commandMatchedAtStart = false;
         var _loop_1 = function (validator) {
             var flags = validator.re.flags.includes('g') ? validator.re.flags : validator.re.flags + 'g';
             var iter = new RegExp(validator.re.source, flags);
@@ -286,7 +372,16 @@ function activate(ctx) {
                 var localIdx = (_a = match.index) !== null && _a !== void 0 ? _a : 0;
                 if (isIndexInQuotedString(segment, localIdx))
                     return "continue";
+                // Check word boundaries for keywords (BACKUP SOLUTION) - Not implemented or tested yet
+                //const matchEnd = localIdx + match[0].length;
+                //if (!isAtWordBoundary(segment, localIdx, match[0].length)) {
+                //        continue;
+                //}
                 if (validator.name === 'INK' && (match[0] || '').toUpperCase().includes('INKEY$'))
+                    return "continue";
+                // If a command matched at the start of the segment, skip ALL other validators
+                // This prevents INT from matching inside "CSR INT(x),INT(y)" or SIN inside "CIRCLE SIN(a),COS(b),R"
+                if (commandMatchedAtStart)
                     return "continue";
                 var groups = match.slice(1);
                 var failures = validator.validate(groups, match[0]);
@@ -294,6 +389,10 @@ function activate(ctx) {
                     if (f)
                         onError(f, match[0], baseOffset + localIdx, match);
                 });
+                // Mark that we matched a command at the segment start to prevent other validators from running
+                if (localIdx === 0 && validator.expectEnd) {
+                    commandMatchedAtStart = true;
+                }
             };
             while ((match = iter.exec(segment)) !== null) {
                 _loop_2();
@@ -312,7 +411,7 @@ function activate(ctx) {
         var argsText = stripTrailingCommentUnquoted((argsTextRaw || '').trim());
         if (!argsText)
             return res;
-        var parts = (0, stdFns_js_1.splitTopLevel)(argsText);
+        var parts = (0, mtxstdfns_js_1.splitTopLevel)(argsText);
         var hasTopLevelAssignment = function (s) {
             var inString = false;
             var parenDepth = 0;
@@ -334,7 +433,7 @@ function activate(ctx) {
                     continue;
                 }
                 if (ch === '=' && parenDepth === 0) {
-                    if (/([A-Za-z_][A-Za-z0-9_]*\$?)\s*$/.test(s.slice(0, i)))
+                    if (/([A-Z][A-Z0-9]*\$?)\s*$/.test(s.slice(0, i)))
                         return true;
                 }
             }
@@ -348,17 +447,17 @@ function activate(ctx) {
             }
             if (/^".*"$/.test(text))
                 return "continue";
-            var candidate = (0, stdFns_js_1.isParenthesisedBooleanExpression)(text) ? text.slice(1, -1) : text;
-            var boolSpacing = (0, stdFns_js_1.findBooleanOperatorSpacingIssues)(candidate);
+            var candidate = (0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(text) ? text.slice(1, -1) : text;
+            var boolSpacing = (0, mtxstdfns_js_1.findBooleanOperatorSpacingIssues)(candidate);
             boolSpacing.forEach(function (issue) {
                 res.push({
                     groupIndex: 1,
                     message: "Boolean operator ".concat(issue.token, " must be separated by whitespace (found \"").concat(issue.fragment, "\")")
                 });
             });
-            var boolSpans = (0, stdFns_js_1.splitBooleanExpression)(candidate);
+            var boolSpans = (0, mtxstdfns_js_1.splitBooleanExpression)(candidate);
             if (boolSpans.length > 0) {
-                (0, stdFns_js_1.validateBooleanConnectors)(candidate, boolSpans, function (spanStart, spanEnd, bad) {
+                (0, mtxstdfns_js_1.validateBooleanConnectors)(candidate, boolSpans, function (spanStart, spanEnd, bad) {
                     res.push({
                         groupIndex: 1,
                         message: "Invalid boolean connector \"".concat(bad, "\" inside PRINT argument (expected AND, OR, or NOT)")
@@ -425,6 +524,23 @@ function activate(ctx) {
             }
             return false;
         }
+        var isNoddyMarkerText = function (text) {
+            var trimmedText = (text || '').trim();
+            if (/^REM\s+NODDY\s*$/.test(trimmedText))
+                return true;
+            return /:\s*REM\s+NODDY\s*$/.test(trimmedText);
+        };
+        // Determine the last BASIC line (digits followed by whitespace, not in CODE blocks)
+        var lastBasicLine = -1;
+        for (var i = 0; i < doc.lineCount; i++) {
+            var text = doc.lineAt(i).text.trim();
+            if (!text)
+                continue;
+            if (isInCodeBlock(i))
+                continue;
+            if (/^\d+\s+/.test(text))
+                lastBasicLine = i;
+        }
         // Second pass: validate BASIC line numbers (skip CODE block lines and NODDY section)
         for (var i = 0; i < doc.lineCount; i++) {
             var line = doc.lineAt(i);
@@ -438,10 +554,26 @@ function activate(ctx) {
             if (isInCodeBlock(i)) {
                 continue;
             }
-            // Check for NODDY trigger
-            //if (/^\d+\s+(?:REM\s*)?NODDY/i.test(trimmed)) {
-            if (/^\d+\s+REM\s+NODDY/i.test(trimmed)) {
-                noddyStartLine = i;
+            // Check for NODDY trigger (REM NODDY only, must be final BASIC line)
+            var noddyLineMatch = /^(\d+)\s+(.*)$/.exec(trimmed);
+            if (noddyLineMatch) {
+                var body = noddyLineMatch[2] || '';
+                if (isNoddyMarkerText(body)) {
+                    if (i === lastBasicLine) {
+                        noddyStartLine = i;
+                    }
+                    else {
+                        var remMatch = /REM\s+NODDY/.exec(text);
+                        var start = remMatch ? remMatch.index : 0;
+                        var end = remMatch ? remMatch.index + remMatch[0].length : Math.min(text.length, start + 10);
+                        errors.push({
+                            line: i,
+                            start: start,
+                            end: end,
+                            message: 'REM NODDY must be the final BASIC line in the listing'
+                        });
+                    }
+                }
             }
             // Skip lines after NODDY trigger
             if (noddyStartLine >= 0 && i > noddyStartLine) {
@@ -449,6 +581,10 @@ function activate(ctx) {
             }
             // Check if line starts with a BASIC line number
             // Must be decimal digits only (not hex like 400C)
+            // Skip lines that start with whitespace (assembly lines)
+            if (/^\s/.test(text)) {
+                continue; // Assembly line (indented), not a BASIC line
+            }
             var lineNumMatch = /^(\d+)/.exec(trimmed);
             if (!lineNumMatch) {
                 errors.push({
@@ -461,12 +597,12 @@ function activate(ctx) {
             }
             var lineNum = parseInt(lineNumMatch[1], 10);
             // Check line number is in valid range
-            if (lineNum < 1 || lineNum > 65535) {
+            if (lineNum < 0 || lineNum > 65535) {
                 errors.push({
                     line: i,
                     start: 0,
                     end: lineNumMatch[1].length,
-                    message: "Line number ".concat(lineNum, " is out of valid range (1-65535)")
+                    message: "Line number ".concat(lineNum, " is out of valid range (0-65535)")
                 });
             }
             // Check line numbers are ascending
@@ -483,7 +619,7 @@ function activate(ctx) {
         return { errors: errors, noddyStartLine: noddyStartLine, codeBlockRanges: codeBlockRanges };
     } // END of validateLineNumbers function 
     function refreshDiagnostics(doc) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v;
         if (doc.languageId !== 'mtxbasic') {
             return;
         }
@@ -504,7 +640,7 @@ function activate(ctx) {
             { id: 'ATTR', pattern: 'ATTR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 3 }, { kind: 'numeric', min: 0, max: 1 }], expectEnd: true },
             { id: 'BAUD', pattern: 'BAUD', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 1 }, { kind: 'numeric', min: 75, max: 19200 }], expectEnd: true }, //BAUD allowable values 75, 110, 150, 300, 600, 1200, 2400, 4800, 9600, 19200
             { id: 'CHR$', pattern: 'CHR\\$', cmdname: 'strfn', args: [{ kind: 'expr', min: 0, max: 255 }], expectEnd: true },
-            { id: 'CIRCLE', pattern: 'CIRCLE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }, { kind: 'numeric', min: 1, max: 255 }], expectEnd: true },
+            { id: 'CIRCLE', pattern: 'CIRCLE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }, { kind: 'numeric', min: 0.1, max: 255.0 }], expectEnd: true },
             { id: 'CLEAR', pattern: 'CLEAR', cmdname: 'stdcmd', args: [], expectEnd: true },
             { id: 'CLOCK', pattern: 'CLOCK', cmdname: 'strcmd', args: [{ kind: 'string', min: 0, max: 999999 }], expectEnd: true },
             { id: 'CLS', pattern: 'CLS', cmdname: 'stdcmd', args: [], expectEnd: true },
@@ -535,8 +671,8 @@ function activate(ctx) {
                     { kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 255 },
                     { kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 255 }],
                 expectEnd: true },
-            { id: 'GOSUB', pattern: 'GOSUB', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 65535 }] }, //CONTROL STRUCTURE range based on line number. Cannot be an expression. Can be a list of linenumbers associated with ON..GOTO
-            { id: 'GOTO', pattern: 'GOTO', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 65535 }] }, //CONTROL STRUCTURE  range based on line number. Cannot be an expression. Can be a list of linenumbers associated with ON..GOTO
+            { id: 'GOSUB', pattern: 'GOSUB', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }] }, //CONTROL STRUCTURE range based on line number. Cannot be an expression. Can be a list of linenumbers associated with ON..GOTO
+            { id: 'GOTO', pattern: 'GOTO', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }] }, //CONTROL STRUCTURE  range based on line number. Cannot be an expression. Can be a list of linenumbers associated with ON..GOTO
             { id: 'GR$', pattern: 'GR\\$', cmdname: 'strfn', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }, { kind: 'numeric', min: 0, max: 7 }], expectEnd: true },
             //{ id: 'IF', pattern: 'IF', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE e.g. IF A>=0 A followed by relational operator <>|<=|>=|=|<|> and can use AND,OR, NOT
             { id: 'INK', pattern: 'INK', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 15 }], expectEnd: true }, //CONTROL STRUCTURE  
@@ -544,7 +680,7 @@ function activate(ctx) {
             { id: 'INP', pattern: 'INP', cmdname: 'numfn', args: [{ kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
             //{ id: 'INPUT', pattern: 'INPUT',  cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, // Can have string before a variable list. allows comma and semicolon between exprs and at end of line. Only allows ; or , before a : if another command after it (common to all)
             { id: 'INT', pattern: 'INT', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1E38, max: 1E38 }], expectEnd: true },
-            { id: 'LEFT$', pattern: 'LEFT\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 159 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=LEFT$("str..",num) = 28chars or more 
+            { id: 'LEFT$', pattern: 'LEFT\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=LEFT$("str..",num) = 28chars or more 
             { id: 'LEN', pattern: 'LEN', cmdname: 'numfn', args: [{ kind: 'expr' }], expectEnd: true }, // string expression. must have a space after LEN not to confuse with an array which has no space
             //{ id: 'LET', pattern: 'LET',  cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true },
             { id: 'LINE', pattern: 'LINE', cmdname: 'stdcmd',
@@ -555,7 +691,7 @@ function activate(ctx) {
             //{ id: 'LPRINT', pattern: 'LPRINT',  cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, // Can have string before a variable list. allows comma and semicolon between exprs and at end of line. Only allows ; or , before a : if another command after it (common to all)
             { id: 'LN', pattern: 'LN', cmdname: 'numfn', args: [{ kind: 'numeric' }], expectEnd: true }, // range to be confirmed
             { id: 'LOAD', pattern: 'LOAD', cmdname: 'strcmd', args: [{ kind: 'string', min: 0, max: 14 }], expectEnd: true },
-            { id: 'MID$', pattern: 'MID\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 159 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=MID$("str..",num,num) = 28chars or more 
+            { id: 'MID$', pattern: 'MID\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=MID$("str..",num,num) = 28chars or more 
             { id: 'MOD', pattern: 'MOD', cmdname: 'numfn', args: [{ kind: 'numeric' }, { kind: 'numeric' }], expectEnd: true }, //range to be confirmed
             { id: 'MVSPR', pattern: 'MVSPR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 8 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true }, //3rd param needs for detail
             { id: 'NEXT', pattern: 'NEXT', cmdname: 'stdcmd', args: [{ kind: 'expr', required: false }], expectEnd: true }, //CONTROL STRUCTURE MUST BE Alphanumeric expr. No expr is also valid
@@ -565,7 +701,7 @@ function activate(ctx) {
             { id: 'OR', pattern: 'OR', cmdname: 'stdcmd', args: [] }, // removed , expectEnd: true so that A=OR*5 is valid
             { id: 'OUT', pattern: 'OUT', cmdname: 'numfn', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
             { id: 'PAPER', pattern: 'PAPER', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 15 }], expectEnd: true },
-            { id: 'PAUSE', pattern: 'PAUSE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 10000 }], expectEnd: true }, //range to be confirmed
+            { id: 'PAUSE', pattern: 'PAUSE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 100000 }], expectEnd: true }, //range to be confirmed
             { id: 'PEEK', pattern: 'PEEK', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true },
             { id: 'PHI', pattern: 'PHI', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0 }], expectEnd: true }, //float number, angle in radians
             { id: 'PI', pattern: 'PI', cmdname: 'stdcmd', args: [] }, //removed , expectEnd: true so that A=PI*5 is valid
@@ -578,7 +714,7 @@ function activate(ctx) {
             { id: 'REM', pattern: 'REM', cmdname: 'strcmd', args: [{ kind: 'string' }], expectEnd: true }, // can be anything - how do we avoid false positives like REM valid information where code determines that valid or Valid or VALID is part of VAL!
             { id: 'RESTORE', pattern: 'RESTORE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true },
             { id: 'RETURN', pattern: 'RETURN', cmdname: 'stdcmd', args: [], expectEnd: true },
-            { id: 'RIGHT$', pattern: 'RIGHT\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 159 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=RIGHT$("str..",num) = 28chars or more 
+            { id: 'RIGHT$', pattern: 'RIGHT\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=RIGHT$("str..",num) = 28chars or more 
             { id: 'RND', pattern: 'RND', cmdname: 'stdcmd', args: [] }, //removed , expectEnd: true so that A=RND*5 is valid
             { id: 'ROM', pattern: 'ROM', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 255 }], expectEnd: true }, //range to be confirmed
             { id: 'SAVE', pattern: 'SAVE', cmdname: 'strcmd', args: [{ kind: 'string', min: 0, max: 14 }], expectEnd: true },
@@ -616,7 +752,7 @@ function activate(ctx) {
         // build generic validators from specs and confirm MTX BASIC line and commands/functions are correctly formatted
         var validators = specs.map(function (spec) {
             //const re = new RegExp(`\\b(?:${spec.pattern})\\s*([^:']*)`, 'gi'); 
-            var re = new RegExp("\\b(?:".concat(spec.pattern, ")\\s*(.*)"), 'i');
+            var re = new RegExp("\\b(?:".concat(spec.pattern, ")\\b\\s*(.*)"), ''); // case-sensitive: only uppercase keywords match specs, mixed-case caught by MIXED_CASE_KEYWORD validator
             //colon and single quote handling moved to stripTrailingCommentUnquoted function, 
             // although single quotes are not allowed in MTX BASIC unless within a double quotation string literal
             // capture args up to comment/colon Also needs to be \\b not \b as before. 
@@ -626,7 +762,7 @@ function activate(ctx) {
                 re: re,
                 expectEnd: spec.expectEnd,
                 validate: function (groups, rawMatch) {
-                    var _a, _b, _c;
+                    var _a, _b, _c, _d;
                     var res = [];
                     /**                 BEFORE the for loop (spacing and argument count errors):
                                         groupIndex: 0  // Command-level errors (spacing, unexpected args)
@@ -649,14 +785,43 @@ function activate(ctx) {
                         var trimRawMatch = rawMatch.trimStart(); //trim leading spaces to get accurate position
                         var avoidArgs = trimRawMatch.toUpperCase().indexOf(spec.id) + spec.id.length; //find first space after command name                 
                         var argText = (_b = groups[0]) !== null && _b !== void 0 ? _b : '';
+                        var hasArgsSpec = !!(spec.args && spec.args.length > 0);
+                        // No-arg commands: flag multiple spaces before any following token (e.g. RETURN  ELSE)
+                        if (!hasArgsSpec) {
+                            var tail = trimRawMatch.slice(avoidArgs);
+                            var mSpace = /^(\s+)(\S+)?/.exec(tail);
+                            var space = (_c = mSpace === null || mSpace === void 0 ? void 0 : mSpace[1]) !== null && _c !== void 0 ? _c : '';
+                            var hasFollowing = !!(mSpace && mSpace[2]);
+                            var _e = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _e.multiSpaceYes, msg2 = _e.msg2;
+                            if (multiSpaceYes && hasFollowing && spec.id !== 'REM') {
+                                res.push({ groupIndex: 0, message: msg2 });
+                            }
+                        }
                         var argPos = argText ? trimRawMatch.indexOf(argText, avoidArgs) : -1;
-                        var space = rawMatch.slice(spec.id.length, rawMatch.indexOf(groups[0])); //! removed undefined error but not null as apossibility
                         // extract space between COMMAND and first argument/parameter
-                        if (argText && argPos >= 0) {
-                            var space_1 = trimRawMatch.slice(avoidArgs, argPos);
-                            var spaceYes = (0, stdFns_js_1.isSpaceNeeded)(spec.id); //true needs space. false then no space
-                            var _d = (0, stdFns_js_1.isNoSpaceFound)(space_1), spaceMissingYes = _d.spaceMissingYes, msg0 = _d.msg0;
-                            var _e = (0, stdFns_js_1.isMultiSpaceFound)(space_1), multiSpaceYes = _e.multiSpaceYes, msg2 = _e.msg2;
+                        // Check if this command has optional arguments
+                        var isOptionalArg = spec.args && spec.args.length > 0 && spec.args[0].required === false;
+                        var hasNoArgument = !argText || argText.trim() === '';
+                        // Special handling for commands with optional arguments (like NEXT)
+                        if (isOptionalArg && hasNoArgument) {
+                            // No argument provided for optional parameter - only check for multiple spaces
+                            var tailAfterCmd = trimRawMatch.slice(avoidArgs);
+                            var spaceMatch = /^(\s+)/.exec(tailAfterCmd);
+                            if (spaceMatch) {
+                                var space = spaceMatch[1];
+                                var _f = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _f.multiSpaceYes, msg2 = _f.msg2;
+                                if (multiSpaceYes) {
+                                    res.push({ groupIndex: 0, message: msg2 });
+                                }
+                            }
+                            // Skip all other spacing checks for optional args with no argument
+                        }
+                        else if (argText && argText.trim() && argPos >= 0) {
+                            // Argument provided - check all spacing rules
+                            var space = trimRawMatch.slice(avoidArgs, argPos);
+                            var spaceYes = (0, mtxstdfns_js_1.isSpaceNeeded)(spec.id); //true needs space. false then no space
+                            var _g = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _g.spaceMissingYes, msg0 = _g.msg0;
+                            var _h = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _h.multiSpaceYes, msg2 = _h.msg2;
                             var msg1 = "Remove the space(s) after the command or between the function and parenthesis";
                             if (spaceMissingYes && spaceYes) {
                                 res.push({ groupIndex: 0, message: msg0 });
@@ -668,26 +833,38 @@ function activate(ctx) {
                                 res.push({ groupIndex: 0, message: msg2 });
                             } // option to delete this and return result with other results later
                         }
+                        else if (isOptionalArg && hasNoArgument) {
+                            // No argument but optional - only check for multiple spaces (not missing space)
+                            var tailAfterCmd = trimRawMatch.slice(avoidArgs);
+                            var spaceMatch = /^(\s+)/.exec(tailAfterCmd);
+                            if (spaceMatch) {
+                                var space = spaceMatch[1];
+                                var _j = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _j.multiSpaceYes, msg2 = _j.msg2;
+                                if (multiSpaceYes) {
+                                    res.push({ groupIndex: 0, message: msg2 });
+                                }
+                            }
+                        }
                     }
                     //LET covered earlier as could be complex expression. REM could be anything so no validation
                     // PRINT / LPRINT / INPUT are handled outside the generic validator loop via printCheck()
                     // keep the generic validator code free of PRINT/LPRINT/INPUT special cases
                     if (spec.id === 'CHR$' || spec.id === 'GR$' || spec.id === 'LEFT$' || spec.id === 'MID$' || spec.id === 'RIGHT$' || spec.id === 'STR$') {
                         //strip outer parentheses if present for string functions otherwise it will not correctly determine the number of arguments
-                        var s = (0, stdFns_js_1.stripOuterParentheses)(groups[0] || '');
+                        var s = (0, mtxstdfns_js_1.stripOuterParentheses)(groups[0] || '');
                         groups[0] = s;
                     }
                     // Use splitTopLevel so commas inside parentheses or quoted strings are ignored
-                    var splitGroups = (0, stdFns_js_1.splitTopLevel)(groups[0] || '') || []; // replaces code below
+                    var splitGroups = (0, mtxstdfns_js_1.splitTopLevel)(groups[0] || '') || []; // replaces code below
                     var argsText = (groups[0] || '').trim();
                     var want = spec.args || [];
-                    var parts = (0, stdFns_js_1.splitTopLevel)(argsText); //why is this not splitting when args are present within function calls?
+                    var parts = (0, mtxstdfns_js_1.splitTopLevel)(argsText); //why is this not splitting when args are present within function calls?
                     // special case as SOUND with 1st 3 params is also OK as well as the long 7 params version
                     if (spec.id === "SOUND") {
                         if (splitGroups.length === 3) { //7 args is normal, 3 args is the shortened version
                             //skip additonal arguments
-                            argsText = (0, stdFns_js_1.trimCommaList)(argsText, 3);
-                            want = (0, stdFns_js_1.trimArray)(want, 3);
+                            argsText = (0, mtxstdfns_js_1.trimCommaList)(argsText, 3);
+                            want = (0, mtxstdfns_js_1.trimArray)(want, 3);
                         }
                         else if (parts.length !== 7) {
                             res.push({ groupIndex: 1, message: "".concat(spec.id, " requires either 3 or 7 argument(s)") });
@@ -707,21 +884,29 @@ function activate(ctx) {
                         }
                     }
                     if (parts.length < want.length) {
-                        res.push({ groupIndex: 1, message: "".concat(spec.id, " requires ").concat(want.length, " argument(s)") });
+                        // Only error if at least one of the missing arguments is required
+                        var hasMissingRequired = want.slice(parts.length).some(function (a) { return a.required !== false; });
+                        if (hasMissingRequired) {
+                            res.push({ groupIndex: 1, message: "".concat(spec.id, " requires ").concat(want.length, " argument(s)") });
+                        }
                     }
                     if (spec.expectEnd && parts.length > want.length) {
                         res.push({ groupIndex: 1, message: "unexpected extra argument(s): ".concat(parts.slice(want.length).join(', ')) });
                     }
                     for (var i = 0; i < want.length; i++) {
                         var a = want[i];
-                        var text = (_c = parts[i]) !== null && _c !== void 0 ? _c : '';
+                        var text = (_d = parts[i]) !== null && _d !== void 0 ? _d : '';
+                        // Skip validation if argument is optional and empty
+                        if (a.required === false && !text.trim()) {
+                            continue;
+                        }
                         if (a.required && !text) {
                             res.push({ groupIndex: 1, message: "argument ".concat(i + 1, " required") });
                             continue;
                         }
-                        var isNumExprValid = (0, stdFns_js_1.isValidVarExprArithmetic)(text); //Note isValidVarExprArithmetic tests without any parentheses
-                        var isNumValid = (0, stdFns_js_1.isValidArithmetic)(text); //Note isValidArithmetic tests without any parentheses
-                        var isStrExprValid = (0, stdFns_js_1.stringExprParts)(text).every(function (row) { return row[1] === true; });
+                        var isNumExprValid = (0, mtxstdfns_js_1.isValidVarExprArithmetic)(text); //Note isValidVarExprArithmetic tests without any parentheses
+                        var isNumValid = (0, mtxstdfns_js_1.isValidArithmetic)(text); //Note isValidArithmetic tests without any parentheses
+                        var isStrExprValid = (0, mtxstdfns_js_1.stringExprParts)(text).every(function (row) { return row[1] === true; });
                         //At this point, the validator Command/Function is stripped out, only nested commands/functions like those above and SP$ or INKEY$
                         //LET , LPRINT, PRINT, INPUT & IF typically can cause this issue. These are likely to be tackled in the main before validation.
                         if ((spec.cmdname === 'numfn' || spec.cmdname === 'stdcmd') && (a.kind === 'expr' || a.kind === 'numeric')) {
@@ -742,7 +927,7 @@ function activate(ctx) {
                             }
                             else if (isNumExprValid || isNumValid) {
                                 if (isNumValid) {
-                                    var nval = (0, stdFns_js_1.convertToNumber)(text);
+                                    var nval = (0, mtxstdfns_js_1.convertToNumber)(text);
                                     if (nval === null) {
                                         res.push({ groupIndex: 1, message: "argument ".concat(i + 1, " is not a valid number (got ").concat(text, ")") });
                                     }
@@ -764,14 +949,14 @@ function activate(ctx) {
                         } // END of Numerical checks
                         // if val === null we accept (expression/variables present) — other validators can analyse further
                         else if ((spec.cmdname === 'strfn' || spec.cmdname === 'strcmd') && (a.kind === 'expr' || a.kind === 'string')) {
-                            var txtNoParen = (0, stdFns_js_1.stripOuterParentheses)(text); //only strips parentheses if presen
+                            var txtNoParen = (0, mtxstdfns_js_1.stripOuterParentheses)(text); //only strips parentheses if presen
                             if (spec.id === 'CHR$' || spec.id === 'GR$' || spec.id === 'STR$') {
                                 if (!isNumExprValid && !isNumValid) {
                                     res.push({ groupIndex: 1, message: "argument ".concat(i + 1, " should be numerical for ").concat(spec.id, " (got ").concat(text, ")") });
                                 }
                                 else if (isNumExprValid || isNumValid) {
                                     if (isNumValid) {
-                                        var nval = (0, stdFns_js_1.convertToNumber)(text);
+                                        var nval = (0, mtxstdfns_js_1.convertToNumber)(text);
                                         if (nval !== null) { // Add null guard
                                             if (spec.id === 'CHR$' || spec.id === 'GR$' || spec.id === 'STR$' || text.startsWith('CHR$') || text.startsWith('GR$') || text.startsWith('STR$')) {
                                                 if (a.min !== undefined && a.max !== undefined && Number.isSafeInteger(a.min) && Number.isSafeInteger(a.max)) {
@@ -801,7 +986,7 @@ function activate(ctx) {
                                     }
                                     else if (isNumExprValid || isNumValid) {
                                         if (isNumValid) {
-                                            var nval = (0, stdFns_js_1.convertToNumber)(text);
+                                            var nval = (0, mtxstdfns_js_1.convertToNumber)(text);
                                             if (nval !== null) { // Add null guard
                                                 if ((!Number.isInteger(nval) || (a.min !== undefined && nval < a.min) || (a.max !== undefined && nval > a.max))) {
                                                     res.push({ groupIndex: 1, message: "argument ".concat(i + 1, " must be integer and in the range ").concat(a.min, "..").concat(a.max, " (got ").concat(text, ")") });
@@ -812,7 +997,7 @@ function activate(ctx) {
                                 } // end of else if (i>=1)  
                             } // END of LEFT$, MID$, RIGHT$ checks
                             else if ((spec.id === 'LOAD' || spec.id === 'SAVE' || text.startsWith('LOAD') || text.startsWith('SAVE')) && isStrExprValid) { // LOAD and SAVE additional checks
-                                var fn = (0, stdFns_js_1.stripAllCharacters)(txtNoParen, '"'); // captured filename string, no quotes.                                                           
+                                var fn = (0, mtxstdfns_js_1.stripAllCharacters)(txtNoParen, '"'); // captured filename string, no quotes.                                                           
                                 if (fn.length > 14) { //only single string, not expression  
                                     res.push({ groupIndex: 0,
                                         message: "Filename string too long for ".concat(spec.id, " (maximum 14 characters allowed)")
@@ -820,7 +1005,7 @@ function activate(ctx) {
                                 } // end of length check
                             } // END of LOAD and SAVE checks
                             else if ((spec.id === 'CLOCK' || text.startsWith('CLOCK')) && isStrExprValid) { //Clock additional checks
-                                var digits = (0, stdFns_js_1.stripAllCharacters)(txtNoParen, '"'); // captured numeric component of the string, no quotes.
+                                var digits = (0, mtxstdfns_js_1.stripAllCharacters)(txtNoParen, '"'); // captured numeric component of the string, no quotes.
                                 //format / length check: must be exactly 6 digits
                                 if (digits.length !== 6) {
                                     res.push({ groupIndex: 0, message: "CLOCK string must be exactly 6 digits (HHMMSS) (got \"".concat(digits, "\")") });
@@ -842,9 +1027,89 @@ function activate(ctx) {
             };
         } // END of general validator code
         ); // END of validator
+        // MTX BASIC known keywords list
+        var knownKeywords = [
+            'PRINT', 'LPRINT', 'INPUT', 'LET', 'IF', 'THEN', 'ELSE', 'FOR', 'TO', 'STEP', 'NEXT',
+            'GOTO', 'GOSUB', 'RETURN', 'REM', 'DATA', 'READ', 'DIM', 'STOP', 'CONT', 'CLEAR',
+            'CODE', 'PLOT', 'CIRCLE', 'LINE', 'DRAW', 'CLS', 'COLOUR', 'COLOR', 'INK', 'PAPER', 'SOUND',
+            'ABS', 'ASC', 'ATN', 'COS', 'EXP', 'INT', 'LN', 'RND', 'SGN', 'SIN', 'SQR', 'TAN', 'VAL',
+            'CHR$', 'LEFT$', 'MID$', 'RIGHT$', 'STR$', 'LEN', 'INKEY$', 'TIME$', 'SPK$', 'GR$',
+            'PEEK', 'POKE', 'OUT', 'INP', 'USR', 'AND', 'OR', 'NOT', 'MOD', 'ON',
+            'SAVE', 'LOAD', 'VERIFY', 'RUN', 'LIST', 'NEW', 'AUTO', 'EDIT', 'PI', 'PHI',
+            'ADJSPR', 'ANGLE', 'ARC', 'ATTR', 'BAUD', 'CLOCK', 'CRVS', 'CSR', 'CTLSPR',
+            'DSI', 'EDITOR', 'GENPAT', 'LLIST', 'MVSPR', 'NODDY', 'PAUSE', 'PLOD', 'RAND',
+            'RESTORE', 'ROM', 'SBUF', 'SPRITE', 'USER', 'VIEW', 'VS'
+        ];
+        // Shared helper: check if a word is a mixed-case MTX BASIC keyword
+        // Returns the uppercase version if it's a keyword, null otherwise
+        var checkMixedCaseKeyword = function (word) {
+            // Skip if already fully uppercase (valid)
+            if (word === word.toUpperCase())
+                return null;
+            var upperCase = word.toUpperCase();
+            return knownKeywords.includes(upperCase) ? upperCase : null;
+        };
+        // Catch mixed-case keywords at the start of commands
+        // Catch keywords with embedded or trailing underscores (e.g., COLOUR_, Col_our)
+        validators.push({
+            name: 'MIXED_CASE_KEYWORD',
+            re: /^\s*([A-Za-z_][A-Za-z0-9_]*\$?)/,
+            expectEnd: false,
+            validate: function (groups, rawMatch) {
+                var keyword = groups[0] || '';
+                // Check if keyword contains underscores
+                if (keyword.includes('_')) {
+                    // Remove underscores and check if it matches a keyword
+                    var withoutUnderscore = keyword.replace(/_/g, '');
+                    var upperWithoutUnderscore = withoutUnderscore.toUpperCase();
+                    if (knownKeywords.includes(upperWithoutUnderscore)) {
+                        return [{
+                                groupIndex: 1,
+                                message: "Keywords cannot contain underscores: \"".concat(keyword, "\" should be \"").concat(upperWithoutUnderscore, "\"")
+                            }];
+                    }
+                }
+                // Check for mixed-case keywords (only if no underscores)
+                var upperCase = checkMixedCaseKeyword(keyword);
+                if (upperCase) {
+                    return [{
+                            groupIndex: 1,
+                            message: "Keywords must be uppercase: \"".concat(keyword, "\" should be \"").concat(upperCase, "\"")
+                        }];
+                }
+                // Not a keyword or already uppercase
+                return [];
+            }
+        });
+        // Catch mixed-case keywords used as variable names in LET statements
+        validators.push({
+            name: 'INVALID_LET_VARIABLE',
+            re: /^\s*LET\s+([^=\s]+)\s*=/,
+            expectEnd: false,
+            validate: function (groups, rawMatch) {
+                var varName = groups[1] || '';
+                // Check if it's NOT a valid variable name pattern [A-Z][A-Z0-9]*(\$|())
+                if (!/^[A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?)$/.test(varName)) {
+                    // Check if it's a mixed-case keyword
+                    var upperCase = checkMixedCaseKeyword(varName);
+                    if (upperCase) {
+                        return [{
+                                groupIndex: 1,
+                                message: "Keywords must be uppercase: \"".concat(varName, "\" should be \"").concat(upperCase, "\"")
+                            }];
+                    }
+                    // Not a keyword, so it's an invalid variable name
+                    return [{
+                            groupIndex: 1,
+                            message: "Invalid variable name in LET statement: \"".concat(varName, "\". Variable names must start with uppercase letter [A-Z] and contain only uppercase letters and digits [A-Z0-9]")
+                        }];
+                }
+                return [];
+            }
+        });
         // Check line numbers first and suppress NODDY lines
         // Check line numbers first - also detects NODDY trigger line AND CODE block ranges
-        var _u = validateLineNumbers(doc), lineNumErrors = _u.errors, noddyStartLine = _u.noddyStartLine, codeBlockRanges = _u.codeBlockRanges;
+        var _w = validateLineNumbers(doc), lineNumErrors = _w.errors, noddyStartLine = _w.noddyStartLine, codeBlockRanges = _w.codeBlockRanges;
         for (var _i = 0, lineNumErrors_1 = lineNumErrors; _i < lineNumErrors_1.length; _i++) {
             var err = lineNumErrors_1[_i];
             var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
@@ -864,8 +1129,8 @@ function activate(ctx) {
         // Z80 CODE BLOCK VALIDATION
         // Validate assembly lines BEFORE the main BASIC loop
         // ============================================
-        for (var _v = 0, codeBlockRanges_2 = codeBlockRanges; _v < codeBlockRanges_2.length; _v++) {
-            var block = codeBlockRanges_2[_v];
+        for (var _x = 0, codeBlockRanges_2 = codeBlockRanges; _x < codeBlockRanges_2.length; _x++) {
+            var block = codeBlockRanges_2[_x];
             for (var i = block.start; i <= block.end; i++) {
                 var lineText = doc.lineAt(i).text;
                 var trimmed = lineText.trim();
@@ -914,13 +1179,41 @@ function activate(ctx) {
             // assembly block; the assembly lines inside the block are validated
             // earlier via `codeBlockRanges`. Skip generic BASIC validators for
             // this marker only so we don't flag the correct form as an error.
-            if (/^\d+\s+CODE\s*$/i.test(trimmedLine)) {
+            if (/^\d+\s+CODE\s*$/.test(trimmedLine)) {
                 return "continue";
             }
-            // MTX BASIC inline editor has a max line length of 159 characters
-            if (line.text.length >= 159) { // range is 0 to 158 (159 characters max)
-                var range = new vscode.Range(new vscode.Position(i, 159), new vscode.Position(i, line.text.length));
-                diags.push(new vscode.Diagnostic(range, "Line exceeds maximum length of 159 characters (got ".concat(line.text.length, ")"), vscode.DiagnosticSeverity.Error));
+            // MTX BASIC inline editor has a max line length of 158 characters
+            // the 1st line is indented by 1 character and the last line requires a character space for the cursor at the end of the line.
+            // Maximum line length is 158 characters including line number and space.
+            if (line.text.length >= 158) { // range is 0 to 158 (158 characters max)
+                var range = new vscode.Range(new vscode.Position(i, 158), new vscode.Position(i, line.text.length));
+                diags.push(new vscode.Diagnostic(range, "Line exceeds maximum length of 158 characters (got ".concat(line.text.length, ")"), vscode.DiagnosticSeverity.Error));
+            }
+            // Flag RETURN  ELSE (double space) before ELSE colon injection
+            var returnElseDoubleSpace = (function () {
+                var inString = false;
+                var upper = line.text.toUpperCase();
+                for (var j = 0; j < line.text.length; j++) {
+                    if (line.text[j] === '"') {
+                        inString = !inString;
+                        continue;
+                    }
+                    if (inString)
+                        continue;
+                    if (upper.startsWith('RETURN', j) && (j === 0 || !/[A-Z0-9_$]/.test(line.text[j - 1]))) {
+                        var after = line.text.slice(j + 6);
+                        var m = /^(\s{2,})ELSE\b/.exec(after);
+                        if (m) {
+                            return { start: j + 6, len: m[1].length };
+                        }
+                    }
+                }
+                return null;
+            })();
+            if (returnElseDoubleSpace) {
+                var rangeStart = returnElseDoubleSpace.start;
+                var rangeEnd = rangeStart + returnElseDoubleSpace.len;
+                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, rangeStart), new vscode.Position(i, rangeEnd)), 'RETURN must be followed by a single space before ELSE', vscode.DiagnosticSeverity.Error));
             }
             // Pre-process: inject colon before ELSE if it follows a command without one
             // Only applies to lines containing IF...THEN...ELSE
@@ -952,13 +1245,13 @@ function activate(ctx) {
                     if (inString)
                         continue;
                     var slice = upper.slice(j);
-                    if (!ifFound && slice.startsWith('IF') && (j === 0 || !/[A-Z0-9_$]/i.test(line.text[j - 1]))) {
+                    if (!ifFound && slice.startsWith('IF') && (j === 0 || !/[A-Z0-9_$]/.test(line.text[j - 1]))) {
                         ifFound = true;
                     }
-                    if (ifFound && !thenFound && slice.startsWith('THEN') && (j === 0 || !/[A-Z0-9_$]/i.test(line.text[j - 1]))) {
+                    if (ifFound && !thenFound && slice.startsWith('THEN') && (j === 0 || !/[A-Z0-9_$]/.test(line.text[j - 1]))) {
                         thenFound = true;
                     }
-                    if (thenFound && !elseFound && slice.startsWith('ELSE') && (j === 0 || !/[A-Z0-9_$]/i.test(line.text[j - 1]))) {
+                    if (thenFound && !elseFound && slice.startsWith('ELSE') && (j === 0 || !/[A-Z0-9_$]/.test(line.text[j - 1]))) {
                         elseFound = true;
                     }
                 }
@@ -984,7 +1277,7 @@ function activate(ctx) {
                         var charBefore = j > 0 ? line.text[j - 1] : ' ';
                         var charAfter = j + 4 < line.text.length ? line.text[j + 4] : ' ';
                         // Verify it's a word boundary
-                        if (!/[A-Z0-9_$]/i.test(charBefore) && !/[A-Z0-9_$]/i.test(charAfter)) {
+                        if (!/[A-Z0-9_$]/.test(charBefore) && !/[A-Z0-9_$]/.test(charAfter)) {
                             // Check if already preceded by colon (ignoring whitespace)
                             var beforeElse = result.trimEnd();
                             if (!beforeElse.endsWith(':')) {
@@ -996,7 +1289,7 @@ function activate(ctx) {
                 }
                 processedLineText = result;
             }
-            var segments = (0, stdFns_js_1.splitLineSegments)(processedLineText); // Changed from line.text                
+            var segments = (0, mtxstdfns_js_1.splitLineSegments)(processedLineText); // Changed from line.text                
             var _loop_5 = function (seg) {
                 // --- compute quoted-string ranges for this segment so diagnostics ignore text inside quotes ---
                 var stringRanges = [];
@@ -1022,21 +1315,29 @@ function activate(ctx) {
                     return stringRanges.some(function (r) { return pos >= r[0] && pos < r[1]; });
                 };
                 // --- end quoted-string helper ---  
-                // START O VALIDATION, starting with the specials then the general
+                // START OF VALIDATION, starting with the specials then the general
                 var rhs = [];
                 //new flags to avoid double validation
                 var letFlag = false;
                 var printFlag = false;
                 var ifFlag = false;
+                var thenFlag = false;
+                var elseFlag = false;
                 var forFlag = false;
+                var toFlag = false;
+                var stepFlag = false;
+                var nextFlag = false;
                 var onFlag = false;
+                var gotoFlag = false;
+                var gosubFlag = false;
+                var returnFlag = false;
                 var dataFlag = false;
                 var readFlag = false;
                 var inputFlag = false;
                 var dimFlag = false;
                 var codeFlag = false;
                 // Match assignments not preceded by LET (BareAssignment) when they should
-                var bareAss = /^\s*(?:\d+\s+)?(?!LET\b)([A-Za-z][A-Za-z0-9]*\$?)\s*=/i.exec(seg.text);
+                var bareAss = /^\s*(?:\d+\s+)?(?!LET\b)([A-Z][A-Z0-9]*\$?)\s*=/.exec(seg.text);
                 var bstart = seg.start;
                 var brange = new vscode.Range(new vscode.Position(i, bstart), new vscode.Position(i, bstart + 3)); //length for testing only
                 if (bareAss) {
@@ -1048,14 +1349,14 @@ function activate(ctx) {
                     }
                 } // END of BareAssignment validator
                 //Guard to capture a string only line, for example "string only test"
-                var strOnlyLine = /^\s*"(?:[^"\\]|\\.)*"\s*$/i.exec(seg.text);
+                var strOnlyLine = /^\s*"(?:[^"\\]|\\.)*"\s*$/.exec(seg.text);
                 var srange = new vscode.Range(new vscode.Position(i, seg.start), new vscode.Position(i, seg.start + seg.text.length));
                 if (strOnlyLine) {
                     diags.push(new vscode.Diagnostic(srange, "Unexpected literal: string only not a proper assignment ".concat(seg.text, "='"), vscode.DiagnosticSeverity.Error));
                     return "continue";
                 }
                 //guard to capture REM without space after it
-                var remNoSpace = /^\s*REM\S+/i.exec(seg.text);
+                var remNoSpace = /^\s*REM\S+/.exec(seg.text);
                 if (remNoSpace) {
                     var start = seg.start + remNoSpace.index + 3;
                     var range = new vscode.Range(new vscode.Position(i, start), new vscode.Position(i, start + seg.text.length));
@@ -1065,7 +1366,7 @@ function activate(ctx) {
                 //NESTED is when a GOSUB is called within another GOSUB subroutine. This is hard to determine with static analysis.
                 // (not inside a REM or a quoted string) increment the counter and
                 // report an error when it exceeds 34.
-                /**                 const gosubStartMatch = /^\s*GOSUB\b/i.exec(seg.text);
+                /**                 const gosubStartMatch = /^\s*GOSUB\b/.exec(seg.text);
                                 if (gosubStartMatch) {
                                         // Ensure this occurrence is not inside a quoted string
                                         const gosubIdx = seg.text.toUpperCase().indexOf('GOSUB');
@@ -1080,16 +1381,17 @@ function activate(ctx) {
                                 }
                 */
                 // Check LET assignments for type compatibility helper
-                var letMatch = /^\s*LET\s+([A-Za-z][A-Za-z0-9]*\$?)\s*=\s*(.+)$/i.exec(seg.text);
+                // Allow array subscripts: YCMAX=5, Y(I,J)=10, F$(1)="text"
+                var letMatch = /^\s*LET\s+([A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?))\s*=\s*(.+)$/.exec(seg.text);
                 if (letMatch) {
                     // The leading comma skips element 0 (the full match)
                     // lhs receives element 1 (the identifier after LET).
                     // rhs receives element 2 (the expression after =).
                     var lhsText = letMatch[1], rhsText_1 = letMatch[2]; //is array destructuring with a hole (the empty slot before the first comma)
-                    var lhsIsString = (0, stdFns_js_1.isValidStrVarName)(lhsText !== null && lhsText !== void 0 ? lhsText : ''); //lhs.endsWith('$');
-                    var lhsIsVariable = (0, stdFns_js_1.isValidVarName)(lhsText !== null && lhsText !== void 0 ? lhsText : '');
-                    var rhsIsString = (0, stdFns_js_1.stringExprParts)(rhsText_1 !== null && rhsText_1 !== void 0 ? rhsText_1 : '');
-                    var rhsIsNumeric = (0, stdFns_js_1.varExprParts)(rhsText_1 !== null && rhsText_1 !== void 0 ? rhsText_1 : ''); //checks for numeric variables and numeric expressions
+                    var lhsIsString = (0, mtxstdfns_js_1.isValidStrVarName)(lhsText !== null && lhsText !== void 0 ? lhsText : ''); //lhs.endsWith('$');
+                    var lhsIsVariable = (0, mtxstdfns_js_1.isValidVarName)(lhsText !== null && lhsText !== void 0 ? lhsText : '');
+                    var rhsIsString = (0, mtxstdfns_js_1.stringExprParts)(rhsText_1 !== null && rhsText_1 !== void 0 ? rhsText_1 : '');
+                    var rhsIsNumeric = (0, mtxstdfns_js_1.varExprParts)(rhsText_1 !== null && rhsText_1 !== void 0 ? rhsText_1 : ''); //checks for numeric variables and numeric expressions
                     var start_1 = seg.start + Math.max(0, seg.text.indexOf(rhsText_1));
                     var range = new vscode.Range(new vscode.Position(i, start_1), new vscode.Position(i, start_1 + rhsText_1.length));
                     rhs = letCheck(lhsText !== null && lhsText !== void 0 ? lhsText : '', rhsText_1 !== null && rhsText_1 !== void 0 ? rhsText_1 : '', range, diags); //returns an array of RHS parts to process further or [] if error 
@@ -1099,8 +1401,8 @@ function activate(ctx) {
                     //special handling for LET as could be complex expression on RHS
                     if (rhs.length !== 0) {
                         // process each part of RHS further
-                        for (var _7 = 0, rhs_1 = rhs; _7 < rhs_1.length; _7++) {
-                            var itemInRhs = rhs_1[_7];
+                        for (var _9 = 0, rhs_1 = rhs; _9 < rhs_1.length; _9++) {
+                            var itemInRhs = rhs_1[_9];
                             var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
                             var t = rhsPart.trim();
                             // skip standalone arithmetic operator tokens
@@ -1113,7 +1415,7 @@ function activate(ctx) {
                                 continue;
                             }
                             // Accept only parenthesised boolean comparisons (e.g. (PX=31)) when '=' appears in part
-                            if (!(0, stdFns_js_1.isParenthesisedBooleanExpression)(t) && t.includes('=')) {
+                            if (!(0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(t) && t.includes('=')) {
                                 diags.push(new vscode.Diagnostic(range, "LET RHS does not contain a parenthesised boolean expression (e.g. (PX=31)); got '".concat(t, "'"), vscode.DiagnosticSeverity.Error));
                                 continue;
                             }
@@ -1168,7 +1470,7 @@ function activate(ctx) {
                                 21 IF A=10 THEN PRINT "A is ten" ELSE PRINT "A is not ten"  // OK (assignment in IF, not PRINT)
                                 as above for LPRINT
                 */
-                var printAss = /^\s*(?:PRINT|LPRINT)\s*(.*)$/i.exec(seg.text);
+                var printAss = /^\s*(?:PRINT|LPRINT)\s*(.*)$/.exec(seg.text);
                 if (printAss) {
                     var argsTextRaw = (printAss[1] || '').trim();
                     var printErrors = printCheck(argsTextRaw, validators);
@@ -1178,8 +1480,8 @@ function activate(ctx) {
                         var argsOffsetInSeg = Math.max(0, seg.text.indexOf(argsTextRaw, segMatchIndex));
                         var startChar = seg.start + argsOffsetInSeg;
                         var endChar = startChar + (argsTextRaw.length || 1);
-                        for (var _8 = 0, printErrors_1 = printErrors; _8 < printErrors_1.length; _8++) {
-                            var e = printErrors_1[_8];
+                        for (var _10 = 0, printErrors_1 = printErrors; _10 < printErrors_1.length; _10++) {
+                            var e = printErrors_1[_10];
                             if (!e)
                                 continue; // Skip null entries
                             var range = new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar));
@@ -1202,7 +1504,7 @@ function activate(ctx) {
                                 INPUT "prompt text";A;B,C;D  => error variables only separated by commas
                                 INPUT A B => error missing comma between variables
                 */
-                var inputMatch = /^\s*INPUT\s+(.+)$/i.exec(seg.text);
+                var inputMatch = /^\s*INPUT\s+(.+)$/.exec(seg.text);
                 if (inputMatch) {
                     var raw = inputMatch[1].trim();
                     var promptPart = '';
@@ -1228,7 +1530,7 @@ function activate(ctx) {
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, absolute), new vscode.Position(i, absolute + 1)), 'INPUT: only the semicolon after the prompt is allowed; use commas between variables', vscode.DiagnosticSeverity.Error));
                         searchIdx = varsPart.indexOf(';', searchIdx + 1);
                     }
-                    var vars = (0, stdFns_js_1.splitTopLevel)(varsPart).map(function (v) { return v.trim(); }).filter(Boolean);
+                    var vars = (0, mtxstdfns_js_1.splitTopLevel)(varsPart).map(function (v) { return v.trim(); }).filter(Boolean);
                     if (!vars.length) {
                         var start = seg.start + seg.text.toUpperCase().indexOf('INPUT');
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, start), new vscode.Position(i, start + 5)), 'INPUT requires at least one target variable', vscode.DiagnosticSeverity.Error));
@@ -1236,7 +1538,7 @@ function activate(ctx) {
                     else {
                         vars.forEach(function (v) {
                             var _a;
-                            if (!(0, stdFns_js_1.isValidVarName)(v) && !(0, stdFns_js_1.isValidStrVarName)(v)) {
+                            if (!(0, mtxstdfns_js_1.isValidVarName)(v) && !(0, mtxstdfns_js_1.isValidStrVarName)(v)) {
                                 var idx = seg.text.indexOf(v, (_a = inputMatch.index) !== null && _a !== void 0 ? _a : 0);
                                 var startChar = seg.start + (idx >= 0 ? idx : 0);
                                 diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + v.length)), "INPUT target must be a simple variable (got \"".concat(v, "\")"), vscode.DiagnosticSeverity.Error));
@@ -1256,13 +1558,13 @@ function activate(ctx) {
                                 all must be on the same line. If separated over multiple lines, throw a syntax error as required by MTX BASIC
                                 Consider return indices and substrings: {condStart,condEnd,thenStart,thenEnd,elseStart,elseEnd,cond,then,else}.
                 */
-                var ifMatch = /^\s*IF\s+(.+?)\s+THEN\s+(.+?)(?:\s+ELSE\s+(.+?))?\s*$/i.exec(seg.text);
+                var ifMatch = /^\s*IF\s+(.+?)\s+THEN\s+(.+?)(?:\s+ELSE\s+(.+?))?\s*$/.exec(seg.text);
                 if (ifMatch) {
                     var cond_1 = (_f = ifMatch[1]) !== null && _f !== void 0 ? _f : '';
                     var thenPart = ((_g = ifMatch[2]) !== null && _g !== void 0 ? _g : '').trim();
                     var elsePart = ((_h = ifMatch[3]) !== null && _h !== void 0 ? _h : '').trim();
                     var condStart_1 = seg.text.indexOf(cond_1, (_j = ifMatch.index) !== null && _j !== void 0 ? _j : 0); // used for position of error
-                    var boolCondIssues = (0, stdFns_js_1.findBooleanOperatorSpacingIssues)(cond_1);
+                    var boolCondIssues = (0, mtxstdfns_js_1.findBooleanOperatorSpacingIssues)(cond_1);
                     boolCondIssues.forEach(function (issue) {
                         var startChar = seg.start + condStart_1 + issue.start;
                         var endChar = seg.start + condStart_1 + issue.end;
@@ -1272,8 +1574,8 @@ function activate(ctx) {
                     // Validate comparisons in condition (skip comparisons inside quoted strings)
                     //                const cmpRe = /([^<>=!]+?)\s*(=|<>|<=|>=|<|>)\s*([^<>=!]+)/g;
                     //                let cm: RegExpExecArray | null;
-                    var condSpans = (0, stdFns_js_1.splitBooleanExpression)(cond_1);
-                    (0, stdFns_js_1.validateBooleanConnectors)(cond_1, condSpans, function (spanStart, spanEnd, bad) {
+                    var condSpans = (0, mtxstdfns_js_1.splitBooleanExpression)(cond_1);
+                    (0, mtxstdfns_js_1.validateBooleanConnectors)(cond_1, condSpans, function (spanStart, spanEnd, bad) {
                         var startChar = seg.start + condStart_1 + spanStart;
                         var endChar = seg.start + condStart_1 + spanEnd;
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "Invalid boolean connector \"".concat(bad, "\" (expected AND, OR, or NOT)"), vscode.DiagnosticSeverity.Error));
@@ -1306,8 +1608,8 @@ function activate(ctx) {
                         // Check for AND/OR at word boundary
                         var slice = condUpper.slice(j);
                         var matched = false;
-                        for (var _9 = 0, _10 = [' AND ', ' OR ']; _9 < _10.length; _9++) {
-                            var op = _10[_9];
+                        for (var _11 = 0, _12 = [' AND ', ' OR ']; _11 < _12.length; _11++) {
+                            var op = _12[_11];
                             if (slice.startsWith(op)) {
                                 if (currentPart.trim()) {
                                     condParts.push({ text: currentPart.trim(), start: currentStart });
@@ -1331,12 +1633,12 @@ function activate(ctx) {
                         condParts.push({ text: currentPart.trim(), start: currentStart });
                     }
                     // Now validate each individual comparison
-                    for (var _11 = 0, condParts_1 = condParts; _11 < condParts_1.length; _11++) {
-                        var part = condParts_1[_11];
+                    for (var _13 = 0, condParts_1 = condParts; _13 < condParts_1.length; _13++) {
+                        var part = condParts_1[_13];
                         // Strip leading NOT if present
                         var compText = part.text.trim();
                         var notOffset = 0;
-                        var notMatch = /^\s*NOT\s+/i.exec(compText);
+                        var notMatch = /^\s*NOT\s+/.exec(compText);
                         if (notMatch) {
                             notOffset = notMatch[0].length;
                             compText = compText.slice(notOffset);
@@ -1346,8 +1648,8 @@ function activate(ctx) {
                         while ((cmpMatch = cmpRe.exec(compText)) !== null) {
                             var lhs = ((_k = cmpMatch[1]) !== null && _k !== void 0 ? _k : '').trim();
                             var rhs_2 = ((_l = cmpMatch[3]) !== null && _l !== void 0 ? _l : '').trim();
-                            var lhsType = (0, stdFns_js_1.classifyExpr)(lhs);
-                            var rhsType = (0, stdFns_js_1.classifyExpr)(rhs_2);
+                            var lhsType = (0, mtxstdfns_js_1.classifyExpr)(lhs);
+                            var rhsType = (0, mtxstdfns_js_1.classifyExpr)(rhs_2);
                             if ((lhsType.hasString && rhsType.hasNumeric) || (lhsType.hasNumeric && rhsType.hasString)) {
                                 var absStart = seg.start + condStart_1 + part.start + notOffset + ((_m = cmpMatch.index) !== null && _m !== void 0 ? _m : 0);
                                 if (isInString(absStart))
@@ -1374,7 +1676,8 @@ function activate(ctx) {
                             var chunkIdx_1 = chunkStartIndex(thenText_1);
                             var chunkStart_1 = seg.start + (chunkIdx_1 >= 0 ? chunkIdx_1 : 0);
                             var chunkRange = new vscode.Range(new vscode.Position(i, chunkStart_1), new vscode.Position(i, chunkStart_1 + thenText_1.length));
-                            var letM = /^\s*LET\s+([A-Za-z][A-Za-z0-9]*\$?)\s*=\s*(.+)$/i.exec(thenText_1);
+                            // Allow array subscripts in THEN: LET Y(I,J)=10, F$(1)="text"
+                            var letM = /^\s*LET\s+([A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?))\s*=\s*(.+)$/.exec(thenText_1);
                             if (letM) {
                                 var lhs = letM[1], rhsText = letM[2];
                                 var rhsParts = letCheck(lhs !== null && lhs !== void 0 ? lhs : '', rhsText !== null && rhsText !== void 0 ? rhsText : '', chunkRange, diags);
@@ -1385,7 +1688,7 @@ function activate(ctx) {
                                     rhsParts.forEach(function (itemInRhs) {
                                         var _a;
                                         var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
-                                        if (!rhsPart.trim() || (0, stdFns_js_1.isParenthesisedBooleanExpression)(rhsPart))
+                                        if (!rhsPart.trim() || (0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(rhsPart))
                                             return;
                                         runValidatorsOnSegment(rhsPart, validators, function (err, rawMatch2) {
                                             var _a;
@@ -1402,8 +1705,8 @@ function activate(ctx) {
                                     });
                                 }
                             }
-                            else if (/^\s*(?:PRINT|LPRINT)\b/i.test(thenText_1)) {
-                                var args = thenText_1.replace(/^\s*(?:PRINT|LPRINT)\b/i, '').trim();
+                            else if (/^\s*(?:PRINT|LPRINT)\b/.test(thenText_1)) {
+                                var args = thenText_1.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
                                 var perr = printCheck(args, validators);
                                 perr.forEach(function (e) {
                                     if (!e)
@@ -1433,7 +1736,7 @@ function activate(ctx) {
                             var chunkIdx_2 = chunkStartIndex(elseText_1);
                             var chunkStart_2 = seg.start + (chunkIdx_2 >= 0 ? chunkIdx_2 : 0);
                             var chunkRange = new vscode.Range(new vscode.Position(i, chunkStart_2), new vscode.Position(i, chunkStart_2 + elseText_1.length));
-                            var letM2 = /^\s*LET\s+([A-Za-z][A-Za-z0-9]*\$?)\s*=\s*(.+)$/i.exec(elseText_1);
+                            var letM2 = /^\s*LET\s+([A-Z][A-Z0-9]*\$?(?:\([^)]+\))?)\s*=\s*(.+)$/.exec(elseText_1);
                             if (letM2) {
                                 var lhs = letM2[1], rhsText = letM2[2];
                                 var rhsParts = letCheck(lhs !== null && lhs !== void 0 ? lhs : '', rhsText !== null && rhsText !== void 0 ? rhsText : '', chunkRange, diags);
@@ -1444,7 +1747,7 @@ function activate(ctx) {
                                     rhsParts.forEach(function (itemInRhs) {
                                         var _a;
                                         var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
-                                        if (!rhsPart.trim() || (0, stdFns_js_1.isParenthesisedBooleanExpression)(rhsPart))
+                                        if (!rhsPart.trim() || (0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(rhsPart))
                                             return;
                                         runValidatorsOnSegment(rhsPart, validators, function (err, rawMatch2) {
                                             var _a;
@@ -1461,8 +1764,8 @@ function activate(ctx) {
                                     });
                                 }
                             }
-                            else if (/^\s*(?:PRINT|LPRINT)\b/i.test(elseText_1)) {
-                                var args = elseText_1.replace(/^\s*(?:PRINT|LPRINT)\b/i, '').trim();
+                            else if (/^\s*(?:PRINT|LPRINT)\b/.test(elseText_1)) {
+                                var args = elseText_1.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
                                 var perr = printCheck(args, validators);
                                 perr.forEach(function (e) {
                                     if (!e)
@@ -1488,17 +1791,20 @@ function activate(ctx) {
                     }
                     // mark IF handled so main validator pass doesn't re-run over the same text
                     ifFlag = true;
+                    thenFlag = true;
+                    if (elsePart)
+                        elseFlag = true;
                 } // end of IF handling 
                 // Handle standalone ELSE segment (result of colon injection before ELSE)
                 // This occurs when IF...THEN...ELSE has multiple commands between the THEN and ELSE parts
-                var elseMatch = /^\s*ELSE\s+(.+)$/i.exec(seg.text);
+                var elseMatch = /^\s*ELSE\s+(.+)$/.exec(seg.text);
                 if (elseMatch) {
                     var elseContent_1 = ((_o = elseMatch[1]) !== null && _o !== void 0 ? _o : '').trim();
                     if (elseContent_1) {
                         var elseStart_1 = seg.start + seg.text.indexOf(elseContent_1);
                         var elseRange_1 = new vscode.Range(new vscode.Position(i, elseStart_1), new vscode.Position(i, elseStart_1 + elseContent_1.length));
                         // Check for LET in ELSE
-                        var letM = /^\s*LET\s+([A-Za-z][A-Za-z0-9]*\$?)\s*=\s*(.+)$/i.exec(elseContent_1);
+                        var letM = /^\s*LET\s+([A-Z][A-Z0-9]*\$?(?:\([^)]+\))?)\s*=\s*(.+)$/.exec(elseContent_1);
                         if (letM) {
                             var lhs = letM[1], rhsText = letM[2];
                             var rhsParts = letCheck(lhs !== null && lhs !== void 0 ? lhs : '', rhsText !== null && rhsText !== void 0 ? rhsText : '', elseRange_1, diags);
@@ -1506,7 +1812,7 @@ function activate(ctx) {
                                 rhsParts.forEach(function (itemInRhs) {
                                     var _a;
                                     var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
-                                    if (!rhsPart.trim() || (0, stdFns_js_1.isParenthesisedBooleanExpression)(rhsPart))
+                                    if (!rhsPart.trim() || (0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(rhsPart))
                                         return;
                                     runValidatorsOnSegment(rhsPart, validators, function (err, rawMatch2) {
                                         if (!err)
@@ -1523,8 +1829,8 @@ function activate(ctx) {
                             }
                         }
                         // Check for PRINT/LPRINT in ELSE
-                        else if (/^\s*(?:PRINT|LPRINT)\b/i.test(elseContent_1)) {
-                            var args = elseContent_1.replace(/^\s*(?:PRINT|LPRINT)\b/i, '').trim();
+                        else if (/^\s*(?:PRINT|LPRINT)\b/.test(elseContent_1)) {
+                            var args = elseContent_1.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
                             var perr = printCheck(args, validators);
                             perr.forEach(function (e) {
                                 diags.push(new vscode.Diagnostic(elseRange_1, "ELSE->PRINT: ".concat(e === null || e === void 0 ? void 0 : e.message), vscode.DiagnosticSeverity.Error));
@@ -1547,6 +1853,7 @@ function activate(ctx) {
                     }
                     // Set flag to skip further processing of this segment
                     ifFlag = true;
+                    elseFlag = true;
                 }
                 /**               Special
                                 Rules FOR ... TO ... STEP construct
@@ -1557,10 +1864,10 @@ function activate(ctx) {
                                 FOR I = 1 TO 10 STEP 1
                                 FOR A = B to C STEP D
                 */
-                var forMatch = /^\s*FOR\s+([A-Za-z][A-Za-z0-9]*)\s*=\s*(.+?)\s+TO\s+(.+?)(?:\s+STEP\s+(.+?))?\s*$/i.exec(seg.text);
+                var forMatch = /^\s*FOR\s+([A-Z][A-Z0-9]*)\s*=\s*(.+?)\s+TO\s+(.+?)(?:\s+STEP\s+(.+?))?\s*$/.exec(seg.text);
                 if (forMatch) {
                     var ctrlVar = forMatch[1], startExprRaw = forMatch[2], endExprRaw = forMatch[3], stepExprRaw = forMatch[4];
-                    var ctrlIsNumeric = !!ctrlVar && (0, stdFns_js_1.isValidVarName)(ctrlVar);
+                    var ctrlIsNumeric = !!ctrlVar && (0, mtxstdfns_js_1.isValidVarName)(ctrlVar);
                     var segBase = seg.start + ((_p = forMatch.index) !== null && _p !== void 0 ? _p : 0);
                     var reportForError = function (text, msg) {
                         var _a;
@@ -1575,8 +1882,8 @@ function activate(ctx) {
                     var startExpr = stripTrailingCommentUnquoted(startExprRaw.trim());
                     var endExpr = stripTrailingCommentUnquoted(endExprRaw.trim());
                     var stepExpr = stepExprRaw ? stripTrailingCommentUnquoted(stepExprRaw.trim()) : undefined;
-                    var startType = (0, stdFns_js_1.classifyExpr)(startExpr);
-                    var endType = (0, stdFns_js_1.classifyExpr)(endExpr);
+                    var startType = (0, mtxstdfns_js_1.classifyExpr)(startExpr);
+                    var endType = (0, mtxstdfns_js_1.classifyExpr)(endExpr);
                     if (!startType.hasNumeric) {
                         reportForError(startExpr, "start expression must be numeric (got \"".concat(startExpr, "\")"));
                     }
@@ -1584,7 +1891,7 @@ function activate(ctx) {
                         reportForError(endExpr, "end expression must be numeric (got \"".concat(endExpr, "\")"));
                     }
                     if (stepExpr) {
-                        var stepType = (0, stdFns_js_1.classifyExpr)(stepExpr);
+                        var stepType = (0, mtxstdfns_js_1.classifyExpr)(stepExpr);
                         if (!stepType.hasNumeric) {
                             reportForError(stepExpr, "STEP expression must be numeric (got \"".concat(stepExpr, "\")"));
                         }
@@ -1605,6 +1912,9 @@ function activate(ctx) {
                     if (stepExpr)
                         validateChunk(stepExpr, 'FOR step');
                     forFlag = true;
+                    toFlag = true;
+                    if (stepExpr)
+                        stepFlag = true;
                 } // end of FOR handling
                 /**               Special
                                 Rules for ON expr GOTO .. and ON expr GOSUB ...
@@ -1613,18 +1923,18 @@ function activate(ctx) {
                                 Different from the standalone GOTO <linenumber> and GOSUB <linenumber>
                                 Should CmdSpecs have expectEnd = true removed as the ON case allows multiple linenumbers?
                 */
-                var onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/i.exec(seg.text);
+                var onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);
                 if (onMatch) {
                     var selectorExprRaw = onMatch[1], branchKeyword_1 = onMatch[2], targetsRaw = onMatch[3];
                     var selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
-                    var selectorType = (0, stdFns_js_1.classifyExpr)(selectorExpr);
+                    var selectorType = (0, mtxstdfns_js_1.classifyExpr)(selectorExpr);
                     if (!selectorType.hasNumeric) {
                         var idx = seg.text.indexOf(selectorExpr, (_q = onMatch.index) !== null && _q !== void 0 ? _q : 0);
                         var startChar = seg.start + (idx >= 0 ? idx : 0);
                         var endChar = startChar + selectorExpr.length;
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ON ".concat(branchKeyword_1, ": selector must be numeric (got \"").concat(selectorExpr, "\")"), vscode.DiagnosticSeverity.Error));
                     }
-                    var targets = (0, stdFns_js_1.splitTopLevel)(targetsRaw).map(function (t) { return t.trim(); }).filter(Boolean);
+                    var targets = (0, mtxstdfns_js_1.splitTopLevel)(targetsRaw).map(function (t) { return t.trim(); }).filter(Boolean);
                     if (targets.length === 0) {
                         var idx = seg.text.indexOf(branchKeyword_1, (_r = onMatch.index) !== null && _r !== void 0 ? _r : 0);
                         var startChar = seg.start + (idx >= 0 ? idx : 0);
@@ -1639,7 +1949,7 @@ function activate(ctx) {
                                 var idx = seg.text.indexOf(target, (_a = onMatch.index) !== null && _a !== void 0 ? _a : 0);
                                 var startChar = seg.start + (idx >= 0 ? idx : 0);
                                 var endChar = startChar + target.length;
-                                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ON ".concat(branchKeyword_1, ": line numbers must be integers 1..65535 (got \"").concat(target, "\")"), vscode.DiagnosticSeverity.Error));
+                                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ON ".concat(branchKeyword_1, ": line numbers must be integers 0..65535 (got \"").concat(target, "\")"), vscode.DiagnosticSeverity.Error));
                             }
                         });
                     }
@@ -1651,6 +1961,10 @@ function activate(ctx) {
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ON ".concat(branchKeyword_1, " selector: ").concat(err.message), vscode.DiagnosticSeverity.Error));
                     }, seg.start);
                     onFlag = true;
+                    if (branchKeyword_1.toUpperCase() === 'GOTO')
+                        gotoFlag = true;
+                    if (branchKeyword_1.toUpperCase() === 'GOSUB')
+                        gosubFlag = true;
                 } // end of ON handling
                 /**               Special
                                 DIM A(10),B(20)
@@ -1658,7 +1972,7 @@ function activate(ctx) {
                                 DIM A(10,20),B$(5,10)
                                 Check that each variable is a valid name and that each dimension expression is numeric
                 */
-                var dimMatch = /^\s*DIM\s+(.+)$/i.exec(seg.text);
+                var dimMatch = /^\s*DIM\s+(.+)$/.exec(seg.text);
                 if (dimMatch) {
                     var payload = dimMatch[1].trim();
                     if (!payload) {
@@ -1666,8 +1980,8 @@ function activate(ctx) {
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, start), new vscode.Position(i, start + 3)), 'DIM requires at least one array specification', vscode.DiagnosticSeverity.Error));
                     }
                     else {
-                        var arrays = (0, stdFns_js_1.splitTopLevel)(payload).map(function (a) { return a.trim(); }).filter(Boolean);
-                        var dimRe_1 = /^([A-Za-z][A-Za-z0-9]*\$?)\s*\(([^)]+)\)$/;
+                        var arrays = (0, mtxstdfns_js_1.splitTopLevel)(payload).map(function (a) { return a.trim(); }).filter(Boolean);
+                        var dimRe_1 = /^([A-Z][A-Z0-9]*\$?)\s*\(([^)]+)\)$/;
                         arrays.forEach(function (arr) {
                             var _a, _b;
                             var dm = dimRe_1.exec(arr);
@@ -1687,11 +2001,14 @@ function activate(ctx) {
                             }
                             dims.forEach(function (bound) {
                                 var _a;
+                                // Allow integer literals (1-255) OR variable names (B, MAX, etc.)
                                 var n = Number(bound);
-                                if (!Number.isInteger(n) || n < 1 || n > 255) {
+                                var isIntegerLiteral = Number.isInteger(n) && n >= 1 && n <= 255;
+                                var isVariableName = /^[A-Z][A-Z0-9]*$/.test(bound);
+                                if (!isIntegerLiteral && !isVariableName) {
                                     var idx = seg.text.indexOf(bound, (_a = dimMatch.index) !== null && _a !== void 0 ? _a : 0);
                                     var startChar = seg.start + (idx >= 0 ? idx : 0);
-                                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + bound.length)), "DIM ".concat(name, ": bounds must be integers 1..255 (got \"").concat(bound, "\")"), vscode.DiagnosticSeverity.Error));
+                                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + bound.length)), "DIM ".concat(name, ": bounds must be integers 1..255 or variable names (got \"").concat(bound, "\")"), vscode.DiagnosticSeverity.Error));
                                 }
                             });
                         });
@@ -1704,7 +2021,7 @@ function activate(ctx) {
                                 DATA 10,20,30,40
                                 DATA "HELLO",WORLD,65,66,67
                 */
-                var dataMatch = /^\s*DATA\s+(.+)$/i.exec(seg.text);
+                var dataMatch = /^\s*DATA\s+(.+)$/.exec(seg.text);
                 if (dataMatch) {
                     var payload = dataMatch[1].trim();
                     if (!payload) {
@@ -1719,7 +2036,7 @@ function activate(ctx) {
                                 READ can have multiple variables separated by commas
                                 READ A$,B$,C,D,E
                 */
-                var readMatch = /^\s*READ\s+(.+)$/i.exec(seg.text);
+                var readMatch = /^\s*READ\s+(.+)$/.exec(seg.text);
                 if (readMatch) {
                     var payload = readMatch[1].trim();
                     if (!payload) {
@@ -1741,7 +2058,7 @@ function activate(ctx) {
                                 the assembler has specials, like labels, reserves for DB, DW and DS, etc.
                 */
                 {
-                    if (/^\s*(?:\d+\s+)?CODE\s*$/i.test(seg.text)) {
+                    if (/^\s*(?:\d+\s+)?CODE\s*$/.test(seg.text)) {
                         /* valid; nothing to do */
                         codeFlag = true; // set flag so generic validator block skips this segment
                     }
@@ -1772,6 +2089,77 @@ function activate(ctx) {
                         } // END of while for CODE concatenated/malformed check
                     } // END OF else block
                 } // END of CODE misplaced check
+                // Detect standalone NEXT/RETURN for spacing checks
+                if (/^\s*NEXT(?=\s|[A-Z]|$)/.test(seg.text))
+                    nextFlag = true;
+                // After specials block, before generic validators
+                var spacedKeywords = [
+                    { kw: 'LET', flag: letFlag, checkMissing: true },
+                    { kw: 'IF', flag: ifFlag, checkMissing: true },
+                    { kw: 'THEN', flag: thenFlag, checkMissing: true },
+                    { kw: 'ELSE', flag: elseFlag, checkMissing: true },
+                    { kw: 'FOR', flag: forFlag, checkMissing: true },
+                    { kw: 'TO', flag: toFlag, checkMissing: true },
+                    { kw: 'NEXT', flag: nextFlag, checkMissing: false }, //change to false to prevent double checking of spaces leading to errors later
+                    { kw: 'STEP', flag: stepFlag, checkMissing: true },
+                    { kw: 'ON', flag: onFlag, checkMissing: true },
+                    { kw: 'GOTO', flag: gotoFlag, checkMissing: true },
+                    { kw: 'GOSUB', flag: gosubFlag, checkMissing: true },
+                    { kw: 'DATA', flag: dataFlag, checkMissing: true },
+                    { kw: 'DIM', flag: dimFlag, checkMissing: true },
+                    { kw: 'READ', flag: readFlag, checkMissing: true },
+                    { kw: 'INPUT', flag: inputFlag, checkMissing: true },
+                    { kw: 'PRINT', flag: printFlag, checkMissing: true },
+                    { kw: 'LPRINT', flag: printFlag, checkMissing: true }
+                ];
+                for (var _14 = 0, spacedKeywords_1 = spacedKeywords; _14 < spacedKeywords_1.length; _14++) {
+                    var _15 = spacedKeywords_1[_14], kw = _15.kw, flag = _15.flag, checkMissing = _15.checkMissing;
+                    if (!flag)
+                        continue;
+                    //NEXT is the only CmdSpecs that has optional arguments, so needs special handling with regards to space detection
+                    var re = kw === 'NEXT'
+                        ? new RegExp("\\b".concat(kw, "(?=\\s|[A-Z]|$)"), 'gi') // Only for NEXT
+                        : new RegExp("\\b".concat(kw, "\\b"), 'gi'); // All other keywords
+                    var m = void 0;
+                    while ((m = re.exec(seg.text)) !== null) {
+                        var matchIdx = (_u = m.index) !== null && _u !== void 0 ? _u : -1;
+                        if (matchIdx < 0)
+                            continue;
+                        var absStart = seg.start + matchIdx;
+                        if (isInString(absStart))
+                            continue;
+                        var after = seg.text.slice(matchIdx + kw.length);
+                        var spaceMatch = /^(\s*)/.exec(after);
+                        var space = spaceMatch ? ((_v = spaceMatch[1]) !== null && _v !== void 0 ? _v : '') : '';
+                        var _16 = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _16.spaceMissingYes, msg0 = _16.msg0;
+                        var _17 = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _17.multiSpaceYes, msg2 = _17.msg2;
+                        if (checkMissing && spaceMissingYes) {
+                            var range = new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + kw.length));
+                            diags.push(new vscode.Diagnostic(range, msg0, vscode.DiagnosticSeverity.Error));
+                        }
+                        else if (kw === 'NEXT' && spaceMissingYes && after.trim().length > 0) {
+                            // Special case: NEXT without space but with following text (e.g., NEXTI)
+                            var range = new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + kw.length));
+                            diags.push(new vscode.Diagnostic(range, msg0, vscode.DiagnosticSeverity.Error));
+                        }
+                        else if (multiSpaceYes) {
+                            var range = new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + kw.length + space.length));
+                            diags.push(new vscode.Diagnostic(range, msg2, vscode.DiagnosticSeverity.Error));
+                        }
+                        // Additional validation: NEXT argument must be numeric (no $)
+                        if (kw === 'NEXT' && space.length > 0) {
+                            var afterSpace = after.slice(space.length).trim();
+                            if (afterSpace.length > 0) {
+                                var varMatch = /^([A-Z][A-Z0-9]*\$?)/.exec(afterSpace);
+                                if (varMatch && varMatch[1] && varMatch[1].endsWith('$')) {
+                                    var varStart = absStart + kw.length + after.indexOf(afterSpace);
+                                    var varEnd = varStart + varMatch[1].length;
+                                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, varStart), new vscode.Position(i, varEnd)), "NEXT: variable must be numeric (string variable \"".concat(varMatch[1], "\" not allowed)"), vscode.DiagnosticSeverity.Error));
+                                }
+                            }
+                        }
+                    }
+                }
                 // Segments.length is based on multicommands on 1 line. If commands separated by say spaces then doesn't register
                 // Does this mean that validator.name will fail?
                 // Only run the generic validators when we haven't already handled LET/PRINT/IF
@@ -1809,8 +2197,8 @@ function activate(ctx) {
                 } // END of main validator error checking block
             };
             //const segments = splitLineSegments(line.text); // each { text, start }
-            for (var _6 = 0, segments_1 = segments; _6 < segments_1.length; _6++) {
-                var seg = segments_1[_6];
+            for (var _8 = 0, segments_1 = segments; _8 < segments_1.length; _8++) {
+                var seg = segments_1[_8];
                 _loop_5(seg);
             } // END of for (const seg of segments) loop
         };
@@ -1837,20 +2225,20 @@ function activate(ctx) {
                 allLines.push(doc.lineAt(j).text);
             }
             // Parse and validate NODDY content
-            var _w = (0, stdFns_js_1.parseNoddyContent)(allLines, noddyStartLine + 1), pages = _w.pages, parseErrors = _w.errors;
+            var _y = (0, mtxstdfns_js_1.parseNoddyContent)(allLines, noddyStartLine + 1), pages = _y.pages, parseErrors = _y.errors;
             // Add parse errors to diagnostics
-            for (var _x = 0, parseErrors_1 = parseErrors; _x < parseErrors_1.length; _x++) {
-                var err = parseErrors_1[_x];
+            for (var _z = 0, parseErrors_1 = parseErrors; _z < parseErrors_1.length; _z++) {
+                var err = parseErrors_1[_z];
                 var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                 diags.push(new vscode.Diagnostic(range, "NODDY: ".concat(err.message), vscode.DiagnosticSeverity.Error));
             }
             // Validate each program page
-            for (var _y = 0, pages_1 = pages; _y < pages_1.length; _y++) {
-                var page = pages_1[_y];
+            for (var _0 = 0, pages_1 = pages; _0 < pages_1.length; _0++) {
+                var page = pages_1[_0];
                 if (page.type === 'program') {
-                    var progErrors = (0, stdFns_js_1.validateNoddyProgram)(page, pages, page.lineStart);
-                    for (var _z = 0, progErrors_1 = progErrors; _z < progErrors_1.length; _z++) {
-                        var err = progErrors_1[_z];
+                    var progErrors = (0, mtxstdfns_js_1.validateNoddyProgram)(page, pages, page.lineStart);
+                    for (var _1 = 0, progErrors_1 = progErrors; _1 < progErrors_1.length; _1++) {
+                        var err = progErrors_1[_1];
                         var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                         diags.push(new vscode.Diagnostic(range, "NODDY: ".concat(err.message), vscode.DiagnosticSeverity.Error));
                     }
@@ -1874,11 +2262,11 @@ function activate(ctx) {
             }
             // Check for unused text pages
             var usedTextPages = new Set();
-            for (var _0 = 0, pages_2 = pages; _0 < pages_2.length; _0++) {
-                var page = pages_2[_0];
+            for (var _2 = 0, pages_2 = pages; _2 < pages_2.length; _2++) {
+                var page = pages_2[_2];
                 if (page.type === 'program') {
-                    for (var _1 = 0, _2 = page.content; _1 < _2.length; _1++) {
-                        var line = _2[_1];
+                    for (var _3 = 0, _4 = page.content; _3 < _4.length; _3++) {
+                        var line = _4[_3];
                         var displayMatch = /\*DISPLAY\s+(\w+)\./.exec(line);
                         if (displayMatch) {
                             usedTextPages.add(displayMatch[1]);
@@ -1886,8 +2274,8 @@ function activate(ctx) {
                     }
                 }
             }
-            for (var _3 = 0, pages_3 = pages; _3 < pages_3.length; _3++) {
-                var page = pages_3[_3];
+            for (var _5 = 0, pages_3 = pages; _5 < pages_3.length; _5++) {
+                var page = pages_3[_5];
                 if (page.type === 'text' && !usedTextPages.has(page.name)) {
                     var range = new vscode.Range(new vscode.Position(page.lineStart, 0), new vscode.Position(page.lineStart, 50));
                     diags.push(new vscode.Diagnostic(range, "NODDY: Text page \"".concat(page.name, "\" is never displayed"), vscode.DiagnosticSeverity.Hint));
@@ -1895,8 +2283,8 @@ function activate(ctx) {
             }
             // Check for unused program pages (not called by PLOD)
             var usedPrograms = new Set(plodRefs.map(function (r) { return r.progName; }));
-            for (var _4 = 0, pages_4 = pages; _4 < pages_4.length; _4++) {
-                var page = pages_4[_4];
+            for (var _6 = 0, pages_4 = pages; _6 < pages_4.length; _6++) {
+                var page = pages_4[_6];
                 if (page.type === 'program' && !usedPrograms.has(page.name)) {
                     var range = new vscode.Range(new vscode.Position(page.lineStart, 0), new vscode.Position(page.lineStart, 50));
                     diags.push(new vscode.Diagnostic(range, "NODDY: Program \"".concat(page.name, "\" is never called by PLOD"), vscode.DiagnosticSeverity.Hint));
@@ -1919,8 +2307,8 @@ function activate(ctx) {
             }
             // validateCodeBlocks takes the document lines array, not CodeBlock[]
             var z80Errors = (0, z80codes_js_1.validateCodeBlocks)(allDocLines);
-            for (var _5 = 0, z80Errors_1 = z80Errors; _5 < z80Errors_1.length; _5++) {
-                var err = z80Errors_1[_5];
+            for (var _7 = 0, z80Errors_1 = z80Errors; _7 < z80Errors_1.length; _7++) {
+                var err = z80Errors_1[_7];
                 var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                 var severity = err.severity === 'error'
                     ? vscode.DiagnosticSeverity.Error
@@ -1940,7 +2328,7 @@ function activate(ctx) {
         provideHover: function (document, position) {
             //const wordRange = document.getWordRangeAtPosition(position);
             // include optional trailing $ in the word (string functions / string variables)
-            var wordRange = document.getWordRangeAtPosition(position, /[A-Za-z][A-Za-z0-9]*\$?/); //might need to get rid of the underscore as this can cause MTX error symbol?          
+            var wordRange = document.getWordRangeAtPosition(position, /[A-Z][A-Z0-9]*\$?/); //might need to get rid of the underscore as this can cause MTX error symbol?          
             if (!wordRange) {
                 return;
             }
@@ -1971,6 +2359,78 @@ function activate(ctx) {
                 if (position.line >= block.start && position.line <= block.end) {
                     inCodeBlockAtPos = true;
                     break;
+                }
+            }
+            // REM hover adjustment: allow hover on REM (and NODDY in a final REM NODDY line),
+            // but suppress hover for other keywords inside REM comments and inside the NODDY section.
+            var isNoddyWord = false;
+            var isRemNoddyLine = false;
+            var lineRemText = document.lineAt(position.line).text;
+            var isFinalBasicLine = (function () {
+                var lastBasicLine = -1;
+                for (var i = 0; i < document.lineCount; i++) {
+                    var t = document.lineAt(i).text.trim();
+                    if (!t)
+                        continue;
+                    if (/^\d+\s+/.test(t))
+                        lastBasicLine = i;
+                }
+                return lastBasicLine === position.line;
+            })();
+            // Check if we're in the NODDY section (after the last BASIC line ending with REM NODDY)
+            var isInNoddySection = (function () {
+                var lastBasicLine = -1;
+                var lastBasicLineEndsWithRemNoddy = false;
+                for (var i = 0; i < document.lineCount; i++) {
+                    var t = document.lineAt(i).text.trim();
+                    if (!t)
+                        continue;
+                    if (/^\d+\s+/.test(t)) {
+                        lastBasicLine = i;
+                        // Check if this line ends with REM NODDY (case-insensitive, allowing for multi-statement lines)
+                        lastBasicLineEndsWithRemNoddy = /\bREM\s+NODDY\s*$/.test(t);
+                    }
+                }
+                // We're in NODDY section if:
+                // 1. There is a last BASIC line that ends with REM NODDY
+                // 2. Current position is after that line
+                return lastBasicLineEndsWithRemNoddy && position.line > lastBasicLine;
+            })();
+            // Suppress all hovers in NODDY section
+            if (isInNoddySection) {
+                return;
+            }
+            var isWordChar = function (ch) { return /[A-Z0-9$]/.test(ch); };
+            var findRemIndex = function (text) {
+                var inString = false;
+                for (var i = 0; i < text.length; i++) {
+                    var ch = text[i];
+                    if (ch === '\"')
+                        inString = !inString;
+                    if (inString)
+                        continue;
+                    if ((text[i] || '').toUpperCase() === 'R' &&
+                        (text[i + 1] || '').toUpperCase() === 'E' &&
+                        (text[i + 2] || '').toUpperCase() === 'M') {
+                        var before = text[i - 1] || '';
+                        var after = text[i + 3] || '';
+                        var beforeOk = i === 0 || !isWordChar(before);
+                        var afterOk = !isWordChar(after);
+                        if (beforeOk && afterOk)
+                            return i;
+                    }
+                }
+                return -1;
+            };
+            var remIdx = findRemIndex(lineRemText);
+            if (remIdx >= 0 && position.character >= remIdx) {
+                var isRemWord = wordRange && wordRange.start.character === remIdx;
+                var isRemNoddyLine_1 = /\bREM\s+NODDY\s*$/.test(lineRemText.trim());
+                var isNoddyWord_1 = word.toUpperCase() === 'NODDY';
+                if (!isRemWord) {
+                    if (!(isNoddyWord_1 && isRemNoddyLine_1 && isFinalBasicLine)) {
+                        return;
+                    }
                 }
             }
             // Handle specific BASIC commands            
@@ -2868,48 +3328,260 @@ function activate(ctx) {
             var lineText = document.lineAt(position.line).text;
             // Check if this looks like a Z80 assembly line (starts with hex address after whitespace)
             if (/^\s+[0-9A-Fa-f]{4}\s/.test(lineText)) {
-                // Try to get Z80 instruction info
-                var z80Info = (0, z80codes_js_1.getZ80InstructionInfo)(word);
-                if (z80Info) {
-                    return new vscode.Hover(z80Info);
+                // Check if cursor is positioned within the hex address itself (skip register hover for hex addresses)
+                var hexMatch = /^\s+([0-9A-Fa-f]{4})\s/.exec(lineText);
+                var isInHexAddress = hexMatch &&
+                    position.character >= lineText.indexOf(hexMatch[1]) &&
+                    position.character < lineText.indexOf(hexMatch[1]) + 4;
+                if (!isInHexAddress) {
+                    // Try to get Z80 instruction info
+                    var z80Info = (0, z80codes_js_1.getZ80InstructionInfo)(word);
+                    if (z80Info) {
+                        return new vscode.Hover(z80Info);
+                    }
                 }
-                // Provide info for Z80 registers
-                var z80Registers = {
-                    'A': '**A** - Accumulator (8-bit primary register)',
-                    'B': '**B** - General purpose register (8-bit), part of BC pair',
-                    'C': '**C** - General purpose register (8-bit), part of BC pair',
-                    'D': '**D** - General purpose register (8-bit), part of DE pair',
-                    'E': '**E** - General purpose register (8-bit), part of DE pair',
-                    'H': '**H** - High byte of HL register pair',
-                    'L': '**L** - Low byte of HL register pair',
-                    'BC': '**BC** - 16-bit register pair (B=high, C=low)',
-                    'DE': '**DE** - 16-bit register pair (D=high, E=low)',
-                    'HL': '**HL** - 16-bit register pair, often used for memory addressing',
-                    'SP': '**SP** - Stack Pointer (16-bit)',
-                    'IX': '**IX** - Index Register X (16-bit)',
-                    'IY': '**IY** - Index Register Y (16-bit)',
-                    'AF': '**AF** - Accumulator and Flags register pair',
-                    'PC': '**PC** - Program Counter (16-bit)',
-                    'I': '**I** - Interrupt Vector register',
-                    'R': '**R** - Memory Refresh register'
-                };
-                var upperWord = word.toUpperCase();
-                if (z80Registers[upperWord]) {
-                    return new vscode.Hover(z80Registers[upperWord]);
-                }
-                // Provide info for assembler directives
-                var directives = {
-                    'DB': '**DB** - Define Byte\n\nDefines one or more bytes of data.\n\nUsage: `DB value1, value2, ...` or `DB "string"`',
-                    'DW': '**DW** - Define Word\n\nDefines one or more 16-bit words (little-endian).\n\nUsage: `DW value1, value2, ...`',
-                    'DS': '**DS** - Define Space\n\nReserves a block of memory.\n\nUsage: `DS count` (reserves count bytes)'
-                };
-                if (directives[upperWord]) {
-                    return new vscode.Hover(directives[upperWord]);
-                }
+                // Provide info for Z80 registers (but not if cursor is in hex address)
+                if (!isInHexAddress) {
+                    // Provide info for Z80 registers
+                    var z80Registers = {
+                        'A': '**A** - Accumulator (8-bit primary register)',
+                        'B': '**B** - General purpose register (8-bit), part of BC pair',
+                        'C': '**C** - General purpose register (8-bit), part of BC pair',
+                        'D': '**D** - General purpose register (8-bit), part of DE pair',
+                        'E': '**E** - General purpose register (8-bit), part of DE pair',
+                        'H': '**H** - High byte of HL register pair',
+                        'L': '**L** - Low byte of HL register pair',
+                        'BC': '**BC** - 16-bit register pair (B=high, C=low)',
+                        'DE': '**DE** - 16-bit register pair (D=high, E=low)',
+                        'HL': '**HL** - 16-bit register pair, often used for memory addressing',
+                        'SP': '**SP** - Stack Pointer (16-bit)',
+                        'IX': '**IX** - Index Register X (16-bit)',
+                        'IY': '**IY** - Index Register Y (16-bit)',
+                        'AF': '**AF** - Accumulator and Flags register pair',
+                        'PC': '**PC** - Program Counter (16-bit)',
+                        'I': '**I** - Interrupt Vector register',
+                        'R': '**R** - Memory Refresh register'
+                    };
+                    var upperWord = word.toUpperCase();
+                    if (z80Registers[upperWord]) {
+                        return new vscode.Hover(z80Registers[upperWord]);
+                    }
+                    // Provide info for assembler directives
+                    var directives = {
+                        'DB': '**DB** - Define Byte\n\nDefines one or more bytes of data.\n\nUsage: `DB value1, value2, ...` or `DB "string"`',
+                        'DW': '**DW** - Define Word\n\nDefines one or more 16-bit words (little-endian).\n\nUsage: `DW value1, value2, ...`',
+                        'DS': '**DS** - Define Space\n\nReserves a block of memory.\n\nUsage: `DS count` (reserves count bytes)'
+                    };
+                    if (directives[upperWord]) {
+                        return new vscode.Hover(directives[upperWord]);
+                    }
+                } // Close the !isInHexAddress block
             }
             // No hover info found - return undefined implicitly by not returning anything                   
         } // This closes provideHover
     })); // This closes registerHoverProvider
+    // Register completion provider for Z80 assembly addresses after CODE
+    ctx.subscriptions.push(vscode.languages.registerCompletionItemProvider('mtxbasic', {
+        provideCompletionItems: function (document, position) {
+            var lineText = document.lineAt(position.line).text;
+            var linePrefix = lineText.substring(0, position.character);
+            // Only provide completion if we're on an indented line (inside CODE block)
+            //if (!/^\s+/.test(lineText)) {
+            // Only provide completion if we're on an indented line with just whitespace before cursor
+            if (!/^\s+$/.test(linePrefix)) {
+                return undefined;
+            }
+            // Check if we're inside a CODE block
+            var inCodeBlock = false;
+            var lastAddress = hexBaseAddress;
+            // Scan backwards to find CODE declaration and calculate current address
+            for (var i = position.line - 1; i >= 0; i--) {
+                var line = document.lineAt(i).text;
+                // Check if we hit a CODE statement
+                if (/^\d{1,5}\s+CODE\s*$/.test(line.trim())) {
+                    inCodeBlock = true;
+                    // Calculate bytes used by all previous BASIC lines (including CODE line)
+                    var totalBytes = 0;
+                    for (var j = 0; j <= i; j++) {
+                        var basicLine = document.lineAt(j).text;
+                        if (/^\d{1,5}\s/.test(basicLine)) {
+                            // Convert this line to bytes to get its length (including CODE line)
+                            try {
+                                var lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, hexBaseAddress + totalBytes);
+                                totalBytes += lineBytes.length;
+                            }
+                            catch (e) {
+                                // Skip lines that can't be tokenized
+                            }
+                        }
+                    }
+                    // Start Z80 code at the address after all BASIC lines
+                    lastAddress = hexBaseAddress + totalBytes;
+                    // Now calculate bytes in current CODE block from scratch
+                    for (var j = i + 1; j < position.line; j++) {
+                        var z80Line = document.lineAt(j).text;
+                        var match = /^\s+([0-9A-F]{4}\s+.*)$/.exec(z80Line);
+                        if (match) {
+                            var instruction = match[1].trim();
+                            try {
+                                var parsed = (0, z80codes_js_1.parseZ80Line)(instruction, j);
+                                if (parsed) {
+                                    var instrLength = 1;
+                                    if (parsed.isDirective) {
+                                        instrLength = (0, z80codes_js_1.getDirectiveLength)(parsed);
+                                    }
+                                    else if (parsed.mnemonic) {
+                                        instrLength = (0, z80codes_js_1.getInstructionLength)(parsed.mnemonic, parsed.operands);
+                                    }
+                                    lastAddress += instrLength;
+                                }
+                                else {
+                                    // Estimate 1 byte if parsing returns null
+                                    lastAddress += 1;
+                                }
+                            }
+                            catch (e) {
+                                // Estimate 1 byte if we can't parse
+                                lastAddress += 1;
+                            }
+                        }
+                    }
+                    break;
+                }
+                // If we hit another BASIC line number, we're not in CODE block
+                if (/^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
+                    break;
+                }
+            }
+            if (!inCodeBlock) {
+                return undefined;
+            }
+            // Create completion item with the calculated address
+            var completionItem = new vscode.CompletionItem(lastAddress.toString(16).toUpperCase().padStart(4, '0'), vscode.CompletionItemKind.Value);
+            completionItem.detail = 'Next Z80 address';
+            completionItem.insertText = lastAddress.toString(16).toUpperCase().padStart(4, '0') + ' ';
+            completionItem.preselect = true;
+            completionItem.sortText = '0'; // Sorts first
+            return [completionItem];
+        }
+    }, ' ' // Trigger on pressing space VS code doesn't allow '/t' as a trigger
+    )); // This closes registerCompletionItemProvider
+    // Command: Renumber Z80 addresses in CODE block at cursor
+    var renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', function () { return __awaiter(_this, void 0, void 0, function () {
+        var editor, doc, position, codeStartLine, codeEndLine, i, line, i, line, totalBytes, j, basicLine, lineBytes, currentAddress, edits, i, line, match, indent, instruction, newAddr, newLine, parsed, instrLength;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    editor = vscode.window.activeTextEditor;
+                    if (!editor) {
+                        vscode.window.showErrorMessage('No active MTX BASIC editor');
+                        return [2 /*return*/];
+                    }
+                    doc = editor.document;
+                    position = editor.selection.active;
+                    codeStartLine = -1;
+                    codeEndLine = -1;
+                    // Scan backwards to find CODE declaration
+                    for (i = position.line; i >= 0; i--) {
+                        line = doc.lineAt(i).text;
+                        if (/^\d{1,5}\s+CODE\s*$/.test(line.trim())) {
+                            codeStartLine = i;
+                            break;
+                        }
+                        // Stop if we hit another BASIC line number (not in CODE block)
+                        if (i < position.line && /^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
+                            vscode.window.showErrorMessage('Cursor is not inside a CODE block');
+                            return [2 /*return*/];
+                        }
+                    }
+                    if (codeStartLine === -1) {
+                        vscode.window.showErrorMessage('No CODE block found');
+                        return [2 /*return*/];
+                    }
+                    // Scan forward to find end of CODE block
+                    for (i = codeStartLine + 1; i < doc.lineCount; i++) {
+                        line = doc.lineAt(i).text;
+                        // End of CODE block: hit another BASIC line number or end of file
+                        if (/^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
+                            codeEndLine = i - 1;
+                            break;
+                        }
+                        if (i === doc.lineCount - 1) {
+                            codeEndLine = i;
+                            break;
+                        }
+                    }
+                    totalBytes = 0;
+                    for (j = 0; j <= codeStartLine; j++) {
+                        basicLine = doc.lineAt(j).text;
+                        if (/^\d{1,5}\s/.test(basicLine)) {
+                            try {
+                                lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, hexBaseAddress + totalBytes);
+                                totalBytes += lineBytes.length;
+                            }
+                            catch (e) {
+                                // Skip lines that can't be tokenized
+                            }
+                        }
+                    }
+                    currentAddress = hexBaseAddress + totalBytes;
+                    edits = [];
+                    for (i = codeStartLine + 1; i <= codeEndLine; i++) {
+                        line = doc.lineAt(i).text;
+                        match = /^(\s+)([0-9A-Fa-f]{4}\s+)(.*)$/.exec(line);
+                        if (match) {
+                            indent = match[1];
+                            instruction = match[3].trim();
+                            newAddr = currentAddress.toString(16).toUpperCase().padStart(4, '0');
+                            newLine = "".concat(indent).concat(newAddr, " ").concat(instruction);
+                            // Only add edit if address changed
+                            if (newLine !== line) {
+                                edits.push({ line: i, newText: newLine });
+                            }
+                            // Calculate instruction length for next address
+                            try {
+                                parsed = (0, z80codes_js_1.parseZ80Line)("".concat(newAddr, " ").concat(instruction), i);
+                                if (parsed) {
+                                    instrLength = 1;
+                                    if (parsed.isDirective) {
+                                        instrLength = (0, z80codes_js_1.getDirectiveLength)(parsed);
+                                    }
+                                    else if (parsed.mnemonic) {
+                                        instrLength = (0, z80codes_js_1.getInstructionLength)(parsed.mnemonic, parsed.operands);
+                                    }
+                                    currentAddress += instrLength;
+                                }
+                                else {
+                                    currentAddress += 1; // Default estimate
+                                }
+                            }
+                            catch (e) {
+                                currentAddress += 1; // Default estimate on error
+                            }
+                        }
+                    }
+                    if (edits.length === 0) {
+                        vscode.window.showInformationMessage('Z80 addresses are already correct');
+                        return [2 /*return*/];
+                    }
+                    // Apply all edits in a single transaction
+                    return [4 /*yield*/, editor.edit(function (editBuilder) {
+                            for (var _i = 0, edits_1 = edits; _i < edits_1.length; _i++) {
+                                var edit = edits_1[_i];
+                                var line = doc.lineAt(edit.line);
+                                var range = new vscode.Range(new vscode.Position(edit.line, 0), new vscode.Position(edit.line, line.text.length));
+                                editBuilder.replace(range, edit.newText);
+                            }
+                        })];
+                case 1:
+                    // Apply all edits in a single transaction
+                    _a.sent();
+                    vscode.window.showInformationMessage("Renumbered ".concat(edits.length, " Z80 address").concat(edits.length !== 1 ? 'es' : ''));
+                    return [2 /*return*/];
+            }
+        });
+    }); });
+    ctx.subscriptions.push(renumberZ80Cmd);
     // Clean up resources if needed
     function deactivate() { }
 }

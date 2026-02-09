@@ -18,5 +18,16 @@
     "surroundingPairs": [
         ["(", ")"],
         ["\"", "\""]
+    ],
+    // Define word pattern to exclude certain words from suggestions
+    "wordPattern": "\\b[A-Za-z][A-Za-z0-9]*\\$?\\b",
+    // Indentation rules
+    "onEnterRules": [
+        {
+            "beforeText": "^\\d{1,5}\\s+CODE\\s*$",
+            "action": {
+                "indent": "indent"
+            }
+        }
     ]
 }

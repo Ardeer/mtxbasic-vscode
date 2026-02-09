@@ -41,26 +41,26 @@ exports.isNoddyTrigger = isNoddyTrigger;
 exports.findPlodReferences = findPlodReferences;
 // check if the number is hexadecimal (16-bit UNSIGNED hexadecimal is allowed)
 function isHexNumber(expr) {
-    return typeof expr === 'string' && /^[#£][0-9A-Fa-f]{1,4}$/.test(expr);
-    // optional sign, then # or £, then 1‑4 hex digits, whole‑string match
-    //return /^[+-]?[#£][0-9A-Fa-f]{1,4}$/.test(expr); // use if what SIGNED but must use - or + in front of the hex number.
+    return typeof expr === 'string' && /^[#][0-9A-Fa-f]{1,4}$/.test(expr);
+    // optional sign, then # , then 1‑4 hex digits, whole‑string match
+    //return /^[+-]?[#][0-9A-Fa-f]{1,4}$/.test(expr); // use if what SIGNED but must use - or + in front of the hex number.
 } //  END of isHexNumber
 function parseSignedHex(s) {
-    var m = s.match(/^([#£])([0-9A-Fa-f]{1,4})$/);
+    var m = s.match(/^([#])([0-9A-Fa-f]{1,4})$/);
     if (!m)
         return null;
     var raw = parseInt(m[2], 16); // 0‑65535 (m[2] is guaranteed by the regex and the null check)
     // Convert to signed 16‑bit:
     var signed = raw & 0x8000 ? raw - 0x10000 : raw;
     // 16‑bit signed range: -32768 … 32767
-    // negative numbers starts at £8000 (-32768) to £FFFF (-1)
-    // postive numbers start at 0 to £7FFF
+    // negative numbers starts at #8000 (-32768) to #FFFF (-1)
+    // postive numbers start at 0 to #7FFF
     if (signed < -32768 || signed > 32767)
         return null;
-    return signed; // e.g. £FFA0 → -96
+    return signed; // e.g. #FFA0 → -96
 } //  END of isHexadecimalNumber
 function parseHex(s) {
-    var m = s.match(/^([+-]?)([#£])([0-9A-Fa-f]{1,4})$/);
+    var m = s.match(/^([+-]?)([#])([0-9A-Fa-f]{1,4})$/);
     if (!m)
         return null; // not a valid literal
     var sign = m[1] === '-' ? -1 : 1;
@@ -81,21 +81,21 @@ function isValidVarName(s) {
     // Must start with a letter, then letters/digits allowed (underscore not allowed)
     // Reject string variables that starts with 1 or more numbers followed by 1 or more letters, followed by none or more alphanumerics. 
     // ^[A-Z][A-Z0-9_]*$
-    return /^[A-Z][A-Z0-9]*$/.test(s);
+    // Allow simple variables (A, ABC) and array subscripts (A(I), Y(H,I))
+    // Pattern: variable name optionally followed by (subscripts)
+    return /^[A-Z][A-Z0-9]*(?:\([^)]+\))?$/.test(s);
 } //END of isValidVarName
 function isValidStrVarName(s) {
     // Reject null/undefined, empty, and literal "()" and starts with ". !s replaces s===null || s===undefined
     if (!s || s === '()' || s.startsWith('"'))
         return false;
     // Must start with a letter, then letters/digits allowed (underscore not allowed)
-    // Reject string variables that starts with 1 or more numbers followed by 1 or more letters, followed by none or more alphanumerics. 
-    // ^[A-Z][A-Z0-9_]*\$$
+    // Allow simple string variables (A$, ABC$) and string array subscripts (A$(I), F$(C), Y$(H,I))
+    // Pattern: variable name + $ + optional (subscripts)
     if (isBalancedParentheses(s)) {
-        //console.log('Balanced parenthesis');
-        // Check for valid parenthesized expression
-        var sStrip = String(s).replace(/[\s[(|)]/g, '');
-        //console.log('stripped out parentheses);
-        return /^[A-Z][A-Z0-9]*\$$/.test(sStrip); // added to trailing anchor to prevent false positives like foo$bar
+        // Check for valid string variable or string array with subscripts
+        // Match: letter + alphanumerics + $ + optional(subscripts)
+        return /^[A-Z][A-Z0-9]*\$(?:\([^)]+\))?$/.test(s);
     }
     return false;
 } //END of isValidStrVarName
@@ -274,20 +274,9 @@ function varExprParts(expr) {
     // Split down if variable expression is complex containing simple or variable arithmetic and numerical functions.
     // Split on arithmetic operators (keep operators as tokens) and validate parts
     //(/([+\-*/^])/) OK until you get FUNC(A+B), the + sign or any operator causes incorrect splits
-    // reuse the trick used by strExprParts to prevent functs s.split(/([+\-*/^(])(?![^(]*\))/) works but misses out the closing ')'
-    //s.split(/([+\-*/^(])(?![^(]*\))/) works - however, as above it fails with (AB+3), only showing '+' & '3' with AB missing 
-    //const parts = s.split(/(?:\([^()]*\))|(?:[+\-*/^(])(?![^(]*\))/).map(p => p.trim()).filter(p => p !== ''); 
-    //const parts = t.split(/([+\-*/^])/).map(p => p.trim()).filter(p => p !== '');
-    //const parts = s.match(/(?:[A-Z][A-Z0-9]*\s*\()(?:[^()]+|\([^()]*\))*\)|\([^()]*\)|[+\-*/^]|\d+(?:\.\d+)?/g) ?? []; //\s* needed to capture LEN ()S
-    //allows 1 deep nested SIN((AB+4)-5) returns as 'SIN((AB+4)+5)'
-    //doesn't allow nested ((AB+0.4)+5), however, best option for testing is the one with no single '(' as this would appear as unbalanced
-    // [+\-*/^] => '(AB+0.4)' , '+' , '5'
-    //[+\-*/^(] => '(' , '(AB+0.4)' , '+' , '5'
-    //[+\-*/^()] => '(' , '(AB+0.4)' , '+' , '5' , ')'
     //covers 1 deep nested functions but not 1 deep variables.
     if (parts.length === 0)
         extractParts.push(['', false]);
-    console.log('parts are', parts);
     for (var _i = 0, parts_1 = parts; _i < parts_1.length; _i++) {
         var part = parts_1[_i];
         //console.log('strexpr parts based on cat',part);
@@ -369,20 +358,35 @@ function varExprParts(expr) {
                 extractParts.push([part, false]);
             }
         }
-        // Check for plain parentheses token
-        else if (/\([^()]*\)/.test(part)) {
-            var stripPart = stripAllCharacters(part, '()');
-            //console.log('plan=',part,' stripped part=',stripPart);
-            if (isValidVarExprArithmetic(stripPart)) {
-                //console.log('valid arithmetic variable expression');
-                extractParts.push([part, true]);
+        // Check for expression wrapped in parentheses - e.g. (A+B) or (Y(AA,P)*Q)
+        // Only strip outer parentheses if they match (opening at pos 0, closing at end)
+        else if (part.startsWith('(') && part.endsWith(')')) {
+            // Check if outer parentheses match by ensuring depth returns to 0 at the end
+            var depth = 0;
+            var matchesAtEnd = false;
+            for (var i = 0; i < part.length; i++) {
+                if (part[i] === '(')
+                    depth++;
+                if (part[i] === ')')
+                    depth--;
+                if (depth === 0 && i === part.length - 1)
+                    matchesAtEnd = true;
+            }
+            if (matchesAtEnd) {
+                // Strip outer parentheses and validate
+                var stripPart = part.slice(1, -1);
+                if (isValidVarExprArithmetic(stripPart)) {
+                    extractParts.push([part, true]);
+                }
+                else {
+                    extractParts.push([part, false]);
+                }
             }
             else {
-                //console.log('invalid arithmetic/var expression');
                 extractParts.push([part, false]);
             }
         }
-        // 4. simple arithmetic or variable check
+        // 4. simple arithmetic or variable check (including array variables like Y(1,1))
         else if (isValidVarExprArithmetic(part)) {
             extractParts.push([part, true]);
         } //avoids double entry for LN() or EXP() which are causing double check
@@ -418,13 +422,9 @@ function captureParenthesesGroup(s, n) {
 } //END of captureParenthesesGroup
 // simple tokeniser – split on whitespace and keep punctuation as separate tokens
 function simpleTokeniser(str) {
-    //const re = /([A-Z]\w*|\d+|\S)/g; // identifiers, numbers, or any single non‑space char
-    //const re =  /([A-Z]{1,}[0-9]*\$(?!\w)|[A-Z]\w*|\d+|\S)/g; // w allows alphanumeric and underscores
-    //const re = /("[^"]*"|[A-Z]{1,}[0-9]*\$*(?![A-Za-z0-9])|[A-Z][A-Za-z0-9]*|\d+(?:\.\d+)?|\S)/g; //doesn't allow _ or variables starting with a number, this is fine for a validator not a tokeniser
-    var _a;
     // order is critical, need to check decimal before the last option otherwise '4.5' is split as 4,.,5. The last bit allows vars starting with numbers to avoid splitting down
-    //const re = /("[^"]*"|[A-Z]{1,}[0-9]*\$*(?![A-Za-z0-9])|\d+(?:\.\d+)?|[A-Za-z0-9_]+|\S)/g; 
-    var re = /("[^"]*"|[A-Z]{1,}[0-9]*\$(?![A-Za-z0-9])|(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]+|\d+(?:\.\d+)?|\S)/g; //LEN\s isn't correct and split down further.
+    var _a;
+    var re = /("[^"]*"|[A-Z]{1,}[0-9]*\$(?![A-Z0-9])|(?=[A-Z0-9]*[A-Z])[A-Z0-9]+|\d+(?:\.\d+)?|\S)/g; //LEN\s isn't correct and split down further.
     // regex above matches
     // \"[^"]*\" captures a double‑quoted string (including any lowercase letters) as one token.
     // [A-Z]{1,}[0-9]*\$(?![A-Za-z0-9]) matches the special $‑ending tokens.
@@ -466,9 +466,9 @@ function complexTokeniser(expr) {
     var reStrFn = /^(?:CHR|GR|LEFT|MID|RIGHT|STR)\$\s*/; // replaced $[^)]*$ with (?=\s*()) didn't work with nested parentheses \([^)]*\)* kinda worked
     //const reLenFn   = /^(?:LEN)\s*/;                                     // LEN needs a space after it to be valid but handled separately
     // $‑ending identifier that is a function call (e.g. CHR$(…))
-    var reDollarFn = /^[A-Z][A-Za-z0-9]*\$(?=\s*\()/; //replaced [A-Z]{1,}[0-9] with [A-Z][A-Za-z0-9]
-    var reDollar = /^[A-Z][A-Za-z0-9]*\$(?![A-Za-z0-9])/; // plain $‑ending token
-    var reIdent = /^(?:[A-Z][A-Za-z0-9]*\$?)/; // identifiers containing at least one letter
+    var reDollarFn = /^[A-Z][A-Z0-9]*\$(?=\s*\()/; //replaced [A-Z]{1,}[0-9] with [A-Z][A-Z0-9]
+    var reDollar = /^[A-Z][A-Z0-9]*\$(?![A-Z0-9])/; // plain $‑ending token
+    var reIdent = /^(?:[A-Z][A-Z0-9]*\$?)/; // identifiers containing at least one letter
     var reNumber = /^(\d+(?:.\d+)?(?:[eE][+-]?\d+)?)/; // integer or decimal or scientific
     var reArithOp = /^[+\-*/^]/; // Arthimetical operators
     var reBoolOp = /^(?:AND|NOT|OR)\s*/; // Boolean operators
@@ -482,21 +482,23 @@ function complexTokeniser(expr) {
             i++;
             continue;
         }
-        // ---- 2. capture variable expressions contained within parentheses ----
-        //const captureParenGroup = () => {
-        //if (expr[i] !== '(') return null; // checked here before calling function
-        //const start = i;       
-        //let depth = 0;       
-        //while (i < expr.length) {
-        //if (expr[i] === '(') depth++;
-        //else if (expr[i] === ')') depth--;
-        //i++;
-        //if (depth === 0) break;
-        //}
-        //return expr.slice(start,i);
-        //};
-        //const grp = captureParenGroup();
-        //if (grp) { tokens.push(grp)); continue; }
+        // ---- 2. Check for array variables BEFORE generic parentheses ----
+        // Match: identifier (possibly ending in $) followed by '('
+        // This catches Y(1,1), F$(C), etc. BEFORE they're split into separate tokens
+        var arrayVarMatch = /^([A-Z][A-Z0-9]*\$?)(?=\()/.exec(expr.slice(i));
+        if (arrayVarMatch) {
+            var varName = arrayVarMatch[1];
+            i += varName.length;
+            // Now capture the subscripts
+            var subscriptStart = i;
+            var subscriptEnd = captureParenthesesGroup(expr, i);
+            if (subscriptEnd) {
+                tokens.push(varName + expr.slice(subscriptStart, subscriptEnd));
+                i = subscriptEnd;
+                continue;
+            }
+        }
+        // ---- 3. capture variable expressions contained within parentheses ----            
         var grp = captureParenthesesGroup(expr, i); //procedurised section of code below
         if (grp) {
             var start = i;
@@ -504,7 +506,7 @@ function complexTokeniser(expr) {
             tokens.push(expr.slice(start, i));
             continue;
         }
-        // ---- 3. DIM var(expr) or var$(expr)
+        // ---- 4. DIM var(expr) or var$(expr)
         var d = consume(reDim);
         if (d) {
             tokens.push(d);
@@ -566,25 +568,7 @@ function complexTokeniser(expr) {
         // ---- 9. ordinary identifier / variable --------------------------------
         var id = consume(reIdent);
         if (id) {
-            // ----- 9a. normal function call without the required space (e.g. AB(…) ) -----
-            if (expr.charAt(i) === '(') {
-                var depth = 0;
-                var start = i;
-                while (i < expr.length) {
-                    var ch = expr.charAt(i);
-                    if (ch === '(')
-                        depth++;
-                    else if (ch === ')')
-                        depth--;
-                    i++;
-                    if (depth === 0)
-                        break;
-                }
-                var call = expr.slice(start, i);
-                tokens.push(id + call);
-                continue;
-            }
-            // ----- 9b. plain identifier ------------------------------------
+            // Arrays are already handled above (step 2), so this is just plain identifiers
             tokens.push(id);
             continue;
         }
@@ -631,20 +615,21 @@ function isValidVarExprArithmetic(s) {
     //const simpleVar= /^(?:[+\-]?(?:[A-Z][A-Z0-9]*|\d.+))(?:[+\-*/^](?:[+\-]?(?:[A-Z][A-Z0-9]*|\d.+)))*$/;
     // Consider scientific numbers as part of the expression
     //const simpleVar = /^(?:[A-Z][A-Z0-9]*|\d.+)(?:[+\-*/^](?:[A-Z][A-Z0-9]*|\d+(?:\.\d+)?))*$/; //weird but \d.+ needed in 1st and \d+(?:\.\d+)?) in the second
-    // Final version including scientific notation and unary plus/minus at the start of numbers but doesn't give true for operators, use isValidArithmetic for that
-    var simpleVar = /^(?:[A-Z][A-Z0-9]*|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?:[+\-*/^](?:[A-Z][A-Z0-9]*|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?))*$/;
+    // Final version including scientific notation, unary plus/minus, and array subscripts like Y(1,1)
+    var simpleVar = /^(?:[A-Z][A-Z0-9]*(?:\([^)]+\))?|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?:[+\-*/^](?:[A-Z][A-Z0-9]*(?:\([^)]+\))?|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?))*$/;
     // don't include minus as 2 minus make a plus, 3 minus make a minus and 4 minus make a plus ...
     if (/[+|*|/|^]{2}/.test(s))
         return false;
     // Special case for empty parentheses
     if (s === '()')
         return false;
-    // Check for balanced parentheses and then test against simple variable arithmetic
+    // Check for balanced parentheses
     if (isBalancedParentheses(s)) {
-        //console.log('Balanced parenthesis');
-        // Check for valid parenthesized expression
+        // First try to match WITH parentheses (for array subscripts like Y(1,1))
+        if (simpleVar.test(s))
+            return true;
+        // If that fails, strip parentheses and try again (for arithmetic like (A+B))
         var sStrip = String(s).replace(/[\s[(|)]/g, '');
-        //console.log('stripped out parenthesis and tested against simpleVar', sStrip);
         return simpleVar.test(sStrip); //also covers LN(num) and EXP(num)
     }
     return false;
@@ -688,15 +673,15 @@ function classifyExpr(expr) {
     var trimmed = expr.trim();
     if (!trimmed)
         return { hasString: false, hasNumeric: false };
-    var simpleVar = /^[A-Za-z][A-Za-z0-9]*\$?$/.test(trimmed);
+    var simpleVar = /^[A-Z][A-Z0-9]*\$?$/.test(trimmed);
     if (simpleVar)
         return { hasString: trimmed.endsWith('$'), hasNumeric: !trimmed.endsWith('$') };
     var upper = trimmed.toUpperCase();
-    var stringReturningFns = /^(CHR\$|LEFT\$|MID\$|RIGHT\$|STR\$|SPK\$|TIME\$)/i;
-    if (stringReturningFns.test(trimmed))
+    var stringReturningFns = /^(CHR\$|LEFT\$|MID\$|RIGHT\$|STR\$|SPK\$|TIME\$)/;
+    if (stringReturningFns.test(upper))
         return { hasString: true, hasNumeric: false };
-    var numericReturningFns = /^(ABS|ASC|ATN|COS|EXP|INP|INT|LEN|LN|MOD|PEEK|SGN|SIN|SQR|TAN|USR|VAL|PI|RND|SOUND|RND)/i;
-    if (numericReturningFns.test(trimmed))
+    var numericReturningFns = /^(ABS|ASC|ATN|COS|EXP|INP|INT|LEN|LN|MOD|PEEK|SGN|SIN|SQR|TAN|USR|VAL|PI|RND|SOUND|RND)/;
+    if (numericReturningFns.test(upper))
         return { hasString: false, hasNumeric: true };
     var strParts = stringExprParts(trimmed);
     var numParts = varExprParts(trimmed);
@@ -836,14 +821,11 @@ function splitTopLevel(s) {
 // returns true for "(...)" where the top-level inside contains a relational operator
 function isParenthesisedBooleanExpression(expr) {
     var s = expr.trim();
-    if (!s.startsWith('(') || !s.endsWith(')'))
-        return false;
-    if (!isBalancedParentheses(s))
-        return false;
     var inner = s.slice(1, -1);
+    var innerUpper = inner.toUpperCase();
     var depth = 0;
     var inString = false;
-    var keywordRe = /\b(?:AND|OR|NOT)\b/i;
+    var keywordRe = /\b(?:AND|OR|NOT)\b/;
     for (var i = 0; i < inner.length; i++) {
         var ch = inner[i];
         if (ch === '"') {
@@ -863,14 +845,14 @@ function isParenthesisedBooleanExpression(expr) {
         }
         if (depth === 0) {
             // relational operators: =, <>, <=, >=, <, >
-            if (inner.substr(i, 2) === '<>' || inner.substr(i, 2) === '<=' || inner.substr(i, 2) === '>=')
+            if (inner.substring(i, i + 2) === '<>' || inner.substring(i, i + 2) === '<=' || inner.substring(i, i + 2) === '>=')
                 return true;
             if (ch === '=' || ch === '<' || ch === '>')
                 return true;
         }
     }
     // if boolean keywords appear at top-level (AND/OR/NOT), accept as boolean expression
-    if (keywordRe.test(inner))
+    if (keywordRe.test(innerUpper))
         return true;
     return false;
 } // END of isParenthesisedBooleanExpression     
@@ -878,16 +860,17 @@ function isParenthesisedBooleanExpression(expr) {
 function findBooleanOperatorSpacingIssues(expr) {
     var _a, _b, _c;
     var issues = [];
-    var boolRe = /(AND|OR|NOT)/gi;
+    var exprUpper = expr.toUpperCase();
+    var boolRe = /\b(AND|OR|NOT)\b/g;
     var match;
-    while ((match = boolRe.exec(expr)) !== null) {
+    while ((match = boolRe.exec(exprUpper)) !== null) {
         var token = (_b = (_a = match[1]) === null || _a === void 0 ? void 0 : _a.toUpperCase()) !== null && _b !== void 0 ? _b : '';
         var start = (_c = match.index) !== null && _c !== void 0 ? _c : 0;
         var end = start + token.length;
         var prevChar = start > 0 ? expr.charAt(start - 1) : '';
         var nextChar = end < expr.length ? expr.charAt(end) : '';
-        var prevIllegal = /[A-Za-z0-9$]/.test(prevChar);
-        var nextIllegal = /[A-Za-z0-9$]/.test(nextChar);
+        var prevIllegal = /[A-Za-z0-9_$]/.test(prevChar);
+        var nextIllegal = /[A-Za-z0-9_$]/.test(nextChar);
         if (prevIllegal || nextIllegal) {
             var fragStart = prevIllegal ? start - 1 : start;
             var fragEnd = nextIllegal ? end + 1 : end;
@@ -912,8 +895,9 @@ function validateBooleanConnectors(expr, spans, report) {
             return;
         var rawGap = expr.slice(cursor, nextStart);
         var trimmed = rawGap.trim();
+        var trimmedUpper = trimmed.toUpperCase();
         // Empty gap or valid boolean connector - OK
-        if (!trimmed || /^(AND|OR|NOT)$/i.test(trimmed))
+        if (!trimmed || /^(AND|OR|NOT)$/.test(trimmedUpper))
             return;
         // Skip if the gap contains only arithmetic operators and operands
         // This handles cases like "B+C+3" which is part of a comparison RHS
@@ -921,7 +905,7 @@ function validateBooleanConnectors(expr, spans, report) {
         if (/^[\s\w\d.+\-*/^(),]+$/.test(trimmed)) {
             // Additional check: must not contain standalone AND/OR/NOT as words
             // (they would be invalid if not properly separated)
-            if (!/\b(AND|OR|NOT)\b/i.test(trimmed)) {
+            if (!/\b(AND|OR|NOT)\b/.test(trimmedUpper)) {
                 return; // It's a valid arithmetic expression, not an invalid connector
             }
         }
@@ -988,9 +972,9 @@ function splitBooleanExpression(expr) {
             continue;
         }
         // Check for boolean keywords (AND, OR, NOT) at word boundaries
-        if (/[A-Za-z]/.test(ch)) {
+        if (/[A-Z]/.test(ch)) {
             var j = i + 1;
-            while (j < expr.length && /[A-Za-z0-9_$]/.test(expr[j]))
+            while (j < expr.length && /[A-Z0-9$]/.test(expr[j]))
                 j++;
             var word = expr.slice(i, j).toUpperCase();
             if (word === 'AND' || word === 'OR') {
@@ -1097,7 +1081,7 @@ var noddyCommands = [
     // *G or *GOTO <label> - goto label (similar to BRANCH)
     { id: 'GOTO', pattern: /^\*(?:G|GOTO)\s+(\w+)\s*$/, hasArg: true, argType: 'label', description: 'Go to label' },
     // *I or *IF <char>,<label> - conditional branch on character input
-    { id: 'IF', pattern: /^\*(?:I|IF)\s+([A-Za-z0-9]),(\w+)\s*$/, hasArg: true, argType: 'char_label', description: 'Conditional branch on character input' },
+    { id: 'IF', pattern: /^\*(?:I|IF)\s+([A-Z0-9]),(\w+)\s*$/, hasArg: true, argType: 'char_label', description: 'Conditional branch on character input' },
     // *L or *LIST - list the noddy program
     { id: 'LIST', pattern: /^\*(?:L|LIST)\s*$/, hasArg: false, argType: 'none', description: 'List the Noddy program' },
     // *O or *OFF - turn off/exit noddy
@@ -1174,7 +1158,7 @@ function parseNoddyContent(lines, startLine) {
             }
             currentPage.content.push(line);
             textLineCount++;
-            // Text pages have max 24 rows
+            // Text pages have max 24 rows NOTE: autoscroll to next page after 24 lines, losing tthe first line
             if (currentPage.type === 'text' && textLineCount > 24) {
                 errors.push({
                     line: i,
@@ -1183,12 +1167,12 @@ function parseNoddyContent(lines, startLine) {
                     end: line.length
                 });
             }
-            // Text pages have max 40 characters per line
-            if (currentPage.type === 'text' && line.length > 40) {
+            // Text pages have max 39 characters per line, by 24 lines. Note: autoscroll to next line 
+            if (currentPage.type === 'text' && line.length > 39) {
                 errors.push({
                     line: i,
-                    message: "Text line exceeds maximum of 40 characters (got ".concat(line.length, ")"),
-                    start: 40,
+                    message: "Text line exceeds maximum of 39 characters (got ".concat(line.length, ")"),
+                    start: 39,
                     end: line.length
                 });
             }
@@ -1340,7 +1324,7 @@ function validateNoddyProgram(page, allPages, lineOffset) {
                         var charInput = match[1];
                         var labelName = match[2];
                         // Validate character is single alphanumeric
-                        if (!/^[A-Za-z0-9]$/.test(charInput)) {
+                        if (!/^[A-Z0-9]$/.test(charInput)) {
                             errors.push({
                                 line: actualLine,
                                 message: "*IF: character must be single alphanumeric (got \"".concat(charInput, "\")"),
@@ -1410,17 +1394,18 @@ function validateNoddyProgram(page, allPages, lineOffset) {
  * Check if a line is a NODDY trigger line
  */
 function isNoddyTrigger(line) {
-    return /^\s*\d+\s+NODDY\s*$/i.test(line);
+    return /^\s*\d+\s+NODDY\s*$/.test(line.toUpperCase());
 }
 /**
  * Get all PLOD references from BASIC code
  */
 function findPlodReferences(lines) {
     var refs = [];
-    var plodPattern = /PLOD\s+"(\w+)"/gi;
+    var plodPattern = /PLOD\s+"(\w+)"/g;
     for (var i = 0; i < lines.length; i++) {
+        var lineUpper = lines[i].toUpperCase();
         var match = void 0;
-        while ((match = plodPattern.exec(lines[i])) !== null) {
+        while ((match = plodPattern.exec(lineUpper)) !== null) {
             refs.push({
                 line: i,
                 progName: match[1],

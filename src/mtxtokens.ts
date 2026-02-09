@@ -5,35 +5,15 @@ v0.1
 
 12-Dec-2025 converted to typescript and added hex values of the tokens.
 */
-/**
-import { isHexNumber,
-        parseSignedHex,
-        parseHex,
-        stripAllCharacters,
-        stripOuterParentheses,
-        convertToNumber
-}
-from './stdFns.js';
- */
 
 import {
     z80Cmds,
-    Z80Error,
-    Z80ParsedLine,
-    CodeBlock,
-    LabelInfo,
-    parseZ80Line,
-    splitOperands,
-    detectCodeBlocks,
-    collectLabels,
     normalizeInstruction,
-    findZ80Command,
-    validateZ80Instruction,
-    validateZ80InstructionWithLabels,
-    validateCodeBlock,
-    validateCodeBlocks,
-    getZ80InstructionInfo
+    parseZ80Line
 } from './z80codes.js';
+
+//Not imported     Z80Error, Z80ParsedLine, CodeBlock, LabelInfo, splitOperands, detectCodeBlocks, collectLabels, findZ80Command,
+//                 validateZ80Instruction, validateZ80InstructionWithLabels, validateCodeBlock, validateCodeBlocks,  getZ80InstructionInfo
 
 //ascii (non-printable 0 to 31 and printable from 32 to 127) + MTX BASIC tokens (from 128 to 255)
 const mtxTokens: {tokenDec: number, tokenHex: number, token: string}[] = [
@@ -415,7 +395,7 @@ const mtxTokens: {tokenDec: number, tokenHex: number, token: string}[] = [
         10. As space character is commonly used in text, it is represeented by a single byte 0x80 rather than the standard ASCII 0x20 to save space. so 1 space is represented as 0x81 and 4 consecutive spaces as 0x84. This is used in in REM, NODDY text pages and comments within code block COMMENTS.
         11. NODDY Block is handled by converting NODDY cammands and page text from ASCII to bytes, except for the space-compression.
             THE noddy SECTION FORMAT IS AS FOLLOWS:
-            <total length of A noddy PAGE, 2 bytes LSB/MSB> (maximum size will be 24 rows x 40 columns = 960 bytes, typically smaller due to space compression). 
+            <total length of A noddy PAGE, 2 bytes LSB/MSB> (maximum size will be 24 rows x 40 columns = 960 bytes, typically smaller due to space compression. Width limited to 39 characters to avoid misalignment). 
             <NODDY command tokens OR text in ASCII with space compression as required>
             <0xFF> (end of NODDY page marker)
             Also, the program title is limited to 33 characters with bit 7 set to indicate end of title, also, "Noddy page title is " is injected to improve readability but doesn't form part of the actual program title and not part of the byte count.
@@ -501,6 +481,20 @@ const tokensSorted = mtxTokens
   .map(t => ({ token: t.token, tokenUpper: t.token.toUpperCase(), dec: t.tokenDec }))
   .sort((a,b) => b.token.length - a.token.length);
 const maxTokenLen = tokensSorted.length ? Math.max(...tokensSorted.map(t=>t.token.length)) : 0;
+const stringKeywordTokens = new Set(
+  tokensSorted.filter(t => t.tokenUpper.endsWith('$')).map(t => t.tokenUpper)
+);
+
+// Helper: check if position is at a word boundary
+function isAtWordBoundary(text: string, pos: number, len: number): boolean {
+  // MTX BASIC identifiers: [A-Z][A-Z0-9]*\$?
+  // Before: must not be a letter or $ 
+  // (digits and spaces are OK: "1TO" or " TO" means TO is separate. Likewise for Numbers before THEN and ELSE)
+  const before = pos === 0 || !/[A-Z$]/.test(text[pos - 1]);
+  // After: must not be alphanumeric or $
+  const after = pos + len >= text.length || !/[A-Z0-9$]/.test(text[pos + len]);
+  return before && after;
+}
 
 // compress runs of spaces into 0x80 + runLength and otherwise emit ASCII bytes
 function compressSpacesAndAscii(str: string): number[] {
@@ -572,27 +566,15 @@ function basicTokeniseLine(line: string, baseAddr = 0x4000): number[] {
     ];
   };
 
-  // REM NODDY -> convertNoddyBlock
-  if (/^\s*REM\b/i.test(restTrim) && /\bNODDY\b/i.test(restTrim)) {
-    const remTok = tokensSorted.find(t => t.tokenUpper === 'REM')?.dec ?? 0x80;
-    const afterRem = restFull.replace(/^\s*REM\s*/i, '');
-    const idx = afterRem.toUpperCase().indexOf('NODDY');
-    const noddyText = idx >= 0 ? afterRem.slice(idx + 5).trim() : '';
-    const noddyBytes = convertNoddyBlock(noddyText ? [noddyText] : []);
-    const payload = [remTok, ...noddyBytes, 0xFF];
-    if (hasLineNumber) return wrapWithLineHeader(payload);
-    return payload;
-  }
-
   // CODE handling: accept CODE line followed by assembly lines (process only mnemonic part)
-  if (/^\s*CODE(?:\b|$)/i.test(restTrim)) {
+  if (/^\s*CODE(?:\b|$)/.test(restTrim)) {
     const codeTok = tokensSorted.find(t => t.tokenUpper === 'CODE')?.dec ?? 0xC2;
 
     // split the rest into physical lines and find the line that contains CODE
     const linesArr = restFull.split(/\r?\n/);
     let codeLineIndex = -1;
     for (let idx = 0; idx < linesArr.length; idx++) {
-      if (/^\s*CODE(?:\b|$)/i.test(linesArr[idx])) { codeLineIndex = idx; break; }
+      if (/^\s*CODE(?:\b|$)/.test(linesArr[idx])) { codeLineIndex = idx; break; }
     }
     if (codeLineIndex < 0) codeLineIndex = 0;
 
@@ -605,7 +587,7 @@ function basicTokeniseLine(line: string, baseAddr = 0x4000): number[] {
       // Stop if this is a new BASIC line (starts with digits, no leading whitespace)
       if (/^\d+\s/.test(l)) break;
       // Stop if line has leading whitespace but no hex address following it
-      if (/^\s+/.test(l) && !/^\s+[0-9A-Fa-f]{1,4}\b/.test(l)) break;
+      if (/^\s+/.test(l) && !/^\s+[0-9A-F]{1,4}\b/.test(l)) break;
       // This is a code block line, add it
       console.log(`[basicTokeniseLine] Code line ${rawCodeLines.length}: ${JSON.stringify(l.substring(0, 50))}`);
       rawCodeLines.push(l);
@@ -615,23 +597,6 @@ function basicTokeniseLine(line: string, baseAddr = 0x4000): number[] {
 
     // Process code lines: preserve hex addresses and handle comments
     // If a trailing ';' comment exists, preserve it as a separate comment-only
-    // line (prefixed with ';') so processCodeBlock will treat it as ASCII
-    // comment bytes instead of allowing tokenisation.
-    /**const codeLines = rawCodeLines.flatMap(l => {
-      if (!l.trim()) return [];
-      const semi = l.indexOf(';');
-      if (semi >= 0) {
-        const codePart = l.slice(0, semi);
-        const commentPart = l.slice(semi); // includes leading ';'
-        const out: string[] = [];
-        if (codePart.trim()) out.push(codePart);
-        // ensure comment-only line starts with ';' so processCodeBlock detects it
-        if (commentPart.trim()) out.push(commentPart.trim());
-        return out;
-      }
-      return [l];  // Keep the line as-is, preserving hex address and instruction
-    }).filter(l => l.trim().length > 0);
-    */
     // UPDATE: We do NOT split comments here anymore. We pass the full line to processCodeBlock
     // which handles inline comments correctly by preserving the same offset.
     // Alternative simpler approach: just filter out empty lines
@@ -680,19 +645,147 @@ function basicTokeniseLine(line: string, baseAddr = 0x4000): number[] {
     return payload;
   }
 
-  // Standard BASIC tokenisation (unchanged behaviour)
+  // Standard BASIC tokenisation (remove spaces after ':' and before TO/THEN outside quotes)
+  const stripSpacesAfterColonOutsideQuotes = (input: string): string => {
+    let out = '';
+    let inQ = false;
+    let inRem = false;
+    const isIdentChar = (c: string) => /[A-Z0-9\$]/.test(c);
+
+    for (let idx = 0; idx < input.length; idx++) {
+      const ch = input[idx];
+
+      if (ch === '"') {
+        inQ = !inQ;
+        out += ch;
+        continue;
+      }
+
+      // If we're in REM text, preserve everything until a ':' outside quotes
+      if (!inQ && inRem) {
+        if (ch === ':') {
+          inRem = false;
+          out += ch;
+          // strip spaces immediately after ':' (normal behavior resumes)
+          let j = idx + 1;
+          while (j < input.length && input[j] === ' ') j++;
+          idx = j - 1;
+          continue;
+        }
+        out += ch;
+        continue;
+      }
+
+      // Detect REM token outside quotes (word boundary)
+      if (!inQ && !inRem) {
+        if ((ch === 'R' || ch === 'r') && input.substring(idx, idx + 3).toUpperCase() === 'REM') {
+          const prev = idx > 0 ? input[idx - 1] : '';
+          const next = idx + 3 < input.length ? input[idx + 3] : '';
+          if (!isIdentChar(prev) && !isIdentChar(next)) {
+            out += input.substr(idx, 3);
+            idx += 2;
+            inRem = true;
+            continue;
+          }
+        }
+      }
+
+      if (!inQ && ch === ':') {
+        out += ch;
+        let j = idx + 1;
+        while (j < input.length && input[j] === ' ') j++;
+        idx = j - 1;
+        continue;
+      } 
+/** removed causing a conflict with identifiers like TOBY, THENNAH, etc
+      if (!inQ && ch === ' ') {
+        let j = idx;
+        while (j < input.length && input[j] === ' ') j++;
+        const rest = input.substring(j).toUpperCase();
+        const isTo = rest.startsWith('TO') && !/^[A-Z0-9\$]/.test(rest.substring(2, 3));
+        const isThen = rest.startsWith('THEN') && !/^[A-Z0-9\$]/.test(rest.substring(4, 5));
+        if (isTo || isThen) {
+          idx = j - 1; // skip spaces before TO/THEN
+          continue;
+        }
+      }
+*/
+      out += ch;
+    }
+    return out;
+  };
+
+  const restStandard = stripSpacesAfterColonOutsideQuotes(restFull);
+
   const bytes: number[] = [];
   let i = 0;
   let inQuote = false;
-  const L = restFull.length;
+  const L = restStandard.length;
+
+  const opTokenMap: Record<string, number> = {
+    '>=': 0xD7,
+    '<=': 0xD8,
+    '<>': 0xD9,
+    '+': 0xCF,
+    '-': 0xD0,
+    '*': 0xD1,
+    '/': 0xD2,
+    '^': 0xD3,
+    '=': 0xD4,
+    '>': 0xD5,
+    '<': 0xD6
+  };
+
+  const tryEmitOperatorToken = (s: string, idx: number): number => {
+    const two = s.substring(idx, idx + 2);
+    if (opTokenMap[two] !== undefined) {
+      bytes.push(opTokenMap[two]);
+      return 2;
+    }
+    const one = s[idx];
+    if (opTokenMap[one] !== undefined) {
+      bytes.push(opTokenMap[one]);
+      return 1;
+    }
+    return 0;
+  };
+
+  const tryEmitStringVar = (s: string, idx: number): number => {
+    // String variable name encoding: debase first letter by 0x40 (A->0x01..Z->0x1A)
+    // Applies to identifiers ending with $ (e.g., A$, A1$, ABZ$), excluding keyword tokens like INKEY$, CHR$
+    // Ensure previous/next char are not A-Z0-9$ to avoid mid-identifier matches
+    const prevCh = idx > 0 ? s[idx - 1] : '';
+    if (/[A-Z0-9\$]/.test(prevCh)) return 0;
+    if (!/[A-Z]/.test(s[idx])) return 0;
+    let j = idx + 1;
+    while (j < L && /[A-Z0-9]/.test(s[j])) j++;
+    if (j >= L || s[j] !== '$') return 0;
+    const end = j + 1;
+    const nextCh = end < L ? s[end] : '';
+    if (/[A-Z0-9\$]/.test(nextCh)) return 0;
+    const ident = s.substring(idx, end).toUpperCase();
+    if (stringKeywordTokens.has(ident)) return 0;
+
+    const firstUpper = s[idx].toUpperCase();
+    bytes.push(firstUpper.charCodeAt(0) - 0x40);
+    for (let k = idx + 1; k < end; k++) {
+      const c = s.charCodeAt(k);
+      if (c >= 97 && c <= 122) bytes.push(c - 32);
+      else bytes.push(c);
+    }
+    return end - idx;
+  };
 
   while (i < L) {
     if (inQuote) {
       let j = i;
-      while (j < L && restFull[j] !== '"') j++;
-      const chunk = restFull.substring(i, j);
-      bytes.push(...compressSpacesAndAscii(chunk));
-      if (j < L && restFull[j] === '"') {
+      while (j < L && restStandard[j] !== '"') j++;
+      const chunk = restStandard.substring(i, j);
+      // Inside quotes: emit raw ASCII (do NOT compress spaces)
+      for (let k = 0; k < chunk.length; k++) {
+        bytes.push(chunk.charCodeAt(k));
+      }
+      if (j < L && restStandard[j] === '"') {
         bytes.push(0x22);
         inQuote = false;
         i = j + 1;
@@ -702,28 +795,77 @@ function basicTokeniseLine(line: string, baseAddr = 0x4000): number[] {
       continue;
     }
 
+    // NEW: drop spaces outside quotes and outside REM
+    // The extra 0x20 bytes come from the tokenizer preserving spaces outside quotes/REM. In basicTokeniseLine, only spaces after : 
+    // and before TO/THEN are stripped; all other spaces are emitted as ASCII, so any space around AND/OR/NOT/ELSE becomes 0x20.
+    // Optional hardening: require word boundaries when matching keyword tokens (e.g., AND/OR/NOT/ELSE) to avoid accidental matches 
+    // inside identifiers, then still drop spaces outside quotes so they don’t leak into output - ON HOLD.
+    if (restStandard[i] === ' ') {
+      i++;
+      continue;
+    }
+
+    // String variables must be handled before token matching, otherwise single-letter
+    // ASCII tokens like 'A' consume the prefix and block debasing.
+    const svConsumed = tryEmitStringVar(restStandard, i);
+    if (svConsumed > 0) {
+      i += svConsumed;
+      continue;
+    }
+
     let matched = false;
+
+    // Operator tokens (use tokenised operators instead of ASCII)
+    const opConsumed = tryEmitOperatorToken(restStandard, i);
+    if (opConsumed > 0) {
+      i += opConsumed;
+      continue;
+    }
     const remaining = L - i;
     for (const tk of tokensSorted) {
       const tlen = tk.token.length;
       if (tlen > remaining) continue;
-      const substr = restFull.substring(i, i + tlen);
+      const substr = restStandard.substring(i, i + tlen);
       if (substr === tk.token || substr.toUpperCase() === tk.tokenUpper) {
+        // ADD WORD BOUNDARY CHECK HERE:
+        if (!isAtWordBoundary(restStandard, i, tlen)) continue;
+        
         bytes.push(tk.dec);
         i += tlen;
         matched = true;
 
         if (tk.tokenUpper === 'REM') {
           if (i < L) {
-            const restText = restFull.substring(i);
-            // [CHANGED] Do NOT compress spaces in REM statements. Keep as 0x20.
-            for (let k = 0; k < restText.length; k++) {
-               bytes.push(restText.charCodeAt(k));
+            let j = i;
+            let inRemQuote = false;
+            // Treat REM text like quoted until ':' outside quotes or end-of-line
+            while (j < L) {
+              const ch = restStandard[j];
+              if (ch === '"') {
+                inRemQuote = !inRemQuote;
+                bytes.push(0x22);
+                j++;
+                continue;
+              }
+              if (!inRemQuote && ch === ':') {
+                // Stop REM at ':' and resume normal tokenization
+                break;
+              }
+              bytes.push(restStandard.charCodeAt(j));
+              j++;
+            }
+            i = j; // either ':' or end-of-line
+            if (i >= L) {
+              // consume rest of line
+              // leave i at L, main loop will terminate
             }
           }
-          i = L;
+        } else if (tk.tokenUpper === 'DATA') {
+          // DATA requires a mandatory space byte after the token
+          bytes.push(0x20);
+          if (i < L && restStandard[i] === ' ') i++; // consume explicit space if present
         } else {
-          if (i < L && restFull[i] === ' ') {
+          if (i < L && restStandard[i] === ' ') {
             if (/^[A-Z]+\$?$/.test(tk.tokenUpper)) i++;
           }
         }
@@ -732,14 +874,14 @@ function basicTokeniseLine(line: string, baseAddr = 0x4000): number[] {
     }
     if (matched) continue;
 
-    const ch = restFull[i];
+    const ch = restStandard[i];
     if (ch === '"') {
       bytes.push(0x22);
       inQuote = true;
       i++;
       continue;
     }
-    const code = restFull.charCodeAt(i);
+    const code = restStandard.charCodeAt(i);
     if (code >= 97 && code <= 122) bytes.push(code - 32);
     else bytes.push(code);
     i++;
@@ -883,7 +1025,7 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
     let workingStr = raw;
 
     // A. Parse Explicit Address (e.g., 8000 LD A,B)
-    const addrMatch = /^(?:([0-9A-Fa-f]{4})\s+)?(.*)$/.exec(workingStr);
+    const addrMatch = /^(?:([0-9A-F]{4})\s+)?(.*)$/.exec(workingStr);
     if (addrMatch && addrMatch[1]) {
         parsed.address = parseInt(addrMatch[1], 16);
         // Only update offset from explicit address on the very first line
@@ -896,7 +1038,7 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
     }
 
     // B. Parse Label (e.g., LABEL:)
-    const labelMatch = /^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/.exec(workingStr);
+    const labelMatch = /^([A-Z][A-Z0-9]*):\s*(.*)$/.exec(workingStr);
     if (labelMatch) {
         parsed.label = labelMatch[1];
         labelMap[parsed.label] = offset; // Map label to current offset
@@ -908,7 +1050,7 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
         // Line was just a label or address
         parsedLines.push(parsed);
     } else {
-        const dirMatch = /^(DB|DW|DS)\s+(.*)$/i.exec(workingStr);
+        const dirMatch = /^(DB|DW|DS)\s+(.*)$/.exec(workingStr);
         if (dirMatch) {
             parsed.isDirective = true;
             parsed.directiveType = dirMatch[1].toUpperCase();
@@ -1482,29 +1624,48 @@ function convertNoddyBlock(lines: string[]): number[] {
   // Helper to process a single accumulated page
   const processPage = (linesToProcess: string[]) => {
     const pageContentBytes: number[] = [];
-    
+
     // Process TITLE (first line)
     // "LOSE" -> 'L','O','S', 'E'|0x80
     // Note: CompressSpaces is NOT applied to the title itself based on common MTX logic for labels/names,
     // but just in case, we'll treat it as raw ASCII with the last bit set.
+    let title = '';
     if (linesToProcess.length > 0) {
-        const title = linesToProcess[0];
-        for (let i = 0; i < title.length; i++) {
-            let code = title.charCodeAt(i);
-            if (i === title.length - 1) {
-                code |= 0x80; // Set bit 7 on last char
-            }
-            pageContentBytes.push(code);
+      title = linesToProcess[0];
+      for (let i = 0; i < title.length; i++) {
+        let code = title.charCodeAt(i);
+        if (i === title.length - 1) {
+          code |= 0x80; // Set bit 7 on last char
         }
+        pageContentBytes.push(code);
+      }
     }
-    
-    // Process BODY (remaining lines)
-    for (let i = 1; i < linesToProcess.length; i++) {
-       const line = linesToProcess[i];
-       pageContentBytes.push(...compressSpacesAndAscii(line));
-       // Note: Still assuming NO line ending bytes (0x0A) based on previous findings
+
+    // Detect NODDY program page: first body line repeats title (capitalised) with no other text
+    const firstBodyLine = linesToProcess.length > 1 ? linesToProcess[1] : '';
+    const isProgramPage = !!title && firstBodyLine.trim() === title;
+
+    if (isProgramPage) {
+      // Emit program name again without bit 7 set, followed by 0xC9 marker
+      for (let i = 0; i < title.length; i++) {
+        pageContentBytes.push(title.charCodeAt(i));
+      }
+      pageContentBytes.push(0xC9);
+
+      // Process remaining lines after the repeated program name
+      for (let i = 2; i < linesToProcess.length; i++) {
+        const line = linesToProcess[i];
+        pageContentBytes.push(...compressSpacesAndAscii(line));
+      }
+    } else {
+      // Process BODY (remaining lines)
+      for (let i = 1; i < linesToProcess.length; i++) {
+        const line = linesToProcess[i];
+        pageContentBytes.push(...compressSpacesAndAscii(line));
+        // Note: Still assuming NO line ending bytes (0x0A) based on previous findings
+      }
     }
-    
+
     const len = pageContentBytes.length + 3; // +3 to include LSB, MSB and 0xFF
     // Push Page Structure: [Len LSB] [Len MSB] [Content...] [0xFF]
     allBytes.push(len & 0xFF);
@@ -1550,6 +1711,19 @@ function convertTextToHex(docText: string, baseAddr = 0x4000): number[] {
   let output: number[] = [];
   let foundNoddyTrigger = false;
 
+  const isNoddyMarkerText = (text: string): boolean => {
+    const trimmed = (text || '').trim();
+    if (/^REM\s+NODDY\s*$/.test(trimmed)) return true;
+    return /:\s*REM\s+NODDY\s*$/.test(trimmed);
+  };
+
+  const hasFollowingBasicLine = (startIdx: number): boolean => {
+    for (let j = startIdx + 1; j < lines.length; j++) {
+      if (/^\s*\d+\s+/.test(lines[j])) return true;
+    }
+    return false;
+  };
+
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const line = lines[lineIdx];
     
@@ -1563,8 +1737,8 @@ function convertTextToHex(docText: string, baseAddr = 0x4000): number[] {
     const lineNum = parseInt(match[1], 10);
     const codeText = match[2].trim();
 
-    // Noddy handling: Check for "REM NODDY"
-    if (/^REM\s+NODDY\s*$/i.test(codeText)) {
+    // Noddy handling: Check for "REM NODDY" (must be final BASIC line)
+    if (isNoddyMarkerText(codeText) && !hasFollowingBasicLine(lineIdx)) {
       foundNoddyTrigger = true;
       
       // 1. Process this line as a STANDARD BASIC LINE first (e.g. 13330 REM NODDY)
@@ -1590,7 +1764,7 @@ function convertTextToHex(docText: string, baseAddr = 0x4000): number[] {
         // Stop if this is a new BASIC line (starts with digits, no leading whitespace)
         if (/^\d+\s/.test(l)) break;
         // Stop if line has leading whitespace but no hex address following it
-        if (/^\s+/.test(l) && !/^\s+[0-9A-Fa-f]{1,4}\b/.test(l)) break;
+        if (/^\s+/.test(l) && !/^\s+[0-9A-F]{1,4}\b/.test(l)) break;
         // This is a code block line, add it
         codeLines.push(l);
         lastIdx = idx;
@@ -1608,7 +1782,7 @@ function convertTextToHex(docText: string, baseAddr = 0x4000): number[] {
       // Handle simple MTX BASIC line
 
       // Special case: USER SAVE or USER LOAD
-      if (/^USER\s+(SAVE|LOAD)/i.test(codeText)) {
+      if (/^USER\s+(SAVE|LOAD)/.test(codeText)) {
         const tokens = codeText.split(/\s+/);
 
         const stripEol = (arr: number[]) => (arr.length && arr[arr.length - 1] === 0xFF) ? arr.slice(0, -1) : arr;
@@ -1652,7 +1826,7 @@ function parseImmediateOperand(op: string | undefined): number {
   }
 
   if (/^[#]/.test(op)) return sign * (parseInt(op.slice(1), 16) || 0);
-  //if (/^0x/i.test(op)) return sign * (parseInt(op, 16) || 0);
+  //f (/^0x/i.test(op)) return sign * (parseInt(op, 16) || 0);
   if (/^[0-9]+$/.test(op)) return sign * (parseInt(op, 10) || 0);
   return 0; // label/unknown -> 0 (labels would need two-pass)
 }
@@ -1706,7 +1880,7 @@ function opCodePatternToBytes(
       opIdx = findNextValueOperandIndex(opIdx);
       const rawOp = operands[opIdx++] || '';
       const opStr = stripParens(rawOp);
-      const isLabel = (/^[A-Za-z][A-Za-z0-9]*$/).test(opStr.trim());
+      const isLabel = (/^[A-Z][A-Z0-9]*$/).test(opStr.trim());
 
       if (isLabel) {
         let targetOffset = 0;
@@ -1757,7 +1931,7 @@ function opCodePatternToBytes(
       // Prefer the operand that carries an IX/IY displacement when encoding ZZ
       let selectedIdx = opIdx;
       if (p === 'ZZ') {
-        const idxMatch = operands.findIndex(o => /\((IX|IY)[+-]/i.test((o || '').trim()));
+        const idxMatch = operands.findIndex(o => /\((IX|IY)[+-]/.test((o || '').trim()));
         if (idxMatch >= 0) selectedIdx = idxMatch;
       }
 
@@ -1768,11 +1942,11 @@ function opCodePatternToBytes(
       const opStr = stripParens(rawOp);
 
       // Indexed displacement (IX+d/IY+d) carries the byte following the opcodes
-      const indexedMatch = /^\((IX|IY)[+-](.+)\)$/i.exec(rawOp.trim());
+      const indexedMatch = /^\((IX|IY)[+-](.+)\)$/.exec(rawOp.trim());
       const operandForParse = indexedMatch ? indexedMatch[2] : opStr;
 
       // Reject bare hex without prefix to surface user error (should be #XX)
-      if (/^[+-]?[0-9A-Fa-f]+$/.test(operandForParse) && /[A-Fa-f]/.test(operandForParse) && !/^([+-]?#)/i.test(operandForParse)) {
+      if (/^[+-]?[0-9A-F]+$/.test(operandForParse) && /[A-F]/.test(operandForParse) && !/^([+-]?#)/.test(operandForParse)) {
         throw new Error(`Hex operand ${operandForParse} requires # prefix`);
       }
 
@@ -1786,7 +1960,7 @@ function opCodePatternToBytes(
       const isHex = /^[#]/.test(checkOp);
       const isDec = /^[0-9]+$/.test(checkOp); // This line is new
       
-      if ((/^[A-Za-z][A-Za-z0-9]*$/).test(cleanOp)) {
+      if ((/^[A-Z][A-Z0-9]*$/).test(cleanOp)) {
         const lab = cleanOp.toUpperCase();
         if (labelMap && typeof labelMap[lab] === 'number') v = labelMap[lab];
         if (labelReferences) {
@@ -1822,7 +1996,7 @@ function opCodePatternToBytes(
       const isHex2 = /^[#]/.test(checkOp2);
       const isDec2 = /^[0-9]+$/.test(checkOp2); // This line is new
 
-      if ((/^[A-Za-z][A-Za-z0-9]*$/).test(opStr2.trim())) {
+      if ((/^[A-Z][A-Z0-9]*$/).test(opStr2.trim())) {
         const lab2 = opStr2.toUpperCase();
         if (labelMap && typeof labelMap[lab2] === 'number') v2 = labelMap[lab2];
         if (labelReferences) {
@@ -1844,10 +2018,10 @@ function opCodePatternToBytes(
       out.push(v2 & 0xff, (v2 >> 8) & 0xff); 
 
 
-    } else if (/^[0-9A-Fa-f]{2}$/.test(p)) {
+    } else if (/^[0-9A-F]{2}$/.test(p)) {
       // Single 2-digit hex byte
       out.push(parseInt(p, 16));
-    } else if (/^[0-9A-Fa-f]+$/.test(p) && p.length % 2 === 0) {
+    } else if (/^[0-9A-F]+$/.test(p) && p.length % 2 === 0) {
       // Multi-byte hex sequence (e.g., "ED5A" -> ED, 5A or "DDCB" -> DD, CB)
       for (let i = 0; i < p.length; i += 2) {
         const hexByte = p.substring(i, i + 2);
@@ -1951,5 +2125,6 @@ export { mtxTokens,
     processMTXDirectives,
     processCodeBlock,
     updateCodeBlockLength,
-    extractMTXDirectives
+    extractMTXDirectives,
+    isAtWordBoundary
  };

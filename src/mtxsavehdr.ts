@@ -62,6 +62,8 @@
     DESAVE/DESAVE_1 found at + 250 & 251 displacement from start of sys_var => 0xFB4A & 0xFB4B
 */
 
+// If MTX BASIC is used then MTXOS grabs 0xC000 to #FA50 for its own use. NOTE: if no BASIC, and only Machine code, then the machine code can only use this space.
+
 let mtxFilename: string = "              "; //default filename for MTX programs saved to tape. Maxium 16 characters including extension. Will be truncated if longer. If less than 16 characters padded with 0x20 (space) bytes.
 const readMarkerDescriptor: number[] = [0xF2, 0xF8]; //read marker descriptor bytes used in MTX tape/file header
 const hdrPadByte: number = 0x00; //padding byte used in MTX tape/file header
@@ -201,7 +203,7 @@ const sysVarSaved: {hexVal: number, sysName: string, sysVal:number}[] = [
     {hexVal:0xFACF,sysName:"BASELIN",sysVal:0x00},
     {hexVal:0xFAD0,sysName:"BASELIN_1",sysVal:0x40},
     {hexVal:0xFAD1,sysName:"BASLNP",sysVal:0x00},
-    {hexVal:0xFAD2,sysName:"PAGE",sysVal:0x10}, //current page configuration
+    {hexVal:0xFAD2,sysName:"PAGE",sysVal:0x10}, //current page configuration. User memory starts at 0x4000 to 0xBFFF (32k). MTX allows paging of 32k blocks up to 16 pages.
     {hexVal:0xFAD3,sysName:"CRNTPG",sysVal:0x00}, //current BASIC page
     {hexVal:0xFAD4,sysName:"PGN1",sysVal:0x00},
     {hexVal:0xFAD5,sysName:"PGN2",sysVal:0x00},
