@@ -11,12 +11,17 @@ This extension provides support for the MTX BASIC programming language in Visual
 
 ## Installation
 
-1. Clone the repository or download the ZIP file.
-2. Open the project in Visual Studio Code.
-3. Press `F5` to run the extension in a new Extension Development Host window or use SHIFT CTRL P, select <Developer: Restart Host Extension>
-4. package.json has been configured to to ensure Hover is switched on and autofill is off as invariably it gets it wrong. If that doesn't work, you can also   
+1. Clone the repository or download and unzip the ZIP file.
+2. In linux, move the folder to .vscode\extensions\  . You should now have a folder 
+   .vscode\extensions\mtxbasic-extension
+   In Windows this will be found at, remember to change the USERNAME to that in your system.
+   C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\resources\app\extensions 
+   Apologies, I don't have a mac.
+3. Exit and reload VS Code
+4. Eithed press `F5` to run the extension in a new Extension Development Host window or use "CTRL SHIFT p", select <Developer: Restart Host Extension> within the existing workspace window.
+5. package.json has been configured to to ensure Hover is switched on and autofill is off as invariably it gets it wrong. If that doesn't work, you can also   
    configure  VS code File->Preferences->Settings then select USER tab and search for Hover, and tick enabled.
-    Alternatively, to set manually, in VS Code, keypress: CTRL SHIFT P and select Preferences: OPEN USER SETTINGS (JSON). 
+    Alternatively, to set manually, in VS Code, keypress: "CTRL SHIFT p" and select Preferences: OPEN USER SETTINGS (JSON). 
     or if you want to access the user settings outside of VS code, in linux this can be found at ~/.config/Code/User/settings.json
     "[mtxbasic]": {
          //Hover is probably better for novices to the language or as a refresher. Experienced users may find it annoying, setting to false switches it off.
@@ -26,9 +31,9 @@ This extension provides support for the MTX BASIC programming language in Visual
         //intellisense from showing suggestions from otherfiles or documents which might be erroneous
         "editor.suggest.showWords": false
     }
-    Package,json in this extension, includes all the setting changes to apply, not just the example above.
-5. Once the extension is installed, Create a new file or text file, ideally use `.BAS` extension to start using the extension or open an existing  MTX BASIC 
-   file. See below for further details.
+    Package.json in this extension, includes all the setting changes to apply, not just the example above.
+6. Once the extension is installed, Create a new file or text file, ideally use `.BAS` extension to start using the extension or open an existing MTX BASIC text based
+   file. If a .mtx or .BAS program file, you will have to convert to a text file format (see ref 5) to be able to amend in VS code editor. See below for further details.
 
 
 ## Coding Convention and Usage
@@ -61,17 +66,18 @@ The assembler format is unchanged from that used by the MTX assembler.
 Once a CODE block is defined as above, pressing <return> moves the line down 1 row and indents, to differentiate from a BASIC <linenumber>. Pressing the space bar <sp> after the indent will generate the next available hexadecimal address. Click on it to use it. 
 
 20 CODE<return>
-     4015 START: LD A,#0F ; START of the z80 code<return>
+     4014 START: LD A,#0F ; START of the z80 code<return>
 
-The user can still enter hex addresses manually, if out of sequence, the system will flag and error. You can renumber the code block by pressing CTRL SHIFT r. or from CTRL SHIFT P and select "MTX: Renumber Z80 addresses in CODE block". Hover over a Z80 menenomic like LD and it will list possible options, e.g. LD (HL),A . There is no Symbols Label vs address summary at the end of the code block. CTRL F (find) is more convenient to use and it made the coding slightly less cumbersome.
+The user can still enter hex addresses manually, if out of sequence, the system will flag and error. You can renumber the code block by pressing "CTRL SHIFT r" or from "CTRL SHIFT p" and select "MTX: Renumber Z80 addresses in CODE block". Hover over a Z80 menenomic like LD and it will list possible options, e.g. LD (HL),A . There is no Symbols Label vs address summary at the end of the code block. CTRL F (find) is more convenient to use and it made the coding slightly less cumbersome.
 
 A quirk of the assembler and to keep consitency with the original, the hexadecimal address is not preceded by '#' to indicate a hexadecimal number. However, numbers and addresses used in Z80 instructions must be preceded by '#' unless it the user uses the decimal equivalent, see examples below.
 
 20 CODE<return>
-     4015 LD A,#0F ;hexadecimal number
-     4017 LD A,15 ;decimal number 
-     4019 LD HL,#401C ;hexadecimal address
-     401C LD HL,16412 ;decimal address
+     4014 LD A,#0F ;hexadecimal number
+     4016 LD A,15 ;decimal number 
+     4018 LD HL,#401C ;hexadecimal address
+     401B LD HL,16412 ;decimal address
+     401E RET ;ensure there is 1 RET in your code to avoid the program from crashing if you want to return to BASIC.
 
 
 The NODDY editor is not accessible in VS code using NODDY<return>. However, the workaround is this free form text version is at the very end of a BASIC listing and the very last entry, is to use REM NODDY as the placeholder trigger to allow NODDY programs and text pages to be constructed. 
@@ -79,8 +85,8 @@ The NODDY editor is not accessible in VS code using NODDY<return>. However, the 
 <linenumber><sp><REM><sp><NODDY>   or <linenumber><sp><other BASIC commands...>:<REM><sp><NODDY> 
 65535 REM NODDY<return>
 
-DO NOT USED LINE NUMBERS OR HEXADDRESSES after this placeholder, this is why it is best to use the last BASIC linenumber. There are a few other minor caveats.
-a) The top of each page must have "Noddy page title is " followed by the name of the program (e.g. PROG1) or the text page (P1). The "Noddy page title is " will be stripped out when compiling to a .mtx file. Only used as a placeholder.
+DO NOT USED LINE NUMBERS OR HEXADDRESSES after this placeholder, this is why it is best to use the last BASIC linenumber for REM NODDY. There are a few other minor caveats.
+a) The top of each page must have "Noddy page title is " followed by the name of the program (e.g. PROG1) or the text page (e.g. P1). The "Noddy page title is " will be stripped out when compiling to a .mtx file. Only used as a placeholder.
 
 b) if a Program Noddy page, PROG1 is specified as below. The second title followed by <return> (no space between) is a special marker. Note: in MTX BASIC, you would press the down arrow directly after the name as <return> would return you to the NODDY main editor page.
 
@@ -98,7 +104,7 @@ you can now type NODDY Program commands as normal, e.g.
 *BRANCH 2                              
 ^x *RETURN
 
-c) If a text page, the VS code editor expects a line of characters &/or spaces up to 39 characters. NODDY Text screens are based on 24 rows x 39 columns. This first line can also include the title but MUST be followed by spaces so as not to confuse with a program page. Each text page must be padded out to 39 characters to avoid alignment issues when compiling. If greater than 39 characters an error will appear to help.
+c) If a text page, the VS code editor expects a line of characters &/or spaces up to 39 characters. NODDY Text screens are based on 24 rows x 39 columns. This first line can also include the title but MUST be followed by spaces so as not to confuse with a program page. Each text page must be padded out to 39 characters to avoid alignment issues when compiling. If greater than 39 characters an error will appear to help. NOTE: I have updated the code so that if you press <return> at the end of text on each line, it will work out the extra spaces needed to reach column 39 and insert for you. Although, if switching between VS code editor for noddy and MTX computer editor for noddy, it might be best to avoid pressing <return> to not affect muscle memory! 
 
 Noddy page title is P1
 P1 On the bottom left hand corner will 
@@ -136,9 +142,11 @@ VS code extensions are based on typescript/javascript and node. Rather than lear
 Mac users replace CMD for CTRL.
 
 1. "MTX Series Operator's Manual" by Brian Pritchard.
-2. "The Memotech Operator's Manual" by Spencer Bateson
-3. "Mastering TypeScript 3" by Nathan Rozentals
+2. "The Memotech Operator's Manual" by Spencer Bateson.
+3. "Mastering TypeScript 3" by Nathan Rozentals.
 4. http://www.primrosebank.net/computers/mtx/mtx512.htm
+5. MTX DISASSEMBLY utility (python) will take an existing .BAS or .mtx program file and convert it to a .BAS text file (BASIC listing).
+6. MTX HEXDUMP utility (python) will generate a hexadecimal byte and ASCII character output of the file to assist in debugging (same as the utility "MTX PANEL COPY" which outputted PANEL to a dot matrix printer).
 
 
 **Enjoy!**

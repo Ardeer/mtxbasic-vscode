@@ -23,6 +23,8 @@ exports.validateCodeBlocks = validateCodeBlocks;
 exports.getZ80InstructionInfo = getZ80InstructionInfo;
 exports.getInstructionLength = getInstructionLength;
 exports.getDirectiveLength = getDirectiveLength;
+// Import basicTokeniseLine for calculating expected CODE starting addresses
+var mtxtokens_js_1 = require("./mtxtokens.js");
 /** z80 hex to mnemomic conversion table notes
 no CB30 to CB37
 no DDCB ZZ 36
@@ -982,7 +984,7 @@ function parseZ80Line(lineText, lineNumber) {
 /**
  * Detect CODE blocks in document
  */
-function detectCodeBlocks(lines) {
+function detectCodeBlocks(lines, baseAddr) {
     // Centralized CODE-block detection.
     // Recognises a numbered CODE marker line (e.g. "57 CODE") and treats
     // the subsequent lines as Z80 assembly until a non-assembly line is hit.
@@ -992,6 +994,7 @@ function detectCodeBlocks(lines) {
     //   - optional label immediately after the address and a space: LABEL:
     //   - assembly instruction (single command) and optional trailing ";comment"
     // Any line that does not match this format terminates the current block.
+    if (baseAddr === void 0) { baseAddr = 0x4000; }
     var blocks = [];
     var inCodeBlock = false;
     var currentBlock = null;
@@ -1024,7 +1027,7 @@ function detectCodeBlocks(lines) {
                 // Keep startLine pointing at the CODE marker (assembly starts at startLine+1)
                 startLine: i,
                 endLine: -1,
-                baseAddress: 0x4000,
+                baseAddress: baseAddr,
                 lines: [],
                 errors: []
             };
@@ -1386,8 +1389,9 @@ function operandPositionAllowsLabel(mnemonic, operands, opIdx) {
 /**
  * Validate a single CODE block
  */
-function validateCodeBlock(lines, startLine) {
+function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
     var _a, _b, _c, _d;
+    if (baseAddr === void 0) { baseAddr = 0x4000; }
     var errors = [];
     // `lines` here are expected to be the assembly lines for a single CODE block.
     // The wrapper `validateCodeBlocks` is responsible for finding blocks and
@@ -1397,7 +1401,7 @@ function validateCodeBlock(lines, startLine) {
     var labelDefs = new Map();
     var labelUsages = [];
     // Current address tracking
-    var currentAddress = 0x4000;
+    var currentAddress = expectedStartAddress !== undefined ? expectedStartAddress : baseAddr;
     // ============================================
     // FIRST PASS: Collect labels and their addresses
     // ============================================
@@ -1439,8 +1443,8 @@ function validateCodeBlock(lines, startLine) {
             });
             continue;
         }
-        // Check address sequence (skip first line which establishes base address)
-        if (i > 0 && parsed.address) {
+        // Check address sequence
+        if (parsed.address) {
             var actualAddress = parseInt(parsed.address, 16);
             var expectedAddress = currentAddress;
             if (actualAddress !== expectedAddress) {
@@ -1450,7 +1454,7 @@ function validateCodeBlock(lines, startLine) {
                     line: startLine + i,
                     start: 0,
                     end: Math.max(0, lines[i].indexOf(parsed.address) + parsed.address.length),
-                    message: "Address out of sequence: expected ".concat(expectedHex, ", found ").concat(actualHex),
+                    message: "Address out of sequence: expected ".concat(expectedHex, ", found ").concat(actualHex, ", press CTRL (CMD) SHIFT r to renumber"),
                     severity: 'error'
                 });
             }
@@ -1499,7 +1503,7 @@ function validateCodeBlock(lines, startLine) {
     // ============================================
     // SECOND PASS: Validate instructions
     // ============================================
-    currentAddress = 0x4000;
+    currentAddress = baseAddr;
     for (var i = 0; i < lines.length; i++) {
         var parsed = parseZ80Line(lines[i], startLine + i);
         // DEBUG: Show specific problem lines (47=PUSH AFA, 59=LD A,DZ)
@@ -1835,18 +1839,44 @@ function getDirectiveLength(parsed) {
 /**
  * Validate all CODE blocks in document
  */
-function validateCodeBlocks(documentLines) {
+function validateCodeBlocks(documentLines, baseAddr) {
+    if (baseAddr === void 0) { baseAddr = 0x4000; }
     var allErrors = [];
-    var codeBlocks = detectCodeBlocks(documentLines);
+    var codeBlocks = detectCodeBlocks(documentLines, baseAddr);
     for (var _i = 0, codeBlocks_1 = codeBlocks; _i < codeBlocks_1.length; _i++) {
         var block = codeBlocks_1[_i];
+        // Calculate expected starting address by tokenizing BASIC lines before CODE
+        var expectedStartAddress = baseAddr;
+        try {
+            var totalBytes = 0;
+            for (var j = 0; j <= block.startLine; j++) {
+                var basicLine = documentLines[j];
+                if (/^\d{1,5}\s/.test(basicLine)) {
+                    var lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, baseAddr + totalBytes);
+                    var isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
+                    if (isCodeLine) {
+                        // CODE placeholder is 8 bytes, but Z80 starts at byte 7
+                        totalBytes += lineBytes.length - 1;
+                    }
+                    else {
+                        totalBytes += lineBytes.length;
+                    }
+                }
+            }
+            expectedStartAddress = baseAddr + totalBytes;
+        }
+        catch (e) {
+            // If tokenization fails, fall back to baseAddr
+            expectedStartAddress = baseAddr;
+        }
+        // Collect assembly lines from the CODE block
         var assemblyLines = [];
         for (var i = block.startLine + 1; i <= block.endLine; i++) {
             if (i < documentLines.length) {
                 assemblyLines.push(documentLines[i]);
             }
         }
-        var blockErrors = validateCodeBlock(assemblyLines, block.startLine + 1);
+        var blockErrors = validateCodeBlock(assemblyLines, block.startLine + 1, baseAddr, expectedStartAddress);
         allErrors.push.apply(allErrors, blockErrors);
     }
     return allErrors;
@@ -1854,15 +1884,17 @@ function validateCodeBlocks(documentLines) {
 /**
  * Wrapper for single instruction validation
  */
-function validateZ80Instruction(parsed) {
-    return validateCodeBlock([parsed.raw], parsed.lineNumber);
+function validateZ80Instruction(parsed, baseAddr) {
+    if (baseAddr === void 0) { baseAddr = 0x4000; }
+    return validateCodeBlock([parsed.raw], parsed.lineNumber, baseAddr);
 }
 /**
  * Stub functions for compatibility
  */
-function collectLabels(lines, startLine) {
+function collectLabels(lines, startLine, baseAddr) {
+    if (baseAddr === void 0) { baseAddr = 0x4000; }
     var labels = new Map();
-    var addr = 0x4000;
+    var addr = baseAddr;
     for (var i = 0; i < lines.length; i++) {
         var parsed = parseZ80Line(lines[i], startLine + i);
         if (!parsed)

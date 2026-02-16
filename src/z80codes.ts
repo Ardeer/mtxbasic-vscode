@@ -8,6 +8,9 @@ updated 27-Jun-2023 added missing ["ED5B XXXX","LD DE,(XXXX)"],
 converted to typescript 8-Dec-2025
 */
 
+// Import basicTokeniseLine for calculating expected CODE starting addresses
+import { basicTokeniseLine } from './mtxtokens.js';
+
 
 /** z80 hex to mnemomic conversion table notes
 no CB30 to CB37
@@ -1052,7 +1055,7 @@ function parseZ80Line(lineText: string, lineNumber: number): Z80ParsedLine | nul
 /**
  * Detect CODE blocks in document
  */
-function detectCodeBlocks(lines: string[]): CodeBlock[] {
+function detectCodeBlocks(lines: string[], baseAddr = 0x4000): CodeBlock[] {
     // Centralized CODE-block detection.
     // Recognises a numbered CODE marker line (e.g. "57 CODE") and treats
     // the subsequent lines as Z80 assembly until a non-assembly line is hit.
@@ -1098,7 +1101,7 @@ function detectCodeBlocks(lines: string[]): CodeBlock[] {
                 // Keep startLine pointing at the CODE marker (assembly starts at startLine+1)
                 startLine: i,
                 endLine: -1,
-                baseAddress: 0x4000,
+                baseAddress: baseAddr,
                 lines: [],
                 errors: []
             };
@@ -1486,7 +1489,7 @@ function operandPositionAllowsLabel(mnemonic: string, operands: string[], opIdx:
 /**
  * Validate a single CODE block
  */
-function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
+function validateCodeBlock(lines: string[], startLine: number, baseAddr = 0x4000, expectedStartAddress?: number): Z80Error[] {
     const errors: Z80Error[] = [];
 
     // `lines` here are expected to be the assembly lines for a single CODE block.
@@ -1498,7 +1501,7 @@ function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
     const labelUsages: LabelUsage[] = [];
     
     // Current address tracking
-    let currentAddress = 0x4000;
+     let currentAddress = expectedStartAddress !== undefined ? expectedStartAddress : baseAddr;
     
     // ============================================
     // FIRST PASS: Collect labels and their addresses
@@ -1546,8 +1549,8 @@ function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
             continue;
         }
         
-        // Check address sequence (skip first line which establishes base address)
-        if (i > 0 && parsed.address) {
+        // Check address sequence
+        if (parsed.address) {
             const actualAddress = parseInt(parsed.address, 16);
             const expectedAddress = currentAddress;
             
@@ -1558,7 +1561,7 @@ function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
                     line: startLine + i,
                     start: 0,
                     end: Math.max(0, lines[i].indexOf(parsed.address) + parsed.address.length),
-                    message: `Address out of sequence: expected ${expectedHex}, found ${actualHex}`,
+                    message: `Address out of sequence: expected ${expectedHex}, found ${actualHex}, press CTRL (CMD) SHIFT r to renumber`,
                     severity: 'error'
                 });
             }
@@ -1611,7 +1614,7 @@ function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
     // SECOND PASS: Validate instructions
     // ============================================
     
-    currentAddress = 0x4000;
+    currentAddress = baseAddr;
     
     for (let i = 0; i < lines.length; i++) {
         const parsed = parseZ80Line(lines[i], startLine + i);
@@ -1972,11 +1975,35 @@ function getDirectiveLength(parsed: Z80ParsedLine): number {
 /**
  * Validate all CODE blocks in document
  */
-function validateCodeBlocks(documentLines: string[]): Z80Error[] {
+function validateCodeBlocks(documentLines: string[], baseAddr = 0x4000): Z80Error[] {
     const allErrors: Z80Error[] = [];
-    const codeBlocks = detectCodeBlocks(documentLines);
+    const codeBlocks = detectCodeBlocks(documentLines, baseAddr);
     
     for (const block of codeBlocks) {
+        // Calculate expected starting address by tokenizing BASIC lines before CODE
+        let expectedStartAddress = baseAddr;
+        try {
+            let totalBytes = 0;
+            for (let j = 0; j <= block.startLine; j++) {
+                const basicLine = documentLines[j];
+                if (/^\d{1,5}\s/.test(basicLine)) {
+                    const lineBytes = basicTokeniseLine(basicLine, baseAddr + totalBytes);
+                    const isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
+                    if (isCodeLine) {
+                        // CODE placeholder is 8 bytes, but Z80 starts at byte 7
+                        totalBytes += lineBytes.length - 1;
+                    } else {
+                        totalBytes += lineBytes.length;
+                    }
+                }
+            }
+            expectedStartAddress = baseAddr + totalBytes;
+        } catch (e) {
+            // If tokenization fails, fall back to baseAddr
+            expectedStartAddress = baseAddr;
+        }
+        
+        // Collect assembly lines from the CODE block
         const assemblyLines: string[] = [];
         for (let i = block.startLine + 1; i <= block.endLine; i++) {
             if (i < documentLines.length) {
@@ -1984,7 +2011,7 @@ function validateCodeBlocks(documentLines: string[]): Z80Error[] {
             }
         }
         
-        const blockErrors = validateCodeBlock(assemblyLines, block.startLine + 1);
+        const blockErrors = validateCodeBlock(assemblyLines, block.startLine + 1, baseAddr, expectedStartAddress);
         allErrors.push(...blockErrors);
     }
     
@@ -1994,16 +2021,16 @@ function validateCodeBlocks(documentLines: string[]): Z80Error[] {
 /**
  * Wrapper for single instruction validation
  */
-function validateZ80Instruction(parsed: Z80ParsedLine): Z80Error[] {
-    return validateCodeBlock([parsed.raw], parsed.lineNumber);
+function validateZ80Instruction(parsed: Z80ParsedLine, baseAddr = 0x4000): Z80Error[] {
+    return validateCodeBlock([parsed.raw], parsed.lineNumber, baseAddr);
 }
 
 /**
  * Stub functions for compatibility
  */
-function collectLabels(lines: string[], startLine: number): Map<string, LabelDef> {
+function collectLabels(lines: string[], startLine: number, baseAddr = 0x4000): Map<string, LabelDef> {
     const labels = new Map<string, LabelDef>();
-    let addr = 0x4000;
+    let addr = baseAddr;
     
     for (let i = 0; i < lines.length; i++) {
         const parsed = parseZ80Line(lines[i], startLine + i);

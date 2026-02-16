@@ -587,7 +587,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         const documentLines: string[] = [];
         for (let i = 0; i < doc.lineCount; i++) documentLines.push(doc.lineAt(i).text);
         try {
-                const blocks = detectCodeBlocks(documentLines) || [];
+                const blocks = detectCodeBlocks(documentLines, hexBaseAddress) || [];
                 for (const b of blocks) {
                         const s = (typeof b.startLine === 'number') ? b.startLine + 1 : -1;
                         const e = (typeof b.endLine === 'number') ? b.endLine : -1;
@@ -700,6 +700,21 @@ export function activate(ctx: vscode.ExtensionContext) {
                         end: lineNumMatch[1].length,
                         message: `Line number ${lineNum} must be greater than previous line number ${lastLineNum}`
                 });
+                }
+
+                // Check that statement after line number doesn't start with another number
+                const afterLineNum = trimmed.substring(lineNumMatch[1].length).trim();
+                if (afterLineNum && /^\d+/.test(afterLineNum)) {
+                const secondNumMatch = /^\d+/.exec(afterLineNum);
+                if (secondNumMatch) {
+                        const secondNumStart = text.indexOf(secondNumMatch[0], lineNumMatch[1].length);
+                        errors.push({
+                        line: i,
+                        start: secondNumStart,
+                        end: secondNumStart + secondNumMatch[0].length,
+                        message: `Unexpected line number after statement start. Only one line number is allowed per line.`
+                        });
+                }
                 }
 
                 lastLineNum = lineNum;
@@ -2654,7 +2669,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 }
                 
                 // validateCodeBlocks takes the document lines array, not CodeBlock[]
-                const z80Errors = validateCodeBlocks(allDocLines);
+                const z80Errors = validateCodeBlocks(allDocLines, hexBaseAddress);
         
                 for (const err of z80Errors) {
                         const range = new vscode.Range(
@@ -3796,10 +3811,17 @@ ctx.subscriptions.push(
                         for (let j = 0; j <= i; j++) {
                             const basicLine = document.lineAt(j).text;
                             if (/^\d{1,5}\s/.test(basicLine)) {
-                                // Convert this line to bytes to get its length (including CODE line)
+                                // Convert this line to bytes to get its length
                                 try {
                                     const lineBytes = basicTokeniseLine(basicLine, hexBaseAddress + totalBytes);
-                                    totalBytes += lineBytes.length;
+                                    const isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
+                                    if (isCodeLine) {
+                                        // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
+                                        // (8-byte placeholder includes EOF that gets replaced by Z80 code)
+                                        totalBytes += lineBytes.length - 1;
+                                    } else {
+                                        totalBytes += lineBytes.length;
+                                    }
                                 } catch (e) {
                                     // Skip lines that can't be tokenized
                                 }
@@ -3807,12 +3829,15 @@ ctx.subscriptions.push(
                         }
                         
                         // Start Z80 code at the address after all BASIC lines
+                        // Note: Z80 code is embedded WITHIN the CODE line structure at offset 7
+                        // (after 2-byte length + 2-byte line# + 1-byte CODE token + 2-byte opcode length)
+                        // basicTokeniseLine returns 8 bytes for CODE placeholder, but Z80 starts at byte 7
                         lastAddress = hexBaseAddress + totalBytes;
                         
                         // Now calculate bytes in current CODE block from scratch
                         for (let j = i + 1; j < position.line; j++) {
                             const z80Line = document.lineAt(j).text;
-                            const match = /^\s+([0-9A-F]{4}\s+.*)$/.exec(z80Line);
+                            const match = /^\s+[0-9A-F]{4}\s+(.*)$/.exec(z80Line);
                             if (match) {
                                 const instruction = match[1].trim();
                                 try {
@@ -3923,13 +3948,22 @@ const renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', a
                 if (/^\d{1,5}\s/.test(basicLine)) {
                         try {
                                 const lineBytes = basicTokeniseLine(basicLine, hexBaseAddress + totalBytes);
-                                totalBytes += lineBytes.length;
+                                const isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
+                                if (isCodeLine) {
+                                        // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
+                                        // (8-byte placeholder includes EOF that gets replaced by Z80 code)
+                                        totalBytes += lineBytes.length - 1;
+                                } else {
+                                        totalBytes += lineBytes.length;
+                                }
                         } catch (e) {
                                 // Skip lines that can't be tokenized
                         }
                 }
         }
         
+        // Z80 code is embedded WITHIN the CODE line structure at offset 7
+        // basicTokeniseLine returns 8 bytes for CODE placeholder, but Z80 starts at byte 7
         let currentAddress = hexBaseAddress + totalBytes;
         
         // Build new lines with updated addresses

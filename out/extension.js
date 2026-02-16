@@ -502,7 +502,7 @@ function activate(ctx) {
         for (var i = 0; i < doc.lineCount; i++)
             documentLines.push(doc.lineAt(i).text);
         try {
-            var blocks = (0, z80codes_js_1.detectCodeBlocks)(documentLines) || [];
+            var blocks = (0, z80codes_js_1.detectCodeBlocks)(documentLines, hexBaseAddress) || [];
             for (var _i = 0, blocks_1 = blocks; _i < blocks_1.length; _i++) {
                 var b = blocks_1[_i];
                 var s = (typeof b.startLine === 'number') ? b.startLine + 1 : -1;
@@ -613,6 +613,20 @@ function activate(ctx) {
                     end: lineNumMatch[1].length,
                     message: "Line number ".concat(lineNum, " must be greater than previous line number ").concat(lastLineNum)
                 });
+            }
+            // Check that statement after line number doesn't start with another number
+            var afterLineNum = trimmed.substring(lineNumMatch[1].length).trim();
+            if (afterLineNum && /^\d+/.test(afterLineNum)) {
+                var secondNumMatch = /^\d+/.exec(afterLineNum);
+                if (secondNumMatch) {
+                    var secondNumStart = text.indexOf(secondNumMatch[0], lineNumMatch[1].length);
+                    errors.push({
+                        line: i,
+                        start: secondNumStart,
+                        end: secondNumStart + secondNumMatch[0].length,
+                        message: "Unexpected line number after statement start. Only one line number is allowed per line."
+                    });
+                }
             }
             lastLineNum = lineNum;
         } // END of BASIC line number validation loop
@@ -2306,7 +2320,7 @@ function activate(ctx) {
                 allDocLines.push(doc.lineAt(j).text);
             }
             // validateCodeBlocks takes the document lines array, not CodeBlock[]
-            var z80Errors = (0, z80codes_js_1.validateCodeBlocks)(allDocLines);
+            var z80Errors = (0, z80codes_js_1.validateCodeBlocks)(allDocLines, hexBaseAddress);
             for (var _7 = 0, z80Errors_1 = z80Errors; _7 < z80Errors_1.length; _7++) {
                 var err = z80Errors_1[_7];
                 var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
@@ -3405,10 +3419,18 @@ function activate(ctx) {
                     for (var j = 0; j <= i; j++) {
                         var basicLine = document.lineAt(j).text;
                         if (/^\d{1,5}\s/.test(basicLine)) {
-                            // Convert this line to bytes to get its length (including CODE line)
+                            // Convert this line to bytes to get its length
                             try {
                                 var lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, hexBaseAddress + totalBytes);
-                                totalBytes += lineBytes.length;
+                                var isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
+                                if (isCodeLine) {
+                                    // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
+                                    // (8-byte placeholder includes EOF that gets replaced by Z80 code)
+                                    totalBytes += lineBytes.length - 1;
+                                }
+                                else {
+                                    totalBytes += lineBytes.length;
+                                }
                             }
                             catch (e) {
                                 // Skip lines that can't be tokenized
@@ -3416,11 +3438,14 @@ function activate(ctx) {
                         }
                     }
                     // Start Z80 code at the address after all BASIC lines
+                    // Note: Z80 code is embedded WITHIN the CODE line structure at offset 7
+                    // (after 2-byte length + 2-byte line# + 1-byte CODE token + 2-byte opcode length)
+                    // basicTokeniseLine returns 8 bytes for CODE placeholder, but Z80 starts at byte 7
                     lastAddress = hexBaseAddress + totalBytes;
                     // Now calculate bytes in current CODE block from scratch
                     for (var j = i + 1; j < position.line; j++) {
                         var z80Line = document.lineAt(j).text;
-                        var match = /^\s+([0-9A-F]{4}\s+.*)$/.exec(z80Line);
+                        var match = /^\s+[0-9A-F]{4}\s+(.*)$/.exec(z80Line);
                         if (match) {
                             var instruction = match[1].trim();
                             try {
@@ -3468,7 +3493,7 @@ function activate(ctx) {
     )); // This closes registerCompletionItemProvider
     // Command: Renumber Z80 addresses in CODE block at cursor
     var renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', function () { return __awaiter(_this, void 0, void 0, function () {
-        var editor, doc, position, codeStartLine, codeEndLine, i, line, i, line, totalBytes, j, basicLine, lineBytes, currentAddress, edits, i, line, match, indent, instruction, newAddr, newLine, parsed, instrLength;
+        var editor, doc, position, codeStartLine, codeEndLine, i, line, i, line, totalBytes, j, basicLine, lineBytes, isCodeLine, currentAddress, edits, i, line, match, indent, instruction, newAddr, newLine, parsed, instrLength;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -3517,7 +3542,15 @@ function activate(ctx) {
                         if (/^\d{1,5}\s/.test(basicLine)) {
                             try {
                                 lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, hexBaseAddress + totalBytes);
-                                totalBytes += lineBytes.length;
+                                isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
+                                if (isCodeLine) {
+                                    // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
+                                    // (8-byte placeholder includes EOF that gets replaced by Z80 code)
+                                    totalBytes += lineBytes.length - 1;
+                                }
+                                else {
+                                    totalBytes += lineBytes.length;
+                                }
                             }
                             catch (e) {
                                 // Skip lines that can't be tokenized

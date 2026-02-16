@@ -395,8 +395,8 @@ const mtxTokens: {tokenDec: number, tokenHex: number, token: string}[] = [
         10. As space character is commonly used in text, it is represeented by a single byte 0x80 rather than the standard ASCII 0x20 to save space. so 1 space is represented as 0x81 and 4 consecutive spaces as 0x84. This is used in in REM, NODDY text pages and comments within code block COMMENTS.
         11. NODDY Block is handled by converting NODDY cammands and page text from ASCII to bytes, except for the space-compression.
             THE noddy SECTION FORMAT IS AS FOLLOWS:
-            <total length of A noddy PAGE, 2 bytes LSB/MSB> (maximum size will be 24 rows x 40 columns = 960 bytes, typically smaller due to space compression. Width limited to 39 characters to avoid misalignment). 
-            <NODDY command tokens OR text in ASCII with space compression as required>
+            <total length of A noddy PAGE, 2 bytes LSB/MSB> (maximum size will be 24 rows x 39 columns = 936 bytes, typically smaller due to space compression. Width limited to 39 characters to avoid misalignment). 
+            <NODDY command tokens OR text in ASCII with space compression as required> NOTE: for example *PAUSE => 2A 50 41 55 53 45 A1 where 0xA1 = 128 + (39-6) = 161. Each line to be made up to 39 columns using compressed space, except if end of page, 0xFF
             <0xFF> (end of NODDY page marker)
             Also, the program title is limited to 33 characters with bit 7 set to indicate end of title, also, "Noddy page title is " is injected to improve readability but doesn't form part of the actual program title and not part of the byte count.
             the byte count per page includes the 2 byte page length and the 0xFF page end marker.
@@ -1614,6 +1614,25 @@ function findBestZ80Match(instruction: string, operands: string[]): any {
   return potentialMatches[0];
 }
 
+// Helper function to compress a NODDY line and pad to 39 characters
+// Each NODDY line should be exactly 39 characters when displayed
+function compressAndPadNoddyLine(line: string, addPadding: boolean): number[] {
+  const bytes = compressSpacesAndAscii(line);
+  
+  // Calculate how many spaces needed to reach 39 characters
+  // The padding is only added to non-final lines (final line ends with 0xFF)
+  if (addPadding) {
+    const lineLength = line.length;
+    if (lineLength < 39) {
+      const spacesNeeded = 39 - lineLength;
+      // Add compressed space byte (0x80 + count)
+      bytes.push(0x80 + spacesNeeded);
+    }
+  }
+  
+  return bytes;
+}
+
 // 3) NODDY block conversion WITH PAGE STRUCTURE
 // Format per page: <Length LSB> <Length MSB> <Compressed Content> <0xFF>
 // Special rule: The PAGE TITLE is the first part of content. The last char of the title has bit 7 set.
@@ -1653,16 +1672,21 @@ function convertNoddyBlock(lines: string[]): number[] {
       pageContentBytes.push(0xC9);
 
       // Process remaining lines after the repeated program name
+      // Pad all lines except the last one to 39 characters
+      const lastLineIndex = linesToProcess.length - 1;
       for (let i = 2; i < linesToProcess.length; i++) {
         const line = linesToProcess[i];
-        pageContentBytes.push(...compressSpacesAndAscii(line));
+        const isLastLine = (i === lastLineIndex);
+        pageContentBytes.push(...compressAndPadNoddyLine(line, !isLastLine));
       }
     } else {
       // Process BODY (remaining lines)
+      // Pad all lines except the last one to 39 characters
+      const lastLineIndex = linesToProcess.length - 1;
       for (let i = 1; i < linesToProcess.length; i++) {
         const line = linesToProcess[i];
-        pageContentBytes.push(...compressSpacesAndAscii(line));
-        // Note: Still assuming NO line ending bytes (0x0A) based on previous findings
+        const isLastLine = (i === lastLineIndex);
+        pageContentBytes.push(...compressAndPadNoddyLine(line, !isLastLine));
       }
     }
 

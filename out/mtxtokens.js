@@ -1381,6 +1381,22 @@ function findBestZ80Match(instruction, operands) {
     }
     return potentialMatches[0];
 }
+// Helper function to compress a NODDY line and pad to 39 characters
+// Each NODDY line should be exactly 39 characters when displayed
+function compressAndPadNoddyLine(line, addPadding) {
+    var bytes = compressSpacesAndAscii(line);
+    // Calculate how many spaces needed to reach 39 characters
+    // The padding is only added to non-final lines (final line ends with 0xFF)
+    if (addPadding) {
+        var lineLength = line.length;
+        if (lineLength < 39) {
+            var spacesNeeded = 39 - lineLength;
+            // Add compressed space byte (0x80 + count)
+            bytes.push(0x80 + spacesNeeded);
+        }
+    }
+    return bytes;
+}
 // 3) NODDY block conversion WITH PAGE STRUCTURE
 // Format per page: <Length LSB> <Length MSB> <Compressed Content> <0xFF>
 // Special rule: The PAGE TITLE is the first part of content. The last char of the title has bit 7 set.
@@ -1415,17 +1431,22 @@ function convertNoddyBlock(lines) {
             }
             pageContentBytes.push(0xC9);
             // Process remaining lines after the repeated program name
+            // Pad all lines except the last one to 39 characters
+            var lastLineIndex = linesToProcess.length - 1;
             for (var i = 2; i < linesToProcess.length; i++) {
                 var line = linesToProcess[i];
-                pageContentBytes.push.apply(pageContentBytes, compressSpacesAndAscii(line));
+                var isLastLine = (i === lastLineIndex);
+                pageContentBytes.push.apply(pageContentBytes, compressAndPadNoddyLine(line, !isLastLine));
             }
         }
         else {
             // Process BODY (remaining lines)
+            // Pad all lines except the last one to 39 characters
+            var lastLineIndex = linesToProcess.length - 1;
             for (var i = 1; i < linesToProcess.length; i++) {
                 var line = linesToProcess[i];
-                pageContentBytes.push.apply(pageContentBytes, compressSpacesAndAscii(line));
-                // Note: Still assuming NO line ending bytes (0x0A) based on previous findings
+                var isLastLine = (i === lastLineIndex);
+                pageContentBytes.push.apply(pageContentBytes, compressAndPadNoddyLine(line, !isLastLine));
             }
         }
         var len = pageContentBytes.length + 3; // +3 to include LSB, MSB and 0xFF
