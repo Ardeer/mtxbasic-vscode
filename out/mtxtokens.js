@@ -336,26 +336,29 @@ function compressSpacesAndAscii(str) {
     return bytes;
 }
 // 1) BASIC tokenisation (returns code bytes including EOL 0xFF)
-// - token matching: case-insensitive, longest-first
+// - token matching: case-sensitive, longest-first
 // - outside quotes and outside REM, letters are uppercased
-// - inside quotes or after REM, original case preserved; space-compression applied
+// - inside quotes case unchanged 
+// - spaces remain as 0x20 (not compressed or would result in spurious BASIC tokens)
 /**
- WIthin basicTokeniseLine function there will be 3 sub-sections
+ Within basicTokeniseLine function there will be 3 sub-sections
 i) when REM NODDY is encountered --> CALL function convertNoddyBlock
 ii) when CODE is encountered - setup the 3 length trackers (see 1-3 below) and CALL function processCodeBlock (see text below for a fuller explanation of this )
 iii) BASIC line conversion (this part of the function appears to be functioning properly, so no additional changes required at this time)
 
-when const line='10 CODE', basicTokeniseLine CORRECTLY returns [ 6, 0, 10, 0, 194, 255 ]. However, CODE is a special case because it is the placeholder for a code block. So whenever <linenumber> CODE is encountered, for example 100 CODE, it shoud return [ 8, 0, 100, 0, 194, 0 , 0, 255 ] in the first instance until the code block is processed.
+when const line='10 CODE', basicTokeniseLine CORRECTLY returns [ 6, 0, 10, 0, 194, 255 ]. However, CODE is a special case because it is the placeholder for a code block.
+So whenever <linenumber> CODE is encountered, for example 100 CODE, it shoud return [ 8, 0, 100, 0, 194, 0 , 0, 255 ] in the first instance until the code block is processed.
 a) the 2 extra bytes after 194 are placeholders for the actual assembly code which will be updated during the code block processing.
 b) Also, the 1st 2 bytes are also placeholders as these will be updated with the assembly code bytes and any MTX directive bytes.
 c) The assembly code and mtx directive bytes will be inserted before the 255 end of line/block marker.
-So in the context of the basicTokeniseLine, make the changes so that it is 7 bytes in length + 1 for the EOL marker
+So in the context of the basicTokeniseLine, make the changes so that it is 7 bytes in length The extra + 1 for the EOL marker is added at the end of the code block
 create 3 length trackers
 
-totalCodeLength (bytes 1 and 2 in LSB/MSB format) = 7 + totalOpcodeLength + totalMtxDirectiverLength + 1 (EOL)
+totalCodeLength (bytes 1 and 2 in LSB/MSB format) = 7 + totalOpcodeLength + totalMtxDirectiverLength
 totalOpcodeLength (bytes 6 and 7)
 totalMtxDirectiverLength
-Note: ensure the EOL marker is not duplicated at the end of the mtx directive processing.
+add +1 for EOL
+Note: ensure the EOL marker (0xFF) is not duplicated at the end of the mtx directive processing.
 */
 function basicTokeniseLine(line, baseAddr) {
     var _a, _b;
@@ -1040,11 +1043,6 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
             mtxDirectiveBytes.push(0x04); // DW marker
             var relOffset = (dir._offset || 0) - offsetBase;
             mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
-            //mtxDirectiveBytes.push(0x02); // 2 bytes (word)
-            //const val = dir.directiveValue || '';
-            //const valAscii = compressSpacesAndAscii(val);
-            //mtxDirectiveBytes.push(valAscii.length & 0xff);
-            //mtxDirectiveBytes.push(...valAscii);
             var val = dir.directiveValue || '';
             var dwPayload = buildDbDirectivePayload(val);
             mtxDirectiveBytes.push(dwPayload.itemCount & 0xff);
@@ -1057,11 +1055,6 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
             mtxDirectiveBytes.push(0x05); // DS marker
             var relOffset = (dir._offset || 0) - offsetBase;
             mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
-            //const count = parseInt(dir.directiveValue || '0', 10) || 0;
-            //mtxDirectiveBytes.push(count & 0xff);
-            //const countAscii = compressSpacesAndAscii(count.toString());
-            //mtxDirectiveBytes.push(countAscii.length & 0xff);
-            //mtxDirectiveBytes.push(...countAscii);
             var val = dir.directiveValue || '';
             var dsPayload = buildDbDirectivePayload(val);
             var count = parseInt(val || '0', 10) || 0;
@@ -1403,8 +1396,10 @@ function compressAndPadNoddyLine(line, addPadding) {
 function convertNoddyBlock(lines) {
     var allBytes = [];
     var currentPageLines = [];
-    // Helper to process a single accumulated page
-    var processPage = function (linesToProcess) {
+    var currentPageIsProgram = false;
+    // Helper to process a single accumulated page.
+    // isProgramPage: true when the title line started with "Program title="
+    var processPage = function (linesToProcess, isProgramPage) {
         var pageContentBytes = [];
         // Process TITLE (first line)
         // "LOSE" -> 'L','O','S', 'E'|0x80
@@ -1421,27 +1416,29 @@ function convertNoddyBlock(lines) {
                 pageContentBytes.push(code);
             }
         }
-        // Detect NODDY program page: first body line repeats title (capitalised) with no other text
+        // isProgramPage is carried in as a parameter (declared by "Program title=" prefix).
+        // The optional repeated-name line on the body is still honoured if present.
         var firstBodyLine = linesToProcess.length > 1 ? linesToProcess[1] : '';
-        var isProgramPage = !!title && firstBodyLine.trim() === title;
+        var firstBodyRepeatsTitle = !!title && firstBodyLine.trim() === title;
         if (isProgramPage) {
-            // Emit program name again without bit 7 set, followed by 0xC9 marker
-            for (var i = 0; i < title.length; i++) {
-                pageContentBytes.push(title.charCodeAt(i));
+            // Emit program name again without bit 7 set if the user included the repeated name line,
+            // otherwise skip it gracefully.
+            if (firstBodyRepeatsTitle) {
+                for (var i = 0; i < title.length; i++) {
+                    pageContentBytes.push(title.charCodeAt(i));
+                }
             }
-            pageContentBytes.push(0xC9);
-            // Process remaining lines after the repeated program name
-            // Pad all lines except the last one to 39 characters
+            // Process remaining body lines (skip line [1] only if it was the repeated name)
+            var bodyStart = firstBodyRepeatsTitle ? 2 : 1;
             var lastLineIndex = linesToProcess.length - 1;
-            for (var i = 2; i < linesToProcess.length; i++) {
+            for (var i = bodyStart; i < linesToProcess.length; i++) {
                 var line = linesToProcess[i];
                 var isLastLine = (i === lastLineIndex);
                 pageContentBytes.push.apply(pageContentBytes, compressAndPadNoddyLine(line, !isLastLine));
             }
         }
         else {
-            // Process BODY (remaining lines)
-            // Pad all lines except the last one to 39 characters
+            // Text page — process all body lines
             var lastLineIndex = linesToProcess.length - 1;
             for (var i = 1; i < linesToProcess.length; i++) {
                 var line = linesToProcess[i];
@@ -1460,16 +1457,20 @@ function convertNoddyBlock(lines) {
         var rawLine = lines_3[_i];
         // Clean line ending
         var line = rawLine.replace(/\r?\n$/, '');
-        if (line.trim().startsWith("Noddy page title is ")) {
-            // Find existing page? Finish it.
+        var trimmedLine = line.trim();
+        var isProgTitle = /^Program title=/i.test(trimmedLine);
+        var isTextTitle = /^Text title=/i.test(trimmedLine);
+        if (isProgTitle || isTextTitle) {
+            // Flush the previous page before starting a new one
             if (currentPageLines.length > 0) {
-                processPage(currentPageLines);
+                processPage(currentPageLines, currentPageIsProgram);
             }
-            // Start NEW page.
-            // STRIP the 20-char prefix "Noddy page title is "
-            // The remainder (e.g., "LOSE") becomes the TITLE (lines[0])
-            var pageName = line.substring(20);
+            // Strip the prefix to get just the page name
+            var pageName = isProgTitle
+                ? trimmedLine.replace(/^Program title=/i, '')
+                : trimmedLine.replace(/^Text title=/i, '');
             currentPageLines = [pageName];
+            currentPageIsProgram = isProgTitle;
         }
         else {
             // Add ordinary line to current page
@@ -1480,7 +1481,7 @@ function convertNoddyBlock(lines) {
     }
     // Flush the final page
     if (currentPageLines.length > 0) {
-        processPage(currentPageLines);
+        processPage(currentPageLines, currentPageIsProgram);
     }
     return allBytes;
 }

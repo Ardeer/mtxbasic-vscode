@@ -195,7 +195,7 @@ function stringExprParts(expr) {
     var extractParts = [];
     //1. DIM is a special as it can be either a var or a string var DIM A(10,10) or DIM A$(1,4)
     // see additional comments in complexTokeniser function
-    if (/^DIM\s(?:[A-Z][A-Z0-9]*\$\([^)]*\)$)/.test(s)) {
+    if (/^DIM\s(?:[A-Z][A-Z0-9]*\([^)]*\)$)/.test(s)) {
         extractParts.push([s, true]);
         return extractParts;
     } // this should be a standalone statement
@@ -1066,8 +1066,11 @@ function splitCommandsByColon(text) {
 } // END of splitCommandsByColon
 // NODDY label pattern - labels are prefixed with ^
 var noddyLabelPattern = /^\^(\w+)\s*/;
-// NODDY page title pattern
-var noddyPageTitlePattern = /^Noddy page title is (\w+)\s*$/;
+// NODDY page title patterns - user explicitly declares page type
+// "Text title=NAME"    → text page  - name: printable ASCII 33-126 excluding * ^ . (special NODDY chars)
+// "Program title=NAME" → program page - name: alphanumeric only (A-Z, 0-9)
+var noddyTextTitlePattern = /^Text title=([^\x00-\x20*^.\x7F]+)\s*$/i;
+var noddyProgTitlePattern = /^Program title=([A-Za-z0-9]+)\s*$/i;
 // NODDY command definitions - includes full names and abbreviations
 var noddyCommands = [
     // *A or *ADVANCE - advance to next page
@@ -1075,7 +1078,8 @@ var noddyCommands = [
     // *B or *BRANCH <label> - unconditional branch to label
     { id: 'BRANCH', pattern: /^\*(?:B|BRANCH)\s+(\w+)\s*$/, hasArg: true, argType: 'label', description: 'Unconditional branch to label' },
     // *D or *DISPLAY <pagename>. - display a text page (note the trailing period)
-    { id: 'DISPLAY', pattern: /^\*(?:D|DISPLAY)\s+(\w+)\.\s*$/, hasArg: true, argType: 'pagename', description: 'Display a text page' },
+    // Page name: printable ASCII excluding space, *, ^, . (special NODDY chars)
+    { id: 'DISPLAY', pattern: /^\*(?:D|DISPLAY)\s+([^\s*^.]+)\.\s*$/, hasArg: true, argType: 'pagename', description: 'Display a text page' },
     // *E or *ENTER - wait for user input
     { id: 'ENTER', pattern: /^\*(?:E|ENTER)\s*$/, hasArg: false, argType: 'none', description: 'Wait for user input' },
     // *G or *GOTO <label> - goto label (similar to BRANCH)
@@ -1106,69 +1110,72 @@ function parseNoddyContent(lines, startLine) {
     for (var i = startLine; i < lines.length; i++) {
         var line = lines[i];
         var trimmed = line.trim();
-        // Check for page title
-        var titleMatch = noddyPageTitlePattern.exec(line);
+        // Check for explicit page-type title
+        // Guard: "Program title=" with a non-alphanumeric name → specific error before pattern match
+        if (/^Program title=/i.test(trimmed) && !noddyProgTitlePattern.exec(trimmed)) {
+            var badName = trimmed.replace(/^Program title=/i, '').trim();
+            errors.push({
+                line: i,
+                message: "Program page name \"".concat(badName, "\" is invalid \u2014 only A-Z, a-z and 0-9 are allowed (no spaces, underscores or symbols)"),
+                start: 0,
+                end: trimmed.length
+            });
+            continue;
+        }
+        var textTitleMatch = noddyTextTitlePattern.exec(trimmed);
+        var progTitleMatch = noddyProgTitlePattern.exec(trimmed);
+        var titleMatch = textTitleMatch || progTitleMatch;
         if (titleMatch) {
-            // Save previous page
+            // Validate and save previous page before starting the next one
             if (currentPage) {
+                if (currentPage.type === 'program') {
+                    var hasCommand = currentPage.content.some(function (l) { return l.trim().startsWith('*'); });
+                    if (!hasCommand) {
+                        errors.push({
+                            line: currentPage.lineStart,
+                            message: "Program page \"".concat(currentPage.name, "\" contains no NODDY commands ") +
+                                "(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFF, *PAUSE, *RETURN, *STACK)",
+                            start: 0,
+                            end: lines[currentPage.lineStart].length
+                        });
+                    }
+                }
                 currentPage.lineEnd = i - 1;
                 pages.push(currentPage);
             }
-            // Start new page
+            // Page type is declared explicitly by the prefix used
+            var pageType = progTitleMatch ? 'program' : 'text';
             currentPage = {
                 name: titleMatch[1],
                 lineStart: i,
                 lineEnd: i,
-                type: 'text', // Will be updated if we find NODDY commands
+                type: pageType,
                 content: []
             };
             textLineCount = 0;
-            isFirstContentLine = true; // Next non-empty line is the first content line
+            isFirstContentLine = true;
             continue;
         }
         if (currentPage) {
-            // Skip empty lines for first content line check
+            // Skip empty lines while waiting for first real content
             if (isFirstContentLine && trimmed.length === 0) {
                 currentPage.content.push(line);
                 continue;
             }
-            // Check if this is a NODDY command or label (indicates program page)
-            if (trimmed.startsWith('*') || trimmed.startsWith('^')) {
-                currentPage.type = 'program';
-            }
-            // For program pages, validate first content line matches page name
             if (isFirstContentLine && trimmed.length > 0) {
                 isFirstContentLine = false;
-                // Check if first content line is the program name (indicates program page)
-                // The first line should be JUST the program name with no other text
-                if (trimmed === currentPage.name) {
-                    currentPage.type = 'program';
-                }
-                // If first line has commands/labels, it's a program but missing the name line
-                else if (trimmed.startsWith('*') || trimmed.startsWith('^')) {
-                    currentPage.type = 'program';
-                    errors.push({
-                        line: i,
-                        message: "Program page \"".concat(currentPage.name, "\" must have \"").concat(currentPage.name, "\" as the first line (before any commands)"),
-                        start: 0,
-                        end: trimmed.length
-                    });
-                }
-                // Otherwise it's a text page - no validation needed for first line
             }
             currentPage.content.push(line);
             textLineCount++;
-            // Text pages have max 24 rows NOTE: autoscroll to next page after 24 lines, losing tthe first line
-            if (currentPage.type === 'text' && textLineCount > 24) {
+            if (textLineCount > 24) {
                 errors.push({
                     line: i,
-                    message: "Text page \"".concat(currentPage.name, "\" exceeds maximum of 24 rows"),
+                    message: "Page \"".concat(currentPage.name, "\" exceeds maximum of 24 rows"),
                     start: 0,
                     end: line.length
                 });
             }
-            // Text pages have max 39 characters per line, by 24 lines. Note: autoscroll to next line 
-            if (currentPage.type === 'text' && line.length > 39) {
+            if (line.length > 39) {
                 errors.push({
                     line: i,
                     message: "Text line exceeds maximum of 39 characters (got ".concat(line.length, ")"),
@@ -1178,8 +1185,20 @@ function parseNoddyContent(lines, startLine) {
             }
         }
     }
-    // Don't forget the last page
+    // Flush the last page
     if (currentPage) {
+        if (currentPage.type === 'program') {
+            var hasCommand = currentPage.content.some(function (l) { return l.trim().startsWith('*'); });
+            if (!hasCommand) {
+                errors.push({
+                    line: currentPage.lineStart,
+                    message: "Program page \"".concat(currentPage.name, "\" contains no NODDY commands ") +
+                        "(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFF, *PAUSE, *RETURN, *STACK)",
+                    start: 0,
+                    end: lines[currentPage.lineStart].length
+                });
+            }
+        }
         currentPage.lineEnd = lines.length - 1;
         pages.push(currentPage);
     }
@@ -1339,7 +1358,7 @@ function validateNoddyProgram(page, allPages, lineOffset) {
             }
             if (!matched) {
                 // Check for common errors
-                var displayNoperiod = /^\*(?:D|DISPLAY)\s+\w+\s*$/.exec(cmd);
+                var displayNoperiod = /^\*(?:D|DISPLAY)\s+[^\s*^.]+\s*$/.exec(cmd);
                 if (displayNoperiod) {
                     errors.push({
                         line: actualLine,

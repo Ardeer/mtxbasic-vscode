@@ -85,13 +85,18 @@ The NODDY editor is not accessible in VS code using NODDY<return>. However, the 
 <linenumber><sp><REM><sp><NODDY>   or <linenumber><sp><other BASIC commands...>:<REM><sp><NODDY> 
 65535 REM NODDY<return>
 
-DO NOT USED LINE NUMBERS OR HEXADDRESSES after this placeholder, this is why it is best to use the last BASIC linenumber for REM NODDY. There are a few other minor caveats.
-a) The top of each page must have "Noddy page title is " followed by the name of the program (e.g. PROG1) or the text page (e.g. P1). The "Noddy page title is " will be stripped out when compiling to a .mtx file. Only used as a placeholder.
+DO NOT USED LINE NUMBERS OR HEX ADDRESSES after this placeholder, this is why it is best to use the last BASIC linenumber for REM NODDY. 
 
-b) if a Program Noddy page, PROG1 is specified as below. The second title followed by <return> (no space between) is a special marker. Note: in MTX BASIC, you would press the down arrow directly after the name as <return> would return you to the NODDY main editor page.
+The MTX NODDY editor, recommends to use uppercase alphanumeric names. This really only applies to noddy program names that are called by MTX BASIC using PLOD "PROGNAME". Although, I have noted in the MEMU emulator, lowercase alphanumeric program names also work. Text page names can be anything, and can include characters, e.g. @1P.
 
-Noddy page title is PROG1
-PROG1<return>
+There are a few other minor caveats.
+
+a) The top of each program page must have "Program title=" followed by the name of the program (e.g. Program title=PROG1) or the text page must have "Text title=" (e.g. Text title=P1). The "Noddy page title is " will be stripped out when compiling to a .mtx file. Only used as a placeholder.
+
+b) if a Program Noddy page, PROG1 is specified as below. The repeat title on the editor page is automatically added in MTX Noddy mode, however, it is easily deleted, therefore is optional, rationale for it explained below.
+
+Program title=PROG1   (this is equivalent to creating a page name at the NODDY> editor prompt on a MTX computer or MEMU emulator)
+PROG1 (start of the created page - repeat of the page title is normally at 0,0 at the top left hand corner of the screen, to remind the user which page the user is editing)
 
 you can now type NODDY Program commands as normal, e.g.
 ^1 *DISPLAY P1.                        
@@ -106,10 +111,10 @@ you can now type NODDY Program commands as normal, e.g.
 
 c) If a text page, the VS code editor expects a line of characters &/or spaces up to 39 characters. NODDY Text screens are based on 24 rows x 39 columns. This first line can also include the title but MUST be followed by spaces so as not to confuse with a program page. Each text page must be padded out to 39 characters to avoid alignment issues when compiling. If greater than 39 characters an error will appear to help. NOTE: I have updated the code so that if you press <return> at the end of text on each line, it will work out the extra spaces needed to reach column 39 and insert for you. Although, if switching between VS code editor for noddy and MTX computer editor for noddy, it might be best to avoid pressing <return> to not affect muscle memory! 
 
-Noddy page title is P1
+Text Title=P1
 P1 On the bottom left hand corner will 
 
-When saved later, the NODDY code will be correctly confired so that on a normal Memotech computer, the NODDY editor is available and you will see the programs and pages as normal. DIR will list them. So this does not disrupt any historical programs that have 
+When saved later, the NODDY code will be correctly confired so that on a normal Memotech computer, the NODDY editor is available and you will see the programs and pages as normal. DIR will list them. So this does not disrupt any historical programs that have:-
 
 50 NODDY
 
