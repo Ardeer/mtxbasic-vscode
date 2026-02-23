@@ -158,10 +158,10 @@ const sysVarSaved: {hexVal: number, sysName: string, sysVal:number}[] = [
     {hexVal:0xFACC,sysName:"ARRTOP",sysVal:0x00}, //top of arrays
     {hexVal:0xFACD,sysName:"ARRTOP_1",sysVal:0x00},
     {hexVal:0xFACE,sysName:"ARRTOP_2",sysVal:0x00},
-    {hexVal:0xFACF,sysName:"BASELIN",sysVal:0x00},
+    {hexVal:0xFACF,sysName:"BASELIN",sysVal:0x00}, //current BASIC line hex address
     {hexVal:0xFAD0,sysName:"BASELIN_1",sysVal:0x40},
     {hexVal:0xFAD1,sysName:"BASLNP",sysVal:0x00},
-    {hexVal:0xFAD2,sysName:"PAGE",sysVal:0x10}, //current page configuration
+    {hexVal:0xFAD2,sysName:"PAGE",sysVal:0x10}, //current page configuration - varies sometimes 00 or 10
     {hexVal:0xFAD3,sysName:"CRNTPG",sysVal:0x00}, //current BASIC page
     {hexVal:0xFAD4,sysName:"PGN1",sysVal:0x00},
     {hexVal:0xFAD5,sysName:"PGN2",sysVal:0x00},

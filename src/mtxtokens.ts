@@ -1048,7 +1048,7 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
     const labelMatch = /^([A-Z][A-Z0-9]*):\s*(.*)$/.exec(workingStr);
     if (labelMatch) {
         parsed.label = labelMatch[1];
-        labelMap[parsed.label] = offset; // Map label to current offset
+      labelMap[parsed.label] = baseAddr + offset; // Map label to absolute code address
         workingStr = labelMatch[2].trim();
     }
 
@@ -1663,32 +1663,21 @@ function convertNoddyBlock(lines: string[]): number[] {
     // The optional repeated-name line on the body is still honoured if present.
     const firstBodyLine = linesToProcess.length > 1 ? linesToProcess[1] : '';
     const firstBodyRepeatsTitle = !!title && firstBodyLine.trim() === title;
+    let bodyStart = 1;
+    
+    if (firstBodyRepeatsTitle) {
+      // If this is the only body line, it's the last line of the page.
+      const isLastLine = linesToProcess.length === 2;
+      pageContentBytes.push(...compressAndPadNoddyLine(linesToProcess[1], !isLastLine));
+      bodyStart = 2;
+    }
 
-    if (isProgramPage) {
-      // Emit program name again without bit 7 set if the user included the repeated name line,
-      // otherwise skip it gracefully.
-      if (firstBodyRepeatsTitle) {
-        for (let i = 0; i < title.length; i++) {
-          pageContentBytes.push(title.charCodeAt(i));
-        }
-      }
-
-      // Process remaining body lines (skip line [1] only if it was the repeated name)
-      const bodyStart = firstBodyRepeatsTitle ? 2 : 1;
-      const lastLineIndex = linesToProcess.length - 1;
-      for (let i = bodyStart; i < linesToProcess.length; i++) {
-        const line = linesToProcess[i];
-        const isLastLine = (i === lastLineIndex);
-        pageContentBytes.push(...compressAndPadNoddyLine(line, !isLastLine));
-      }
-    } else {
-      // Text page — process all body lines
-      const lastLineIndex = linesToProcess.length - 1;
-      for (let i = 1; i < linesToProcess.length; i++) {
-        const line = linesToProcess[i];
-        const isLastLine = (i === lastLineIndex);
-        pageContentBytes.push(...compressAndPadNoddyLine(line, !isLastLine));
-      }
+    // Process remaining body lines for both page types
+    const lastLineIndex = linesToProcess.length - 1;
+    for (let i = bodyStart; i < linesToProcess.length; i++) {
+      const line = linesToProcess[i];
+      const isLastLine = (i === lastLineIndex);
+      pageContentBytes.push(...compressAndPadNoddyLine(line, !isLastLine));
     }
 
     const len = pageContentBytes.length + 3; // +3 to include LSB, MSB and 0xFF
@@ -1920,11 +1909,7 @@ function opCodePatternToBytes(
         }
 
         const displacement = targetOffset - (baseOffset + 2);
-        let signedDisplacement = displacement & 0xFF;
-        if (displacement < 0) {
-          signedDisplacement = ((displacement & 0xFF) ^ 0xFF) + 1; // Two's complement for negative
-        }
-        out.push(signedDisplacement);
+        out.push(displacement & 0xFF);
         // Track relative label reference
         if (labelReferences) {
           if (!labelReferences.has(lab)) {

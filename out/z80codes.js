@@ -1056,8 +1056,10 @@ function detectCodeBlocks(lines, baseAddr) {
                 continue;
             }
             // Check if there's a label (ends with ':')
-            // Allow one colon for the optional label, but disallow additional colons in the instruction
-            var colonCount = (restOfLine.match(/:/g) || []).length;
+            // Allow one colon for the optional label, but disallow additional colons in the instruction.
+            // Ignore colons that appear inside trailing comments.
+            var codeOnly = restOfLine.split(';')[0].trim();
+            var colonCount = (codeOnly.match(/:/g) || []).length;
             if (colonCount > 1) {
                 // Multiple colons -> invalid assembly line -> end block
                 currentBlock.endLine = i - 1;
@@ -1198,6 +1200,105 @@ function validateOperandSize(op, placeholder) {
     else {
         return "".concat(placeholder, " must be a hex value, decimal, or a label");
     }
+}
+function splitDirectiveValues(raw) {
+    var values = [];
+    var inString = false;
+    var current = '';
+    for (var i = 0; i < raw.length; i++) {
+        var ch = raw[i];
+        if (ch === '"') {
+            inString = !inString;
+            current += ch;
+        }
+        else if (ch === ',' && !inString) {
+            if (current.trim())
+                values.push(current.trim());
+            current = '';
+        }
+        else {
+            current += ch;
+        }
+    }
+    if (current.trim())
+        values.push(current.trim());
+    return values;
+}
+function validateDirectiveOperands(parsed) {
+    var issues = [];
+    if (!parsed.isDirective || !parsed.directiveType || !parsed.directiveValue)
+        return issues;
+    var values = splitDirectiveValues(parsed.directiveValue);
+    if (values.length === 0) {
+        issues.push({ token: parsed.directiveType, message: "".concat(parsed.directiveType, " requires at least one value") });
+        return issues;
+    }
+    var parseNumeric = function (token) {
+        var t = token.trim();
+        if (/^#[0-9A-Fa-f]+$/.test(t))
+            return parseInt(t.slice(1), 16);
+        if (/^\d+$/.test(t))
+            return parseInt(t, 10);
+        return null;
+    };
+    if (parsed.directiveType === 'DB') {
+        for (var _i = 0, values_1 = values; _i < values_1.length; _i++) {
+            var value = values_1[_i];
+            if (/^".*"$/.test(value))
+                continue;
+            if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
+                issues.push({ token: value, message: "Invalid hex byte \"".concat(value, "\" in DB (expected #00 to #FF)") });
+                continue;
+            }
+            var num = parseNumeric(value);
+            if (num === null) {
+                issues.push({ token: value, message: "Invalid DB value \"".concat(value, "\" (expected byte, decimal, or quoted string)") });
+                continue;
+            }
+            if (num < 0 || num > 0xFF) {
+                issues.push({ token: value, message: "DB value out of range: \"".concat(value, "\" (expected 0-255 or #00-#FF)") });
+            }
+        }
+    }
+    else if (parsed.directiveType === 'DW') {
+        for (var _a = 0, values_2 = values; _a < values_2.length; _a++) {
+            var value = values_2[_a];
+            if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
+                issues.push({ token: value, message: "Invalid hex word \"".concat(value, "\" in DW (expected #0000 to #FFFF)") });
+                continue;
+            }
+            var num = parseNumeric(value);
+            if (num === null) {
+                if (!/^[A-Z][A-Z0-9]*$/.test(value.trim().toUpperCase())) {
+                    issues.push({ token: value, message: "Invalid DW value \"".concat(value, "\" (expected 16-bit value or label)") });
+                }
+                continue;
+            }
+            if (num < 0 || num > 0xFFFF) {
+                issues.push({ token: value, message: "DW value out of range: \"".concat(value, "\" (expected 0-65535 or #0000-#FFFF)") });
+            }
+        }
+    }
+    else if (parsed.directiveType === 'DS') {
+        if (values.length !== 1) {
+            issues.push({ token: parsed.directiveValue, message: 'DS requires a single size value' });
+            return issues;
+        }
+        var value = values[0];
+        if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
+            issues.push({ token: value, message: "Invalid hex size \"".concat(value, "\" in DS (expected #00 to #FE)") });
+            return issues;
+        }
+        var num = parseNumeric(value);
+        if (num === null) {
+            issues.push({ token: value, message: "Invalid DS size \"".concat(value, "\" (expected 0-254 or #00-#FE)") });
+            return issues;
+        }
+        if (num < 0 || num > 0xFE) {
+            issues.push({ token: value, message: "DS size out of range: \"".concat(value, "\" (expected 0-254 or #00-#FE)") });
+        }
+    }
+    return issues;
 }
 /**
  * Build normalized instruction for exact matching
@@ -1390,7 +1491,7 @@ function operandPositionAllowsLabel(mnemonic, operands, opIdx) {
  * Validate a single CODE block
  */
 function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     if (baseAddr === void 0) { baseAddr = 0x4000; }
     var errors = [];
     // `lines` here are expected to be the assembly lines for a single CODE block.
@@ -1481,6 +1582,23 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
                 lineNumber: startLine + i,
                 address: currentAddress
             });
+        }
+        if (parsed.isDirective) {
+            var directiveIssues = validateDirectiveOperands(parsed);
+            for (var _i = 0, directiveIssues_1 = directiveIssues; _i < directiveIssues_1.length; _i++) {
+                var issue = directiveIssues_1[_i];
+                var token = issue.token || parsed.directiveValue || parsed.directiveType || '';
+                var idx = token ? lines[i].toUpperCase().indexOf(token.toUpperCase()) : -1;
+                var start = idx >= 0 ? idx : 0;
+                var end = idx >= 0 ? idx + token.length : (((_c = lines[i]) === null || _c === void 0 ? void 0 : _c.length) || 0);
+                errors.push({
+                    line: startLine + i,
+                    start: start,
+                    end: end,
+                    message: issue.message,
+                    severity: 'error'
+                });
+            }
         }
         // Calculate next address based on instruction length
         if (parsed.mnemonic && !parsed.isDirective) {
@@ -1611,8 +1729,8 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
         if (!patterns) {
             // No patterns for this mnemonic - check if mnemonic is valid at all
             var allMnemonics = new Set();
-            for (var _i = 0, z80Cmds_2 = z80Cmds; _i < z80Cmds_2.length; _i++) {
-                var cmd = z80Cmds_2[_i];
+            for (var _f = 0, z80Cmds_2 = z80Cmds; _f < z80Cmds_2.length; _f++) {
+                var cmd = z80Cmds_2[_f];
                 allMnemonics.add(cmd.z80.split(/\s+/)[0].toUpperCase());
             }
             if (!allMnemonics.has(mnemonic)) {
@@ -1648,8 +1766,8 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
         */
         var matched = false;
         var matchedPattern = null;
-        for (var _e = 0, patterns_2 = patterns; _e < patterns_2.length; _e++) {
-            var p = patterns_2[_e];
+        for (var _g = 0, patterns_2 = patterns; _g < patterns_2.length; _g++) {
+            var p = patterns_2[_g];
             if (p.pattern === withPlaceholders) {
                 matched = true;
                 matchedPattern = p;
@@ -1716,13 +1834,13 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
     // ============================================
     // STEP 5: Cross-check label usages
     // ============================================
-    for (var _f = 0, labelUsages_1 = labelUsages; _f < labelUsages_1.length; _f++) {
-        var usage = labelUsages_1[_f];
+    for (var _h = 0, labelUsages_1 = labelUsages; _h < labelUsages_1.length; _h++) {
+        var usage = labelUsages_1[_h];
         if (!labelDefs.has(usage.name)) {
             errors.push({
                 line: usage.lineNumber,
                 start: 0,
-                end: ((_c = lines[usage.lineNumber - startLine]) === null || _c === void 0 ? void 0 : _c.length) || 0,
+                end: ((_d = lines[usage.lineNumber - startLine]) === null || _d === void 0 ? void 0 : _d.length) || 0,
                 message: "Label not found: ".concat(usage.name),
                 severity: 'error'
             });
@@ -1731,8 +1849,8 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
     // ============================================
     // STEP 6: Check relative jump ranges
     // ============================================
-    for (var _g = 0, labelUsages_2 = labelUsages; _g < labelUsages_2.length; _g++) {
-        var usage = labelUsages_2[_g];
+    for (var _j = 0, labelUsages_2 = labelUsages; _j < labelUsages_2.length; _j++) {
+        var usage = labelUsages_2[_j];
         if (!usage.isRelativeJump)
             continue;
         var labelDef = labelDefs.get(usage.name);
@@ -1748,7 +1866,7 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
             errors.push({
                 line: usage.lineNumber,
                 start: 0,
-                end: ((_d = lines[usage.lineNumber - startLine]) === null || _d === void 0 ? void 0 : _d.length) || 0,
+                end: ((_e = lines[usage.lineNumber - startLine]) === null || _e === void 0 ? void 0 : _e.length) || 0,
                 message: "Relative jump to ".concat(usage.name, " is out of range (offset: ").concat(offset, ", valid: -128 to +127)"),
                 severity: 'error'
             });
@@ -1794,30 +1912,10 @@ function getDirectiveLength(parsed) {
             // Count bytes: parse comma-separated values
             // Strings count characters, numbers count 1 each
             var totalBytes = 0;
-            var values = [];
-            var inString = false;
-            var current = '';
-            // Parse comma-separated values, respecting quoted strings
-            for (var i = 0; i < parsed.directiveValue.length; i++) {
-                var ch = parsed.directiveValue[i];
-                if (ch === '"') {
-                    inString = !inString;
-                    current += ch;
-                }
-                else if (ch === ',' && !inString) {
-                    if (current.trim())
-                        values.push(current.trim());
-                    current = '';
-                }
-                else {
-                    current += ch;
-                }
-            }
-            if (current.trim())
-                values.push(current.trim());
+            var values = splitDirectiveValues(parsed.directiveValue);
             // Count bytes for each value
-            for (var _i = 0, values_1 = values; _i < values_1.length; _i++) {
-                var val = values_1[_i];
+            for (var _i = 0, values_3 = values; _i < values_3.length; _i++) {
+                var val = values_3[_i];
                 if (val.startsWith('"') && val.endsWith('"')) {
                     // String: count characters inside quotes
                     totalBytes += val.length - 2;

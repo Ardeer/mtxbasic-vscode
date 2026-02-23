@@ -86,7 +86,7 @@ function activate(ctx) {
     var noddyLength = 0; // Tracks ASCII characters in the current document's NODDY section
     // Command: save converted HEX bytes from active editor to a file
     var saveHexCmd = vscode.commands.registerCommand('mtxbasic.saveHex', function () { return __awaiter(_this, void 0, void 0, function () {
-        var editor, doc, text, noddyStartLine, noddyByteCount, bytes, totalBytelength, LSTPGsize, BASBOTaddr, BASTOPaddr, NODTOPaddr, ARRTOPdispl, maxBasicAddr, maxCode_noBasicAddr, sysVarStart_1, setSysVar, defaultFileName, uri, fileName, lastDotIdx, nameOnly, extension, headerName, i, DESAVEaddr, desavePrompt, input, trimmed, addr, lineNum, addr, data, e_1;
+        var editor, doc, text, noddyStartLine, noddyByteCount, bytes, totalBytelength, LSTPGsize, BASBOTaddr, BASTOPaddr, NODTOPaddr, ARRTOPdispl, maxBasicAddr, maxCode_noBasicAddr, BASELINaddr, sysVarStart_1, setSysVar, defaultFileName, uri, fileName, lastDotIdx, nameOnly, extension, headerName, i, DESAVEaddr, desavePrompt, input, trimmed, addr, lineNum, addr, data, e_1;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -113,7 +113,8 @@ function activate(ctx) {
                     ARRTOPdispl = NODTOPaddr - BASBOTaddr;
                     maxBasicAddr = 0xC000 - 1;
                     maxCode_noBasicAddr = 0xFA50 - 1;
-                    //Pass the above data to update the system variables in createHdr array before inserting the header
+                    BASELINaddr = BASBOTaddr // default is BASBOTaddr. This is a test
+                    ;
                     (0, mtxsavehdr_js_1.initCreateHdr)();
                     sysVarStart_1 = 368;
                     setSysVar = function (offset, value) {
@@ -126,8 +127,10 @@ function activate(ctx) {
                     setSysVar(90, BASBOTaddr); // BASBOT
                     setSysVar(92, NODTOPaddr); // BASTPO
                     setSysVar(124, ARRTOPdispl); // ARRTOP
-                    setSysVar(127, BASBOTaddr); // BASELIN
+                    setSysVar(127, BASELINaddr); // BASELIN Apparently this can be any of the BASIC lines not just BASBOTaddr
+                    //setSysVar(131,0x00); // Current page 00 or default 10
                     setSysVar(134, BASTOPaddr); // PGTOP
+                    //setSysVar(136,GOSUBSTaddr); // Start of GOSUB stack
                     setSysVar(246, BASBOTaddr); // DATAAD
                     defaultFileName = doc.uri && doc.uri.fsPath ? doc.uri.fsPath.replace(/\.[^.]*$/, '') + '.mtx' : 'output.mtx';
                     return [4 /*yield*/, vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(defaultFileName), saveLabel: 'Save HEX' })];
@@ -2281,7 +2284,7 @@ function activate(ctx) {
                 if (page.type === 'program') {
                     for (var _3 = 0, _4 = page.content; _3 < _4.length; _3++) {
                         var line = _4[_3];
-                        var displayMatch = /\*DISPLAY\s+(\w+)\./.exec(line);
+                        var displayMatch = /^\*(?:D|DISPLAY)\s+([^\s*^.]+)\./i.exec(line.trim());
                         if (displayMatch) {
                             usedTextPages.add(displayMatch[1]);
                         }
@@ -3449,7 +3452,8 @@ function activate(ctx) {
                         if (match) {
                             var instruction = match[1].trim();
                             try {
-                                var parsed = (0, z80codes_js_1.parseZ80Line)(instruction, j);
+                                //const parsed = parseZ80Line(instruction, j);
+                                var parsed = (0, z80codes_js_1.parseZ80Line)(z80Line, j);
                                 if (parsed) {
                                     var instrLength = 1;
                                     if (parsed.isDirective) {

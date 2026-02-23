@@ -175,6 +175,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         const maxBasicAddr = 0xC000 - 1; // Maximum working RAM space for BASIC is either from 0x4000 or 0x8000 to 0xBFFF inclusive
                         const maxCode_noBasicAddr = 0xFA50 - 1; // Maximum working RAM space for CODE when no BASIC or NODDY is present                       
                         //Pass the above data to update the system variables in createHdr array before inserting the header
+                        const BASELINaddr=BASBOTaddr // default is BASBOTaddr. This is a test
 
                         initCreateHdr();
                         const sysVarStart = 368;
@@ -189,8 +190,10 @@ export function activate(ctx: vscode.ExtensionContext) {
                         setSysVar(90, BASBOTaddr); // BASBOT
                         setSysVar(92, NODTOPaddr); // BASTPO
                         setSysVar(124,ARRTOPdispl); // ARRTOP
-                        setSysVar(127,BASBOTaddr); // BASELIN
+                        setSysVar(127,BASELINaddr); // BASELIN Apparently this can be any of the BASIC lines not just BASBOTaddr
+                        //setSysVar(131,0x00); // Current page 00 or default 10
                         setSysVar(134,BASTOPaddr); // PGTOP
+                        //setSysVar(136,GOSUBSTaddr); // Start of GOSUB stack
                         setSysVar(246,BASBOTaddr); // DATAAD
                         
                         //insert MTX header before the BASIC program bytes above - still to be added here
@@ -2612,7 +2615,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         for (const page of pages) {
                 if (page.type === 'program') {
                 for (const line of page.content) {
-                        const displayMatch = /\*DISPLAY\s+(\w+)\./.exec(line);
+                        const displayMatch = /^\*(?:D|DISPLAY)\s+([^\s*^.]+)\./i.exec(line.trim());
                         if (displayMatch) {
                         usedTextPages.add(displayMatch[1]);
                         }
@@ -3841,7 +3844,8 @@ ctx.subscriptions.push(
                             if (match) {
                                 const instruction = match[1].trim();
                                 try {
-                                    const parsed = parseZ80Line(instruction, j);
+                                    //const parsed = parseZ80Line(instruction, j);
+                                    const parsed = parseZ80Line(z80Line, j);
                                     if (parsed) {
                                         let instrLength = 1;
                                         if (parsed.isDirective) {

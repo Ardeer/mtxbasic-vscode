@@ -1133,8 +1133,10 @@ function detectCodeBlocks(lines: string[], baseAddr = 0x4000): CodeBlock[] {
             }
 
             // Check if there's a label (ends with ':')
-            // Allow one colon for the optional label, but disallow additional colons in the instruction
-            const colonCount = (restOfLine.match(/:/g) || []).length;
+            // Allow one colon for the optional label, but disallow additional colons in the instruction.
+            // Ignore colons that appear inside trailing comments.
+            const codeOnly = restOfLine.split(';')[0].trim();
+            const colonCount = (codeOnly.match(/:/g) || []).length;
             if (colonCount > 1) {
                 // Multiple colons -> invalid assembly line -> end block
                 currentBlock.endLine = i - 1;
@@ -1286,6 +1288,108 @@ function validateOperandSize(op: string, placeholder: string): string | null {
     } else {
         return `${placeholder} must be a hex value, decimal, or a label`;
     }
+}
+
+type DirectiveIssue = { token: string; message: string };
+
+function splitDirectiveValues(raw: string): string[] {
+    const values: string[] = [];
+    let inString = false;
+    let current = '';
+
+    for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (ch === '"') {
+            inString = !inString;
+            current += ch;
+        } else if (ch === ',' && !inString) {
+            if (current.trim()) values.push(current.trim());
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+
+    if (current.trim()) values.push(current.trim());
+    return values;
+}
+
+function validateDirectiveOperands(parsed: Z80ParsedLine): DirectiveIssue[] {
+    const issues: DirectiveIssue[] = [];
+    if (!parsed.isDirective || !parsed.directiveType || !parsed.directiveValue) return issues;
+
+    const values = splitDirectiveValues(parsed.directiveValue);
+    if (values.length === 0) {
+        issues.push({ token: parsed.directiveType, message: `${parsed.directiveType} requires at least one value` });
+        return issues;
+    }
+
+    const parseNumeric = (token: string): number | null => {
+        const t = token.trim();
+        if (/^#[0-9A-Fa-f]+$/.test(t)) return parseInt(t.slice(1), 16);
+        if (/^\d+$/.test(t)) return parseInt(t, 10);
+        return null;
+    };
+
+    if (parsed.directiveType === 'DB') {
+        for (const value of values) {
+            if (/^".*"$/.test(value)) continue;
+
+            if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
+                issues.push({ token: value, message: `Invalid hex byte "${value}" in DB (expected #00 to #FF)` });
+                continue;
+            }
+
+            const num = parseNumeric(value);
+            if (num === null) {
+                issues.push({ token: value, message: `Invalid DB value "${value}" (expected byte, decimal, or quoted string)` });
+                continue;
+            }
+            if (num < 0 || num > 0xFF) {
+                issues.push({ token: value, message: `DB value out of range: "${value}" (expected 0-255 or #00-#FF)` });
+            }
+        }
+    } else if (parsed.directiveType === 'DW') {
+        for (const value of values) {
+            if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
+                issues.push({ token: value, message: `Invalid hex word "${value}" in DW (expected #0000 to #FFFF)` });
+                continue;
+            }
+
+            const num = parseNumeric(value);
+            if (num === null) {
+                if (!/^[A-Z][A-Z0-9]*$/.test(value.trim().toUpperCase())) {
+                    issues.push({ token: value, message: `Invalid DW value "${value}" (expected 16-bit value or label)` });
+                }
+                continue;
+            }
+            if (num < 0 || num > 0xFFFF) {
+                issues.push({ token: value, message: `DW value out of range: "${value}" (expected 0-65535 or #0000-#FFFF)` });
+            }
+        }
+    } else if (parsed.directiveType === 'DS') {
+        if (values.length !== 1) {
+            issues.push({ token: parsed.directiveValue, message: 'DS requires a single size value' });
+            return issues;
+        }
+
+        const value = values[0];
+        if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
+            issues.push({ token: value, message: `Invalid hex size "${value}" in DS (expected #00 to #FE)` });
+            return issues;
+        }
+
+        const num = parseNumeric(value);
+        if (num === null) {
+            issues.push({ token: value, message: `Invalid DS size "${value}" (expected 0-254 or #00-#FE)` });
+            return issues;
+        }
+        if (num < 0 || num > 0xFE) {
+            issues.push({ token: value, message: `DS size out of range: "${value}" (expected 0-254 or #00-#FE)` });
+        }
+    }
+
+    return issues;
 }
 
 
@@ -1590,6 +1694,23 @@ function validateCodeBlock(lines: string[], startLine: number, baseAddr = 0x4000
                 lineNumber: startLine + i,
                 address: currentAddress
             });
+        }
+
+        if (parsed.isDirective) {
+            const directiveIssues = validateDirectiveOperands(parsed);
+            for (const issue of directiveIssues) {
+                const token = issue.token || parsed.directiveValue || parsed.directiveType || '';
+                const idx = token ? lines[i].toUpperCase().indexOf(token.toUpperCase()) : -1;
+                const start = idx >= 0 ? idx : 0;
+                const end = idx >= 0 ? idx + token.length : (lines[i]?.length || 0);
+                errors.push({
+                    line: startLine + i,
+                    start,
+                    end,
+                    message: issue.message,
+                    severity: 'error'
+                });
+            }
         }
         
         // Calculate next address based on instruction length
@@ -1932,24 +2053,7 @@ function getDirectiveLength(parsed: Z80ParsedLine): number {
             // Count bytes: parse comma-separated values
             // Strings count characters, numbers count 1 each
             let totalBytes = 0;
-            const values = [];
-            let inString = false;
-            let current = '';
-            
-            // Parse comma-separated values, respecting quoted strings
-            for (let i = 0; i < parsed.directiveValue.length; i++) {
-                const ch = parsed.directiveValue[i];
-                if (ch === '"') {
-                    inString = !inString;
-                    current += ch;
-                } else if (ch === ',' && !inString) {
-                    if (current.trim()) values.push(current.trim());
-                    current = '';
-                } else {
-                    current += ch;
-                }
-            }
-            if (current.trim()) values.push(current.trim());
+            const values = splitDirectiveValues(parsed.directiveValue);
             
             // Count bytes for each value
             for (const val of values) {
