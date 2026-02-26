@@ -74,7 +74,7 @@ The user can still enter hex addresses manually, if out of sequence, the system 
 a) either pressing "CTRL SHIFT r" 
 b) or from "CTRL SHIFT p" and select "MTX: Renumber Z80 addresses in CODE block". 
 
-Hover over a Z80 mnenomic like LD and it will list possible options, e.g. LD (HL),A . There is no Symbols Label vs address summary at the end of the code block. CTRL F (find) is more convenient to use and it made the coding slightly less cumbersome.
+Hover over a Z80 mnenomic like LD and it will list possible options, e.g. LD (HL),A . There is no Symbols Label vs address summary at the end of the code block. CTRL F (find) is more convenient to use and it made the coding slightly less cumbersome. The code will flag an error if a LABEL is duplicated.
 
 A quirk of the assembler and to keep consistency with the original, the hexadecimal address is not preceded by '#' to indicate a hexadecimal number. However, numbers and addresses used in Z80 instructions must be preceded by '#' unless it the user uses the decimal equivalent, see examples below.
 
@@ -146,7 +146,7 @@ This project is licensed under the GNU License. See the LICENSE file for more de
 
 ## Creation
 
-VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I primarily used VS code copilot, using a range of the latest A.I. models from Q4 20026 to Q1 2026 and a range of browser A.I. tools (like duck.ai) to supplement the use of my python MTX disassembly program as the building blocks for this MTX BASIC extension. The majority of the underlying building blocks were in place, but the one thing that I needed to get started, was a suitable JSON schema. I used https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension. Coding using A.I. tools needs a LOT  of patience and perseverance to get to a workable end result, even for the simplest of tasks. I lot of time is spent re-defining and extensive testing of any recommended code. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech computer.
+This extension was developed on a raspberry pi5 running Ubuntu 25.10 (ARM64). VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I decided to use a combination of Nicrosoft copilot which is integrated into VS code, user can select a range of non-Microsoft A.I. Models from Q4 20026 to Q1 2026 and a range of browser A.I. tools (like duck.ai) to supplement the use of my own python MTX disassembly and hexdump programs as the building blocks for this MTX BASIC extension. The majority of the underlying MTX BASIC (z80) building blocks were in place, but the one thing that I needed to get started, was a suitable JSON schema. I used https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension. Coding using A.I. tools needs a LOT  of patience and perseverance to get to a workable end result, even for the simplest of tasks. A lot of time is spent re-defining followed by extensive testing of any recommended code. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech MTX computer.
 
 ## For more information
 

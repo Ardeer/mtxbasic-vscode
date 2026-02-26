@@ -2823,7 +2823,34 @@ export function activate(ctx: vscode.ExtensionContext) {
                 
                 // validateCodeBlocks takes the document lines array, not CodeBlock[]
                 const z80Errors = validateCodeBlocks(allDocLines, hexBaseAddress);
-        
+
+                // duplicate‑label check
+                for (const block of codeBlockRanges) {
+                        const seen = new Map<string, vscode.Position>();
+                        for (let i = block.start; i <= block.end; i++) {
+                                const line = doc.lineAt(i).text;
+                                // either drop the address part…
+                                const trimmed = line.replace(/^\s*[0-9A-Fa-f]{1,4}\s+/, '');
+                                const m = /^([A-Z][A-Z0-9]*):/.exec(trimmed);
+
+                                // …or use a single regex that allows for the prefix:
+                                // const m = /^\s*(?:[0-9A-Fa-f]{1,4}\s+)?([A-Z][A-Z0-9]*):/.exec(line);
+                                if (!m) { continue; }
+                                const label = m[1];
+                                // compute column in original text so the underlining is correct
+                                const col = line.indexOf(label);
+                                const pos = new vscode.Position(i, col);
+                                if (seen.has(label)) {
+                                        const range = new vscode.Range(pos, pos.translate(0, label.length));
+                                        diags.push(new vscode.Diagnostic(range,
+                                        `Duplicate label in z80 code block '${label}'`,
+                                        vscode.DiagnosticSeverity.Error));
+                                } else {
+                                        seen.set(label, pos);
+                                }
+                        }
+                }
+
                 for (const err of z80Errors) {
                         const range = new vscode.Range(
                                 new vscode.Position(err.line, err.start),

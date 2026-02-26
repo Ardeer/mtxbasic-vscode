@@ -1172,8 +1172,8 @@ function activate(ctx) {
         } // END of line number errors check
         // Helper function to check if a line is inside a CODE block
         function isInCodeBlock(lineNum) {
-            for (var _i = 0, codeBlockRanges_3 = codeBlockRanges; _i < codeBlockRanges_3.length; _i++) {
-                var block = codeBlockRanges_3[_i];
+            for (var _i = 0, codeBlockRanges_4 = codeBlockRanges; _i < codeBlockRanges_4.length; _i++) {
+                var block = codeBlockRanges_4[_i];
                 if (lineNum >= block.start && lineNum <= block.end) {
                     return true;
                 }
@@ -1489,8 +1489,8 @@ function activate(ctx) {
                     //special handling for LET as could be complex expression on RHS
                     if (rhs.length !== 0) {
                         // process each part of RHS further
-                        for (var _9 = 0, rhs_1 = rhs; _9 < rhs_1.length; _9++) {
-                            var itemInRhs = rhs_1[_9];
+                        for (var _10 = 0, rhs_1 = rhs; _10 < rhs_1.length; _10++) {
+                            var itemInRhs = rhs_1[_10];
                             var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
                             var t = rhsPart.trim();
                             // skip standalone arithmetic operator tokens
@@ -1580,8 +1580,8 @@ function activate(ctx) {
                         var argsOffsetInSeg = Math.max(0, seg.text.indexOf(argsTextRaw, segMatchIndex));
                         var startChar = seg.start + argsOffsetInSeg;
                         var endChar = startChar + (argsTextRaw.length || 1);
-                        for (var _10 = 0, printErrors_1 = printErrors; _10 < printErrors_1.length; _10++) {
-                            var e = printErrors_1[_10];
+                        for (var _11 = 0, printErrors_1 = printErrors; _11 < printErrors_1.length; _11++) {
+                            var e = printErrors_1[_11];
                             if (!e)
                                 continue; // Skip null entries
                             var range = new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar));
@@ -1710,8 +1710,8 @@ function activate(ctx) {
                         // Check for AND/OR at word boundary
                         var slice = condUpper.slice(j);
                         var matched = false;
-                        for (var _11 = 0, _12 = [' AND ', ' OR ']; _11 < _12.length; _11++) {
-                            var op = _12[_11];
+                        for (var _12 = 0, _13 = [' AND ', ' OR ']; _12 < _13.length; _12++) {
+                            var op = _13[_12];
                             if (slice.startsWith(op)) {
                                 if (currentPart.trim()) {
                                     condParts.push({ text: currentPart.trim(), start: currentStart });
@@ -1735,8 +1735,8 @@ function activate(ctx) {
                         condParts.push({ text: currentPart.trim(), start: currentStart });
                     }
                     // Now validate each individual comparison
-                    for (var _13 = 0, condParts_1 = condParts; _13 < condParts_1.length; _13++) {
-                        var part = condParts_1[_13];
+                    for (var _14 = 0, condParts_1 = condParts; _14 < condParts_1.length; _14++) {
+                        var part = condParts_1[_14];
                         // Strip leading NOT if present
                         var compText = part.text.trim();
                         var notOffset = 0;
@@ -2214,8 +2214,8 @@ function activate(ctx) {
                     { kw: 'PRINT', flag: printFlag, checkMissing: true },
                     { kw: 'LPRINT', flag: printFlag, checkMissing: true }
                 ];
-                for (var _14 = 0, spacedKeywords_1 = spacedKeywords; _14 < spacedKeywords_1.length; _14++) {
-                    var _15 = spacedKeywords_1[_14], kw = _15.kw, flag = _15.flag, checkMissing = _15.checkMissing;
+                for (var _15 = 0, spacedKeywords_1 = spacedKeywords; _15 < spacedKeywords_1.length; _15++) {
+                    var _16 = spacedKeywords_1[_15], kw = _16.kw, flag = _16.flag, checkMissing = _16.checkMissing;
                     if (!flag)
                         continue;
                     //NEXT is the only CmdSpecs that has optional arguments, so needs special handling with regards to space detection
@@ -2233,8 +2233,8 @@ function activate(ctx) {
                         var after = seg.text.slice(matchIdx + kw.length);
                         var spaceMatch = /^(\s*)/.exec(after);
                         var space = spaceMatch ? ((_v = spaceMatch[1]) !== null && _v !== void 0 ? _v : '') : '';
-                        var _16 = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _16.spaceMissingYes, msg0 = _16.msg0;
-                        var _17 = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _17.multiSpaceYes, msg2 = _17.msg2;
+                        var _17 = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _17.spaceMissingYes, msg0 = _17.msg0;
+                        var _18 = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _18.multiSpaceYes, msg2 = _18.msg2;
                         if (checkMissing && spaceMissingYes) {
                             var range = new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + kw.length));
                             diags.push(new vscode.Diagnostic(range, msg0, vscode.DiagnosticSeverity.Error));
@@ -2383,8 +2383,8 @@ function activate(ctx) {
                 } // END of main validator error checking block
             };
             //const segments = splitLineSegments(line.text); // each { text, start }
-            for (var _8 = 0, segments_1 = segments; _8 < segments_1.length; _8++) {
-                var seg = segments_1[_8];
+            for (var _9 = 0, segments_1 = segments; _9 < segments_1.length; _9++) {
+                var seg = segments_1[_9];
                 _loop_5(seg);
             } // END of for (const seg of segments) loop
         };
@@ -2493,8 +2493,35 @@ function activate(ctx) {
             }
             // validateCodeBlocks takes the document lines array, not CodeBlock[]
             var z80Errors = (0, z80codes_js_1.validateCodeBlocks)(allDocLines, hexBaseAddress);
-            for (var _7 = 0, z80Errors_1 = z80Errors; _7 < z80Errors_1.length; _7++) {
-                var err = z80Errors_1[_7];
+            // duplicate‑label check
+            for (var _7 = 0, codeBlockRanges_3 = codeBlockRanges; _7 < codeBlockRanges_3.length; _7++) {
+                var block = codeBlockRanges_3[_7];
+                var seen = new Map();
+                for (var i = block.start; i <= block.end; i++) {
+                    var line = doc.lineAt(i).text;
+                    // either drop the address part…
+                    var trimmed = line.replace(/^\s*[0-9A-Fa-f]{1,4}\s+/, '');
+                    var m = /^([A-Z][A-Z0-9]*):/.exec(trimmed);
+                    // …or use a single regex that allows for the prefix:
+                    // const m = /^\s*(?:[0-9A-Fa-f]{1,4}\s+)?([A-Z][A-Z0-9]*):/.exec(line);
+                    if (!m) {
+                        continue;
+                    }
+                    var label = m[1];
+                    // compute column in original text so the underlining is correct
+                    var col = line.indexOf(label);
+                    var pos = new vscode.Position(i, col);
+                    if (seen.has(label)) {
+                        var range = new vscode.Range(pos, pos.translate(0, label.length));
+                        diags.push(new vscode.Diagnostic(range, "Duplicate label in z80 code block '".concat(label, "'"), vscode.DiagnosticSeverity.Error));
+                    }
+                    else {
+                        seen.set(label, pos);
+                    }
+                }
+            }
+            for (var _8 = 0, z80Errors_1 = z80Errors; _8 < z80Errors_1.length; _8++) {
+                var err = z80Errors_1[_8];
                 var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                 var severity = err.severity === 'error'
                     ? vscode.DiagnosticSeverity.Error
@@ -2540,8 +2567,8 @@ function activate(ctx) {
             // Reuse validateLineNumbers to compute `codeBlockRanges` (same logic used by diagnostics).
             var codeBlockRanges = validateLineNumbers(document).codeBlockRanges;
             var inCodeBlockAtPos = false;
-            for (var _i = 0, codeBlockRanges_4 = codeBlockRanges; _i < codeBlockRanges_4.length; _i++) {
-                var block = codeBlockRanges_4[_i];
+            for (var _i = 0, codeBlockRanges_5 = codeBlockRanges; _i < codeBlockRanges_5.length; _i++) {
+                var block = codeBlockRanges_5[_i];
                 if (position.line >= block.start && position.line <= block.end) {
                     inCodeBlockAtPos = true;
                     break;
