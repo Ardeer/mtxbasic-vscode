@@ -9,18 +9,10 @@ converted to typescript 8-Dec-2025
 */
 
 // Import basicTokeniseLine for calculating expected CODE starting addresses
-import { basicTokeniseLine } from './mtxtokens.js';
+import { refineConvertTextToHex,convertTextToHex } from './mtxtokens.js';
 
+import {buildLineStartMapFromBytes,isBasicHeaderLine, extractBasicLineNumbersFromLines,getCompiledBytesForMap} from './mtxstdfns.js';
 
-/** z80 hex to mnemomic conversion table notes
-no CB30 to CB37
-no DDCB ZZ 36
-no FDCB ZZ 36
-MTX assembler includes the following directives: 
-DB n ; define byte, e.g.  n=10 or #0A or "A"
-DW XXXX ; define 16-bit word
-DS n254 ; define space, where n254 = 0 to 254 as 255 (#FF) is reserved for end of program marker
-*/
 
 /** z80 format within the CODE structure
 <TABspace> <hex_addr><space> {<label>:} <z80 assembly command> {;<comment>}
@@ -2080,46 +2072,29 @@ function getDirectiveLength(parsed: Z80ParsedLine): number {
  * Validate all CODE blocks in document
  */
 function validateCodeBlocks(documentLines: string[], baseAddr = 0x4000): Z80Error[] {
-    const allErrors: Z80Error[] = [];
-    const codeBlocks = detectCodeBlocks(documentLines, baseAddr);
-    
+    const errors: Z80Error[] = [];
+    const codeBlocks = detectCodeBlocks(documentLines);
+
+    // Add this (in function scope, before for-loop)
+    const lineStartMap = buildLineStartMap(documentLines, baseAddr);
+
     for (const block of codeBlocks) {
-        // Calculate expected starting address by tokenizing BASIC lines before CODE
         let expectedStartAddress = baseAddr;
-        try {
-            let totalBytes = 0;
-            for (let j = 0; j <= block.startLine; j++) {
-                const basicLine = documentLines[j];
-                if (/^\d{1,5}\s/.test(basicLine)) {
-                    const lineBytes = basicTokeniseLine(basicLine, baseAddr + totalBytes);
-                    const isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                    if (isCodeLine) {
-                        // CODE placeholder is 8 bytes, but Z80 starts at byte 7
-                        totalBytes += lineBytes.length - 1;
-                    } else {
-                        totalBytes += lineBytes.length;
-                    }
-                }
-            }
-            expectedStartAddress = baseAddr + totalBytes;
-        } catch (e) {
-            // If tokenization fails, fall back to baseAddr
-            expectedStartAddress = baseAddr;
-        }
-        
-        // Collect assembly lines from the CODE block
-        const assemblyLines: string[] = [];
-        for (let i = block.startLine + 1; i <= block.endLine; i++) {
-            if (i < documentLines.length) {
-                assemblyLines.push(documentLines[i]);
+
+        const codeHeaderIdx = findCodeHeaderLineIndex(documentLines, block.startLine);
+        if (codeHeaderIdx >= 0) {
+            const m = /^\s*(\d+)/.exec(documentLines[codeHeaderIdx]);
+            if (m) {
+                const codeLineNo = parseInt(m[1], 10);
+                const lineStart = lineStartMap.get(codeLineNo);
+                if (lineStart !== undefined) expectedStartAddress = lineStart + 7;
             }
         }
-        
-        const blockErrors = validateCodeBlock(assemblyLines, block.startLine + 1, baseAddr, expectedStartAddress);
-        allErrors.push(...blockErrors);
+
+        // ...existing validation code...
     }
-    
-    return allErrors;
+
+    return errors;
 }
 
 /**
@@ -2198,6 +2173,21 @@ type LabelInfo = LabelDef;
 
 function validateZ80InstructionWithLabels(parsed: Z80ParsedLine, knownLabels: Map<string, LabelInfo>): Z80Error[] {
     return validateCodeBlock([parsed.raw], parsed.lineNumber);
+}
+
+function findCodeHeaderLineIndex(lines: string[], fromIndex: number): number {
+    for (let i = fromIndex; i >= 0; i--) {
+        if (/^\s*\d+\s+CODE\s*$/i.test(lines[i])) return i;
+        if (/^\s*\d+\s+/.test(lines[i]) && !/^\s*\d+\s+CODE\s*$/i.test(lines[i])) break;
+    }
+    return -1;
+}
+
+
+function buildLineStartMap(lines: string[], baseAddr: number): Map<number, number> {
+    const bytes = getCompiledBytesForMap(lines.join('\n'), baseAddr);
+    const sourceLineNos = extractBasicLineNumbersFromLines(lines);
+    return buildLineStartMapFromBytes(bytes, sourceLineNos, baseAddr);
 }
 
 // Export everything

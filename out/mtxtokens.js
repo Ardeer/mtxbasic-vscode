@@ -31,6 +31,7 @@ exports.processCodeBlock = processCodeBlock;
 exports.updateCodeBlockLength = updateCodeBlockLength;
 exports.extractMTXDirectives = extractMTXDirectives;
 exports.isAtWordBoundary = isAtWordBoundary;
+exports.getTokenizedLengthForLine = getTokenizedLengthForLine;
 var z80codes_js_1 = require("./z80codes.js");
 //Not imported     Z80Error, Z80ParsedLine, CodeBlock, LabelInfo, splitOperands, detectCodeBlocks, collectLabels, findZ80Command,
 //                 validateZ80Instruction, validateZ80InstructionWithLabels, validateCodeBlock, validateCodeBlocks,  getZ80InstructionInfo
@@ -1834,4 +1835,37 @@ function refineConvertTextToHex(line) {
 function extractMTXDirectives(codeBlock) {
     // Placeholder: Implement logic to extract MTX directives from the code block
     return [];
+}
+// Helper: compute tokenized length for a BASIC line at index (handles Z80 CODE blocks)
+function getTokenizedLengthForLine(documentLines, index, baseAddr) {
+    var _a;
+    if (baseAddr === void 0) { baseAddr = 0x4000; }
+    var line = (_a = documentLines[index]) !== null && _a !== void 0 ? _a : '';
+    var m = /^\s*(\d+)\s*(.*)$/.exec(line);
+    if (!m)
+        return { length: 0, consumed: 0 };
+    var rest = m[2] || '';
+    // If this line is a CODE block, accumulate following assembly lines correctly
+    if (/^\s*CODE(?:\b|$)/i.test(rest)) {
+        var codeLines = [];
+        var consumed = 0;
+        for (var i = index + 1; i < documentLines.length; i++) {
+            var l = documentLines[i];
+            if (/^\s*\d+\s/.test(l))
+                break; // Stop at next BASIC line
+            if (l.trim() !== '')
+                codeLines.push(l);
+            consumed++;
+        }
+        // Assemble the block to get its exact total byte footprint 
+        // 7 bytes for the initial MTX BASIC CODE header: Line No(2)+Length(2)+CODE(1)+Z80 Len(2)
+        var headerLength = 7;
+        var assembledBytes = assembleCodeBlock(codeLines, baseAddr + headerLength);
+        // total length is the BASIC header + the assembled payload length + EOL marker (1)
+        var length_1 = headerLength + assembledBytes.length + 1;
+        return { length: length_1, consumed: consumed };
+    }
+    // Normal BASIC numbered line
+    var bytes = basicTokeniseLine(line, baseAddr);
+    return { length: bytes.length, consumed: 0 };
 }

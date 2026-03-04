@@ -39,6 +39,12 @@ exports.parseNoddyContent = parseNoddyContent;
 exports.validateNoddyProgram = validateNoddyProgram;
 exports.isNoddyTrigger = isNoddyTrigger;
 exports.findPlodReferences = findPlodReferences;
+exports.buildLineStartMapFromBytes = buildLineStartMapFromBytes;
+exports.isBasicHeaderLine = isBasicHeaderLine;
+exports.extractBasicLineNumbersFromLines = extractBasicLineNumbersFromLines;
+exports.getCompiledBytesForMap = getCompiledBytesForMap;
+//imports
+var mtxtokens_js_1 = require("./mtxtokens.js");
 // check if the number is hexadecimal (16-bit UNSIGNED hexadecimal is allowed)
 function isHexNumber(expr) {
     return typeof expr === 'string' && /^[#][0-9A-Fa-f]{1,4}$/.test(expr);
@@ -1433,4 +1439,108 @@ function findPlodReferences(lines) {
         }
     }
     return refs;
+}
+function buildLineStartMapFromBytes(bytes, sourceLineNos, baseAddr) {
+    var map = new Map();
+    if (!bytes || bytes.length < 8 || !sourceLineNos || sourceLineNos.length === 0)
+        return map;
+    var read16 = function (off) { return bytes[off] | (bytes[off + 1] << 8); };
+    var isValidLen = function (off, len) { return len >= 5 && len !== 0xffff && off + len <= bytes.length; };
+    // Validate a candidate start offset by checking chained line numbers via len jumps
+    var validateChain = function (startOff) {
+        var off = startOff;
+        var checks = Math.min(sourceLineNos.length, 6); // enough to reject false anchors
+        for (var i = 0; i < checks; i++) {
+            if (off + 4 > bytes.length)
+                return false;
+            var len = read16(off);
+            var ln = read16(off + 2);
+            if (ln !== sourceLineNos[i])
+                return false;
+            if (!isValidLen(off, len))
+                return false;
+            off += len;
+        }
+        return true;
+    };
+    // Find true start: first source line number with a valid forward chain
+    var startOff = -1;
+    for (var off_1 = 0; off_1 + 4 <= bytes.length; off_1++) {
+        var len = read16(off_1);
+        var ln = read16(off_1 + 2);
+        if (ln !== sourceLineNos[0])
+            continue;
+        if (!isValidLen(off_1, len))
+            continue;
+        if (!validateChain(off_1))
+            continue;
+        startOff = off_1;
+        break;
+    }
+    if (startOff < 0)
+        return map;
+    // Walk exact source order, normalized so first BASIC line = baseAddr
+    var off = startOff;
+    for (var i = 0; i < sourceLineNos.length; i++) {
+        if (off + 4 > bytes.length)
+            break;
+        var len = read16(off);
+        var ln = read16(off + 2);
+        if (ln !== sourceLineNos[i])
+            break;
+        if (!isValidLen(off, len))
+            break;
+        map.set(ln, baseAddr + (off - startOff));
+        off += len;
+    }
+    return map;
+}
+function isBasicHeaderLine(text) {
+    // Must start at column 0 (no indentation), 1..5 digits, then whitespace
+    return /^\d{1,5}\s/.test(text);
+}
+function extractBasicLineNumbersFromLines(lines) {
+    var out = [];
+    for (var _i = 0, lines_1 = lines; _i < lines_1.length; _i++) {
+        var line = lines_1[_i];
+        if (!isBasicHeaderLine(line))
+            continue;
+        var m = /^(\d{1,5})\s/.exec(line);
+        if (m)
+            out.push(parseInt(m[1], 10));
+    }
+    return out;
+}
+function getCompiledBytesForMap(text, baseAddr) {
+    var toArray = function (v) {
+        if (Array.isArray(v))
+            return v;
+        if (v instanceof Uint8Array)
+            return Array.from(v);
+        if (Array.isArray(v === null || v === void 0 ? void 0 : v.bytes))
+            return v.bytes;
+        if ((v === null || v === void 0 ? void 0 : v.bytes) instanceof Uint8Array)
+            return Array.from(v.bytes);
+        return [];
+    };
+    var looksLikeBasicRecords = function (arr) {
+        if (!arr || arr.length < 8)
+            return false;
+        for (var off = 0; off + 4 <= arr.length && off < 512; off++) {
+            var len = arr[off] | (arr[off + 1] << 8);
+            var lineNo = arr[off + 2] | (arr[off + 3] << 8);
+            if (len >= 5 && len < 0x8000 && lineNo > 0 && lineNo <= 65535 && off + len <= arr.length) {
+                return true;
+            }
+        }
+        return false;
+    };
+    var plain = toArray((0, mtxtokens_js_1.convertTextToHex)(text, baseAddr));
+    if (looksLikeBasicRecords(plain))
+        return plain;
+    var refined = mtxtokens_js_1.refineConvertTextToHex === null || mtxtokens_js_1.refineConvertTextToHex === void 0 ? void 0 : (0, mtxtokens_js_1.refineConvertTextToHex)(text, baseAddr);
+    var refinedArr = toArray(refined);
+    if (looksLikeBasicRecords(refinedArr))
+        return refinedArr;
+    return plain.length ? plain : refinedArr;
 }

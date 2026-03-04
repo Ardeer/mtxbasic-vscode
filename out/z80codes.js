@@ -23,17 +23,7 @@ exports.validateCodeBlocks = validateCodeBlocks;
 exports.getZ80InstructionInfo = getZ80InstructionInfo;
 exports.getInstructionLength = getInstructionLength;
 exports.getDirectiveLength = getDirectiveLength;
-// Import basicTokeniseLine for calculating expected CODE starting addresses
-var mtxtokens_js_1 = require("./mtxtokens.js");
-/** z80 hex to mnemomic conversion table notes
-no CB30 to CB37
-no DDCB ZZ 36
-no FDCB ZZ 36
-MTX assembler includes the following directives:
-DB n ; define byte, e.g.  n=10 or #0A or "A"
-DW XXXX ; define 16-bit word
-DS n254 ; define space, where n254 = 0 to 254 as 255 (#FF) is reserved for end of program marker
-*/
+var mtxstdfns_js_1 = require("./mtxstdfns.js");
 /** z80 format within the CODE structure
 <TABspace> <hex_addr><space> {<label>:} <z80 assembly command> {;<comment>}
 1) no line number (same exception as used for NODDY)
@@ -1939,45 +1929,26 @@ function getDirectiveLength(parsed) {
  */
 function validateCodeBlocks(documentLines, baseAddr) {
     if (baseAddr === void 0) { baseAddr = 0x4000; }
-    var allErrors = [];
-    var codeBlocks = detectCodeBlocks(documentLines, baseAddr);
+    var errors = [];
+    var codeBlocks = detectCodeBlocks(documentLines);
+    // Add this (in function scope, before for-loop)
+    var lineStartMap = buildLineStartMap(documentLines, baseAddr);
     for (var _i = 0, codeBlocks_1 = codeBlocks; _i < codeBlocks_1.length; _i++) {
         var block = codeBlocks_1[_i];
-        // Calculate expected starting address by tokenizing BASIC lines before CODE
         var expectedStartAddress = baseAddr;
-        try {
-            var totalBytes = 0;
-            for (var j = 0; j <= block.startLine; j++) {
-                var basicLine = documentLines[j];
-                if (/^\d{1,5}\s/.test(basicLine)) {
-                    var lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, baseAddr + totalBytes);
-                    var isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                    if (isCodeLine) {
-                        // CODE placeholder is 8 bytes, but Z80 starts at byte 7
-                        totalBytes += lineBytes.length - 1;
-                    }
-                    else {
-                        totalBytes += lineBytes.length;
-                    }
-                }
-            }
-            expectedStartAddress = baseAddr + totalBytes;
-        }
-        catch (e) {
-            // If tokenization fails, fall back to baseAddr
-            expectedStartAddress = baseAddr;
-        }
-        // Collect assembly lines from the CODE block
-        var assemblyLines = [];
-        for (var i = block.startLine + 1; i <= block.endLine; i++) {
-            if (i < documentLines.length) {
-                assemblyLines.push(documentLines[i]);
+        var codeHeaderIdx = findCodeHeaderLineIndex(documentLines, block.startLine);
+        if (codeHeaderIdx >= 0) {
+            var m = /^\s*(\d+)/.exec(documentLines[codeHeaderIdx]);
+            if (m) {
+                var codeLineNo = parseInt(m[1], 10);
+                var lineStart = lineStartMap.get(codeLineNo);
+                if (lineStart !== undefined)
+                    expectedStartAddress = lineStart + 7;
             }
         }
-        var blockErrors = validateCodeBlock(assemblyLines, block.startLine + 1, baseAddr, expectedStartAddress);
-        allErrors.push.apply(allErrors, blockErrors);
+        // ...existing validation code...
     }
-    return allErrors;
+    return errors;
 }
 /**
  * Wrapper for single instruction validation
@@ -2044,4 +2015,18 @@ function getZ80InstructionInfo(word) {
 }
 function validateZ80InstructionWithLabels(parsed, knownLabels) {
     return validateCodeBlock([parsed.raw], parsed.lineNumber);
+}
+function findCodeHeaderLineIndex(lines, fromIndex) {
+    for (var i = fromIndex; i >= 0; i--) {
+        if (/^\s*\d+\s+CODE\s*$/i.test(lines[i]))
+            return i;
+        if (/^\s*\d+\s+/.test(lines[i]) && !/^\s*\d+\s+CODE\s*$/i.test(lines[i]))
+            break;
+    }
+    return -1;
+}
+function buildLineStartMap(lines, baseAddr) {
+    var bytes = (0, mtxstdfns_js_1.getCompiledBytesForMap)(lines.join('\n'), baseAddr);
+    var sourceLineNos = (0, mtxstdfns_js_1.extractBasicLineNumbersFromLines)(lines);
+    return (0, mtxstdfns_js_1.buildLineStartMapFromBytes)(bytes, sourceLineNos, baseAddr);
 }

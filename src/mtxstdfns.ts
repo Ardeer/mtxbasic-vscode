@@ -3,6 +3,9 @@
 // 19-Nov-2025
 //
 
+//imports
+import { refineConvertTextToHex,convertTextToHex } from "./mtxtokens.js";
+
 // ------------------------------------------------------------
 //  Types used by functions
 // ------------------------------------------------------------
@@ -1461,6 +1464,109 @@ function findPlodReferences(lines: string[]): { line: number; progName: string; 
     return refs;
 }
 
+function buildLineStartMapFromBytes(
+    bytes: number[],
+    sourceLineNos: number[],
+    baseAddr: number
+): Map<number, number> {
+    const map = new Map<number, number>();
+    if (!bytes || bytes.length < 8 || !sourceLineNos || sourceLineNos.length === 0) return map;
+
+    const read16 = (off: number) => bytes[off] | (bytes[off + 1] << 8);
+    const isValidLen = (off: number, len: number) => len >= 5 && len !== 0xffff && off + len <= bytes.length;
+
+    // Validate a candidate start offset by checking chained line numbers via len jumps
+    const validateChain = (startOff: number): boolean => {
+        let off = startOff;
+        const checks = Math.min(sourceLineNos.length, 6); // enough to reject false anchors
+        for (let i = 0; i < checks; i++) {
+            if (off + 4 > bytes.length) return false;
+            const len = read16(off);
+            const ln = read16(off + 2);
+            if (ln !== sourceLineNos[i]) return false;
+            if (!isValidLen(off, len)) return false;
+            off += len;
+        }
+        return true;
+    };
+
+    // Find true start: first source line number with a valid forward chain
+    let startOff = -1;
+    for (let off = 0; off + 4 <= bytes.length; off++) {
+        const len = read16(off);
+        const ln = read16(off + 2);
+        if (ln !== sourceLineNos[0]) continue;
+        if (!isValidLen(off, len)) continue;
+        if (!validateChain(off)) continue;
+        startOff = off;
+        break;
+    }
+
+    if (startOff < 0) return map;
+
+    // Walk exact source order, normalized so first BASIC line = baseAddr
+    let off = startOff;
+    for (let i = 0; i < sourceLineNos.length; i++) {
+        if (off + 4 > bytes.length) break;
+        const len = read16(off);
+        const ln = read16(off + 2);
+        if (ln !== sourceLineNos[i]) break;
+        if (!isValidLen(off, len)) break;
+
+        map.set(ln, baseAddr + (off - startOff));
+        off += len;
+    }
+
+    return map;
+}
+
+function isBasicHeaderLine(text: string): boolean {
+    // Must start at column 0 (no indentation), 1..5 digits, then whitespace
+    return /^\d{1,5}\s/.test(text);
+}
+
+function extractBasicLineNumbersFromLines(lines: string[]): number[] {
+    const out: number[] = [];
+    for (const line of lines) {
+        if (!isBasicHeaderLine(line)) continue;
+        const m = /^(\d{1,5})\s/.exec(line);
+        if (m) out.push(parseInt(m[1], 10));
+    }
+    return out;
+}
+function getCompiledBytesForMap(text: string, baseAddr: number): number[] {
+    const toArray = (v: any): number[] => {
+        if (Array.isArray(v)) return v as number[];
+        if (v instanceof Uint8Array) return Array.from(v);
+        if (Array.isArray(v?.bytes)) return v.bytes as number[];
+        if (v?.bytes instanceof Uint8Array) return Array.from(v.bytes);
+        return [];
+    };
+
+    const looksLikeBasicRecords = (arr: number[]): boolean => {
+        if (!arr || arr.length < 8) return false;
+        for (let off = 0; off + 4 <= arr.length && off < 512; off++) {
+            const len = arr[off] | (arr[off + 1] << 8);
+            const lineNo = arr[off + 2] | (arr[off + 3] << 8);
+            if (len >= 5 && len < 0x8000 && lineNo > 0 && lineNo <= 65535 && off + len <= arr.length) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const plain = toArray(convertTextToHex(text, baseAddr));
+    if (looksLikeBasicRecords(plain)) return plain;
+
+    const refined: any = (refineConvertTextToHex as any)?.(text, baseAddr);
+    const refinedArr = toArray(refined);
+    if (looksLikeBasicRecords(refinedArr)) return refinedArr;
+
+    return plain.length ? plain : refinedArr;
+}
+
+
+
 // Exports: named exports so other files can import what they need
 export {
         isHexNumber,
@@ -1498,5 +1604,9 @@ export {
         validateNoddyProgram,
         isNoddyTrigger,
         findPlodReferences,
-        NoddyPage
+        NoddyPage,
+        buildLineStartMapFromBytes,
+        isBasicHeaderLine,
+        extractBasicLineNumbersFromLines,
+        getCompiledBytesForMap
 };

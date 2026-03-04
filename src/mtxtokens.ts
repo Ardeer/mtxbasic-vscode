@@ -2127,6 +2127,45 @@ function extractMTXDirectives(codeBlock: string): string[] {
     return [];
 }
 
+// Helper: compute tokenized length for a BASIC line at index (handles Z80 CODE blocks)
+function getTokenizedLengthForLine(
+  documentLines: string[],
+  index: number,
+  baseAddr = 0x4000
+): { length: number; consumed: number } {
+  const line = documentLines[index] ?? '';
+  const m = /^\s*(\d+)\s*(.*)$/.exec(line);
+  if (!m) return { length: 0, consumed: 0 };
+
+  const rest = m[2] || '';
+
+  // If this line is a CODE block, accumulate following assembly lines correctly
+  if (/^\s*CODE(?:\b|$)/i.test(rest)) {
+    const codeLines: string[] = [];
+    let consumed = 0;
+    for (let i = index + 1; i < documentLines.length; i++) {
+        const l = documentLines[i];
+        if (/^\s*\d+\s/.test(l)) break; // Stop at next BASIC line
+        if (l.trim() !== '') codeLines.push(l);
+        consumed++;
+    }
+    
+    // Assemble the block to get its exact total byte footprint 
+    // 7 bytes for the initial MTX BASIC CODE header: Line No(2)+Length(2)+CODE(1)+Z80 Len(2)
+    const headerLength = 7;
+    const assembledBytes = assembleCodeBlock(codeLines, baseAddr + headerLength);
+    
+    // total length is the BASIC header + the assembled payload length + EOL marker (1)
+    const length = headerLength + assembledBytes.length + 1;
+    
+    return { length, consumed };
+  }
+
+  // Normal BASIC numbered line
+  const bytes = basicTokeniseLine(line, baseAddr);
+  return { length: bytes.length, consumed: 0 };
+}
+
 export { mtxTokens,
     convertTextToHex,
     assembleCodeBlock,
@@ -2141,5 +2180,6 @@ export { mtxTokens,
     processCodeBlock,
     updateCodeBlockLength,
     extractMTXDirectives,
-    isAtWordBoundary
+    isAtWordBoundary,
+    getTokenizedLengthForLine
  };

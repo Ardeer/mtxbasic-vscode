@@ -52,10 +52,134 @@ var mtxstdfns_js_1 = require("./mtxstdfns.js");
 var z80codes_js_1 = require("./z80codes.js");
 var mtxtokens_js_1 = require("./mtxtokens.js");
 var mtxsavehdr_js_1 = require("./mtxsavehdr.js");
+function buildLineStartMapFromDoc(doc, baseAddr) {
+    var bytes = (0, mtxstdfns_js_1.getCompiledBytesForMap)(doc.getText(), baseAddr);
+    var lines = [];
+    for (var i = 0; i < doc.lineCount; i++)
+        lines.push(doc.lineAt(i).text);
+    var sourceLineNos = (0, mtxstdfns_js_1.extractBasicLineNumbersFromLines)(lines);
+    var map = (0, mtxstdfns_js_1.buildLineStartMapFromBytes)(bytes, sourceLineNos, baseAddr);
+    dbg("[map-build] bytes=".concat(bytes.length, " sourceLines=").concat(sourceLineNos.slice(0, 8).join(',')));
+    dbg("[map-build] has10=".concat(map.has(10), " has20=").concat(map.has(20), " has30=").concat(map.has(30)));
+    return map;
+}
+function findFirstHexAddressInCodeBlock(doc, codeHeaderLine) {
+    for (var i = codeHeaderLine + 1; i < doc.lineCount; i++) {
+        var t = doc.lineAt(i).text;
+        if (/^\s*\d+\s+/.test(t))
+            break; // next BASIC line
+        var m = /^\s+([0-9A-Fa-f]{4})\s+/.exec(t);
+        if (m)
+            return parseInt(m[1], 16);
+    }
+    return undefined;
+}
+function findCodeHeaderLineIndexInDoc(doc, fromIndex) {
+    for (var i = fromIndex; i >= 0; i--) {
+        var t = doc.lineAt(i).text;
+        if (/^\s*\d+\s+CODE\s*$/i.test(t))
+            return i;
+        if (/^\s*\d+\s+/.test(t) && !/^\s*\d+\s+CODE\s*$/i.test(t))
+            break;
+    }
+    return -1;
+}
+function getCanonicalCodeStartFromHeader(doc, codeHeaderIdx, baseAddr) {
+    var bytes = (0, mtxstdfns_js_1.getCompiledBytesForMap)(doc.getText(), baseAddr);
+    if (!bytes.length || codeHeaderIdx < 0)
+        return undefined;
+    // Top-level BASIC headers only (column 0)
+    var headers = [];
+    for (var i = 0; i < doc.lineCount; i++) {
+        var t = doc.lineAt(i).text;
+        var m = /^(\d{1,5})\s+/.exec(t);
+        if (!m)
+            continue;
+        headers.push({
+            lineNo: parseInt(m[1], 10),
+            isCode: /^\d{1,5}\s+CODE\s*$/i.test(t.trim())
+        });
+    }
+    if (!headers.length)
+        return undefined;
+    var targetMatch = /^(\d{1,5})\s+/.exec(doc.lineAt(codeHeaderIdx).text);
+    if (!targetMatch)
+        return undefined;
+    var targetLineNo = parseInt(targetMatch[1], 10);
+    var read16 = function (o) { return bytes[o] | (bytes[o + 1] << 8); };
+    var isValidRec = function (off) {
+        if (off + 4 > bytes.length)
+            return false;
+        var len = read16(off);
+        return len >= 5 && len !== 0xffff && off + len <= bytes.length;
+    };
+    // Candidate starts for first BASIC line (prefer CODE token match when first line is CODE)
+    var first = headers[0];
+    var startCandidates = [];
+    for (var off_1 = 0; off_1 + 4 <= bytes.length; off_1++) {
+        if (!isValidRec(off_1))
+            continue;
+        var ln = read16(off_1 + 2);
+        if (ln !== first.lineNo)
+            continue;
+        if (first.isCode && bytes[off_1 + 4] !== 0xC2)
+            continue; // CODE token
+        startCandidates.push(off_1);
+    }
+    // Pick candidate that matches the longest header chain via len jumps
+    var bestStart = -1;
+    var bestScore = -1;
+    for (var _i = 0, startCandidates_1 = startCandidates; _i < startCandidates_1.length; _i++) {
+        var startOff = startCandidates_1[_i];
+        var off_2 = startOff;
+        var score = 0;
+        for (var i = 0; i < headers.length; i++) {
+            if (!isValidRec(off_2))
+                break;
+            var ln = read16(off_2 + 2);
+            if (ln !== headers[i].lineNo)
+                break;
+            score++;
+            off_2 += read16(off_2);
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            bestStart = startOff;
+        }
+    }
+    if (bestStart < 0)
+        return undefined;
+    // Walk from best start to target
+    var off = bestStart;
+    for (var i = 0; i < headers.length; i++) {
+        if (!isValidRec(off))
+            return undefined;
+        var ln = read16(off + 2);
+        if (ln !== headers[i].lineNo)
+            return undefined;
+        if (ln === targetLineNo) {
+            // CODE payload always starts +7 bytes from line start
+            return baseAddr + (off - bestStart) + 7;
+        }
+        off += read16(off);
+    }
+    return undefined;
+}
+var mtxDbg;
+var DEBUG_MTX = true;
+function dbg(msg) {
+    if (!DEBUG_MTX)
+        return;
+    if (!mtxDbg)
+        mtxDbg = vscode.window.createOutputChannel('MTX Basic Debug');
+    mtxDbg.appendLine(msg);
+}
 function activate(ctx) {
     var _this = this;
     var diagCollection = vscode.languages.createDiagnosticCollection('mtxbasic');
     ctx.subscriptions.push(diagCollection);
+    dbg('[activate] extension activated');
+    mtxDbg === null || mtxDbg === void 0 ? void 0 : mtxDbg.show(true); // ensure channel opens
     // Returns the address (baseAddr + offset) of a BASIC line number inside tokenized bytes.
     // Stops safely if it reaches non-BASIC data (e.g., NODDY bytes).
     function findAddressForLineNumber(targetLine, bytes, baseAddr) {
@@ -706,6 +830,7 @@ function activate(ctx) {
             //{ id: 'DIM', pattern: 'DIM',  cmdname:'stdcmd'  ,args: [{ kind: 'expr', min: 1}], expectEnd: true }, // size ofthe array is dependent on RAM available. So DIM A(1000) is OK and DIM A(100,100) is OK but difficult to be specific.
             { id: 'DRAW', pattern: 'DRAW', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
             { id: 'DSI', pattern: 'DSI', cmdname: 'strcmd', args: [], expectEnd: true },
+            { id: 'EDITOR', pattern: 'EDITOR', cmdname: 'strcmd', args: [{ kind: 'strexpr' }], expectEnd: true }, //typically A$ format
             //{ id: 'ELSE', pattern: 'ELSE', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE e.g. ELSE LET B=20
             { id: 'EXP', pattern: 'EXP', cmdname: 'numfn', args: [{ kind: 'numeric', min: -88.0, max: 88.0, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
             //{ id: 'FOR', pattern: 'FOR', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE SPECIAL
@@ -740,6 +865,7 @@ function activate(ctx) {
             { id: 'MOD', pattern: 'MOD', cmdname: 'numfn', args: [{ kind: 'numeric' }, { kind: 'numeric' }], expectEnd: true }, //range to be confirmed
             { id: 'MVSPR', pattern: 'MVSPR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 8 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true }, //3rd param needs for detail
             { id: 'NEXT', pattern: 'NEXT', cmdname: 'stdcmd', args: [{ kind: 'expr', required: false }], expectEnd: true }, //CONTROL STRUCTURE MUST BE Alphanumeric expr. No expr is also valid
+            { id: 'NEW', pattern: 'NEW', cmdname: 'stdcmd', args: [], expectEnd: true },
             { id: 'NODDY', pattern: 'NODDY', cmdname: 'stdcmd', args: [], expectEnd: true, description: 'Marks the start of NODDY text language section' }, //setup similar to CODE
             { id: 'NOT', pattern: 'NOT', cmdname: 'stdcmd', args: [] }, // removed , expectEnd: true so that A=NOT*5 is valid
             //{ id: 'ON', pattern: 'ON', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}] }, //CONTROL STRUCTURE and associated with GOTO or GOSUB
@@ -1346,6 +1472,15 @@ function activate(ctx) {
             }
             var segments = (0, mtxstdfns_js_1.splitLineSegments)(processedLineText); // Changed from line.text                
             var _loop_5 = function (seg) {
+                // lowercase REM is a syntax error; seg.text has already been
+                // upper‑cased by the segmentiser, so look at the original line.
+                var origLine = doc.lineAt(i).text;
+                // throw away an optional line number and following spaces
+                var stripped = origLine.replace(/^\s*\d+\s*/, '');
+                if (/^\s*rem\b/.test(stripped) && !/^\s*REM\b/.test(stripped)) {
+                    var idx = origLine.search(/\brem\b/i); // location of bad keyword
+                    diags.push(new vscode.Diagnostic(new vscode.Range(i, idx, i, idx + 3), 'keyword REM must be upper‑case', vscode.DiagnosticSeverity.Error));
+                }
                 // --- compute quoted-string ranges for this segment so diagnostics ignore text inside quotes ---
                 var stringRanges = [];
                 var inStr = false;
@@ -2028,7 +2163,11 @@ function activate(ctx) {
                 var onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);
                 if (onMatch) {
                     var selectorExprRaw = onMatch[1], branchKeyword_1 = onMatch[2], targetsRaw = onMatch[3];
+                    //parenthesis caused an issue with ON MOD(Z(1),2) not detecting the inner comma resulting insufficient arguments 
+                    //const selectorExpr = stripOuterParentheses(stripTrailingCommentUnquoted(selectorExprRaw.trim())); //didn't work
                     var selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
+                    // drop the function name and its parentheses, leaving just the contents
+                    selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/, '$1');
                     var selectorType = (0, mtxstdfns_js_1.classifyExpr)(selectorExpr);
                     if (!selectorType.hasNumeric) {
                         var idx = seg.text.indexOf(selectorExpr, (_q = onMatch.index) !== null && _q !== void 0 ? _q : 0);
@@ -2912,7 +3051,7 @@ function activate(ctx) {
                 }
                 if (word === 'EDITOR') {
                     return new vscode.Hover("**EDITOR**:  Provides the programmer the facility to accept input from a defined area of the screen.\n\n" +
-                        "Usage: EDITOR \\<variable list\\> \n\n" +
+                        "Usage: EDITOR \\<string or string variable list\\> \n\n" +
                         "The area is defined by virtual screen 0 which may be set using the CRVS command\n\n" +
                         "Example: \n\n" +
                         "10 CRVS 0 ,0,20 , 10, 10,1,40 \n\n" +
@@ -3199,11 +3338,13 @@ function activate(ctx) {
                         "Refer to MTX series Owners Manual, Technical Section, System Block Diagram");
                 }
                 if (word === 'PANEL') {
-                    return new vscode.Hover("**PANEL**:  Z80 disasembler.\n\n" +
+                    return new vscode.Hover("**PANEL**:  Z80 debugger and hex/ascii dump of memory .\n\n" +
                         "Usage: PANEL \n\n" +
-                        "Passes control to the PANEL dissassembler editor.\n\n" +
+                        "Passes control to the PANEL editor.\n\n" +
+                        "List programs, displays ROM, RAM, and z80 registers and allows users to step through code 1 line at a time.\n\n" +
                         "Refer to the MTX Series Owners Manual for details ON PANEL.\n\n" +
-                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like PANEL.");
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like PANEL.\n\n" +
+                        "NOTE: Use utility tools mtxdisassembly.py & mtxhexdump.py to provide some of the functionality of PANEL outwith a MTX or MEMU emulator.");
                 }
                 if (word === 'PAPER') {
                     return new vscode.Hover("**PAPER**:  Specifies the PAPER colour on the screen.\n\n" +
@@ -3596,6 +3737,7 @@ function activate(ctx) {
     // Register completion provider for Z80 assembly addresses after CODE
     ctx.subscriptions.push(vscode.languages.registerCompletionItemProvider('mtxbasic', {
         provideCompletionItems: function (document, position) {
+            dbg("[completion] hit line=".concat(position.line, " col=").concat(position.character));
             var lineText = document.lineAt(position.line).text;
             var linePrefix = lineText.substring(0, position.character);
             // Only provide completion if we're on an indented line (inside CODE block)
@@ -3604,83 +3746,30 @@ function activate(ctx) {
             if (!/^\s+$/.test(linePrefix)) {
                 return undefined;
             }
-            // Check if we're inside a CODE block
-            var inCodeBlock = false;
-            var lastAddress = hexBaseAddress;
-            // Scan backwards to find CODE declaration and calculate current address
-            for (var i = position.line - 1; i >= 0; i--) {
-                var line = document.lineAt(i).text;
-                // Check if we hit a CODE statement
-                if (/^\d{1,5}\s+CODE\s*$/.test(line.trim())) {
-                    inCodeBlock = true;
-                    // Calculate bytes used by all previous BASIC lines (including CODE line)
-                    var totalBytes = 0;
-                    for (var j = 0; j <= i; j++) {
-                        var basicLine = document.lineAt(j).text;
-                        if (/^\d{1,5}\s/.test(basicLine)) {
-                            // Convert this line to bytes to get its length
-                            try {
-                                var lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, hexBaseAddress + totalBytes);
-                                var isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                                if (isCodeLine) {
-                                    // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
-                                    // (8-byte placeholder includes EOF that gets replaced by Z80 code)
-                                    totalBytes += lineBytes.length - 1;
-                                }
-                                else {
-                                    totalBytes += lineBytes.length;
-                                }
-                            }
-                            catch (e) {
-                                // Skip lines that can't be tokenized
-                            }
-                        }
-                    }
-                    // Start Z80 code at the address after all BASIC lines
-                    // Note: Z80 code is embedded WITHIN the CODE line structure at offset 7
-                    // (after 2-byte length + 2-byte line# + 1-byte CODE token + 2-byte opcode length)
-                    // basicTokeniseLine returns 8 bytes for CODE placeholder, but Z80 starts at byte 7
-                    lastAddress = hexBaseAddress + totalBytes;
-                    // Now calculate bytes in current CODE block from scratch
-                    for (var j = i + 1; j < position.line; j++) {
-                        var z80Line = document.lineAt(j).text;
-                        var match = /^\s+[0-9A-F]{4}\s+(.*)$/.exec(z80Line);
-                        if (match) {
-                            var instruction = match[1].trim();
-                            try {
-                                //const parsed = parseZ80Line(instruction, j);
-                                var parsed = (0, z80codes_js_1.parseZ80Line)(z80Line, j);
-                                if (parsed) {
-                                    var instrLength = 1;
-                                    if (parsed.isDirective) {
-                                        instrLength = (0, z80codes_js_1.getDirectiveLength)(parsed);
-                                    }
-                                    else if (parsed.mnemonic) {
-                                        instrLength = (0, z80codes_js_1.getInstructionLength)(parsed.mnemonic, parsed.operands);
-                                    }
-                                    lastAddress += instrLength;
-                                }
-                                else {
-                                    // Estimate 1 byte if parsing returns null
-                                    lastAddress += 1;
-                                }
-                            }
-                            catch (e) {
-                                // Estimate 1 byte if we can't parse
-                                lastAddress += 1;
-                            }
-                        }
-                    }
-                    break;
-                }
-                // If we hit another BASIC line number, we're not in CODE block
-                if (/^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
-                    break;
-                }
-            }
-            if (!inCodeBlock) {
+            // Find nearest CODE header above current line
+            var codeHeaderIdx = findCodeHeaderLineIndexInDoc(document, position.line - 1);
+            dbg("[completion] codeHeaderIdx=".concat(codeHeaderIdx));
+            if (codeHeaderIdx < 0) {
+                dbg('[completion] no CODE header found above cursor');
                 return undefined;
             }
+            var inCodeBlock = true;
+            var lastAddress = hexBaseAddress;
+            var canonicalStart = getCanonicalCodeStartFromHeader(document, codeHeaderIdx, hexBaseAddress);
+            var explicitStart = findFirstHexAddressInCodeBlock(document, codeHeaderIdx);
+            if (canonicalStart !== undefined) {
+                lastAddress = canonicalStart;
+                if (explicitStart !== undefined && explicitStart !== canonicalStart) {
+                    dbg("[completion] explicit mismatch explicit=".concat(explicitStart.toString(16).toUpperCase(), " canonical=").concat(canonicalStart.toString(16).toUpperCase()));
+                }
+            }
+            else if (explicitStart !== undefined) {
+                lastAddress = explicitStart; // fallback only
+                dbg("[completion] fallback explicit start=".concat(lastAddress.toString(16).toUpperCase()));
+            }
+            dbg("[completion] computed last=".concat(lastAddress.toString(16).toUpperCase()));
+            if (!inCodeBlock)
+                return undefined;
             // Create completion item with the calculated address
             var completionItem = new vscode.CompletionItem(lastAddress.toString(16).toUpperCase().padStart(4, '0'), vscode.CompletionItemKind.Value);
             completionItem.detail = 'Next Z80 address';
@@ -3693,12 +3782,15 @@ function activate(ctx) {
     )); // This closes registerCompletionItemProvider
     // Command: Renumber Z80 addresses in CODE block at cursor
     var renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', function () { return __awaiter(_this, void 0, void 0, function () {
-        var editor, doc, position, codeStartLine, codeEndLine, i, line, i, line, totalBytes, j, basicLine, lineBytes, isCodeLine, currentAddress, edits, i, line, match, indent, instruction, newAddr, newLine, parsed, instrLength;
+        var editor, doc, position, codeStartLine, codeEndLine, i, line, i, line, codeHeaderIdx, currentAddress, canonicalStart, explicitStart, edits, i, line, match, indent, instruction, newAddr, newLine, parsed, instrLength;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
+                    dbg('[activate] extension activated');
+                    dbg('[renumberZ80] command hit');
                     editor = vscode.window.activeTextEditor;
                     if (!editor) {
+                        dbg('[renumberZ80] no active editor');
                         vscode.window.showErrorMessage('No active MTX BASIC editor');
                         return [2 /*return*/];
                     }
@@ -3713,7 +3805,6 @@ function activate(ctx) {
                             codeStartLine = i;
                             break;
                         }
-                        // Stop if we hit another BASIC line number (not in CODE block)
                         if (i < position.line && /^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
                             vscode.window.showErrorMessage('Cursor is not inside a CODE block');
                             return [2 /*return*/];
@@ -3726,7 +3817,6 @@ function activate(ctx) {
                     // Scan forward to find end of CODE block
                     for (i = codeStartLine + 1; i < doc.lineCount; i++) {
                         line = doc.lineAt(i).text;
-                        // End of CODE block: hit another BASIC line number or end of file
                         if (/^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
                             codeEndLine = i - 1;
                             break;
@@ -3736,28 +3826,22 @@ function activate(ctx) {
                             break;
                         }
                     }
-                    totalBytes = 0;
-                    for (j = 0; j <= codeStartLine; j++) {
-                        basicLine = doc.lineAt(j).text;
-                        if (/^\d{1,5}\s/.test(basicLine)) {
-                            try {
-                                lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, hexBaseAddress + totalBytes);
-                                isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                                if (isCodeLine) {
-                                    // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
-                                    // (8-byte placeholder includes EOF that gets replaced by Z80 code)
-                                    totalBytes += lineBytes.length - 1;
-                                }
-                                else {
-                                    totalBytes += lineBytes.length;
-                                }
-                            }
-                            catch (e) {
-                                // Skip lines that can't be tokenized
-                            }
+                    codeHeaderIdx = findCodeHeaderLineIndexInDoc(doc, codeStartLine);
+                    currentAddress = hexBaseAddress;
+                    canonicalStart = getCanonicalCodeStartFromHeader(doc, codeHeaderIdx, hexBaseAddress);
+                    explicitStart = codeHeaderIdx >= 0 ? findFirstHexAddressInCodeBlock(doc, codeHeaderIdx) : undefined;
+                    if (canonicalStart !== undefined) {
+                        currentAddress = canonicalStart; // authoritative
+                        if (explicitStart !== undefined && explicitStart !== canonicalStart) {
+                            dbg("[renumberZ80] explicit mismatch explicit=".concat(explicitStart.toString(16).toUpperCase(), " canonical=").concat(canonicalStart.toString(16).toUpperCase()));
                         }
                     }
-                    currentAddress = hexBaseAddress + totalBytes;
+                    else if (explicitStart !== undefined) {
+                        currentAddress = explicitStart; // fallback only
+                        dbg("[renumberZ80] fallback explicit start=".concat(currentAddress.toString(16).toUpperCase()));
+                    }
+                    // --- END REPLACED ---
+                    dbg("[renumberZ80] codeStartLine=".concat(codeStartLine, " codeEndLine=").concat(codeEndLine));
                     edits = [];
                     for (i = codeStartLine + 1; i <= codeEndLine; i++) {
                         line = doc.lineAt(i).text;
@@ -3767,29 +3851,25 @@ function activate(ctx) {
                             instruction = match[3].trim();
                             newAddr = currentAddress.toString(16).toUpperCase().padStart(4, '0');
                             newLine = "".concat(indent).concat(newAddr, " ").concat(instruction);
-                            // Only add edit if address changed
                             if (newLine !== line) {
                                 edits.push({ line: i, newText: newLine });
                             }
-                            // Calculate instruction length for next address
                             try {
                                 parsed = (0, z80codes_js_1.parseZ80Line)("".concat(newAddr, " ").concat(instruction), i);
                                 if (parsed) {
                                     instrLength = 1;
-                                    if (parsed.isDirective) {
+                                    if (parsed.isDirective)
                                         instrLength = (0, z80codes_js_1.getDirectiveLength)(parsed);
-                                    }
-                                    else if (parsed.mnemonic) {
+                                    else if (parsed.mnemonic)
                                         instrLength = (0, z80codes_js_1.getInstructionLength)(parsed.mnemonic, parsed.operands);
-                                    }
                                     currentAddress += instrLength;
                                 }
                                 else {
-                                    currentAddress += 1; // Default estimate
+                                    currentAddress += 1;
                                 }
                             }
-                            catch (e) {
-                                currentAddress += 1; // Default estimate on error
+                            catch (_b) {
+                                currentAddress += 1;
                             }
                         }
                     }
@@ -3797,7 +3877,6 @@ function activate(ctx) {
                         vscode.window.showInformationMessage('Z80 addresses are already correct');
                         return [2 /*return*/];
                     }
-                    // Apply all edits in a single transaction
                     return [4 /*yield*/, editor.edit(function (editBuilder) {
                             for (var _i = 0, edits_1 = edits; _i < edits_1.length; _i++) {
                                 var edit = edits_1[_i];
@@ -3807,7 +3886,6 @@ function activate(ctx) {
                             }
                         })];
                 case 1:
-                    // Apply all edits in a single transaction
                     _a.sent();
                     vscode.window.showInformationMessage("Renumbered ".concat(edits.length, " Z80 address").concat(edits.length !== 1 ? 'es' : ''));
                     return [2 /*return*/];

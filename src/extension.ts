@@ -38,7 +38,11 @@ import {
         splitCommandsByColon,
         isNoddyTrigger,
         findPlodReferences,
-        NoddyPage}
+        NoddyPage,
+        buildLineStartMapFromBytes,
+        isBasicHeaderLine,
+        extractBasicLineNumbersFromLines,
+        getCompiledBytesForMap}
 from './mtxstdfns.js';
 
  
@@ -78,10 +82,129 @@ import {
         processCodeBlock,
         updateCodeBlockLength,
         extractMTXDirectives,
-        isAtWordBoundary
+        isAtWordBoundary,
+        getTokenizedLengthForLine
  } from './mtxtokens.js';
 
 import { createHdr, initCreateHdr} from './mtxsavehdr.js';
+
+
+function buildLineStartMapFromDoc(doc: vscode.TextDocument, baseAddr: number): Map<number, number> {
+    const bytes = getCompiledBytesForMap(doc.getText(), baseAddr);
+
+    const lines: string[] = [];
+    for (let i = 0; i < doc.lineCount; i++) lines.push(doc.lineAt(i).text);
+
+    const sourceLineNos = extractBasicLineNumbersFromLines(lines);
+    const map = buildLineStartMapFromBytes(bytes, sourceLineNos, baseAddr);
+
+    dbg(`[map-build] bytes=${bytes.length} sourceLines=${sourceLineNos.slice(0, 8).join(',')}`);
+    dbg(`[map-build] has10=${map.has(10)} has20=${map.has(20)} has30=${map.has(30)}`);
+    return map;
+}
+
+function findFirstHexAddressInCodeBlock(doc: vscode.TextDocument, codeHeaderLine: number): number | undefined {
+    for (let i = codeHeaderLine + 1; i < doc.lineCount; i++) {
+        const t = doc.lineAt(i).text;
+        if (/^\s*\d+\s+/.test(t)) break; // next BASIC line
+        const m = /^\s+([0-9A-Fa-f]{4})\s+/.exec(t);
+        if (m) return parseInt(m[1], 16);
+    }
+    return undefined;
+}
+
+function findCodeHeaderLineIndexInDoc(doc: vscode.TextDocument, fromIndex: number): number {
+    for (let i = fromIndex; i >= 0; i--) {
+        const t = doc.lineAt(i).text;
+        if (/^\s*\d+\s+CODE\s*$/i.test(t)) return i;
+        if (/^\s*\d+\s+/.test(t) && !/^\s*\d+\s+CODE\s*$/i.test(t)) break;
+    }
+    return -1;
+}
+
+function getCanonicalCodeStartFromHeader(
+    doc: vscode.TextDocument,
+    codeHeaderIdx: number,
+    baseAddr: number
+): number | undefined {
+    const bytes = getCompiledBytesForMap(doc.getText(), baseAddr);
+    if (!bytes.length || codeHeaderIdx < 0) return undefined;
+
+    // Top-level BASIC headers only (column 0)
+    const headers: Array<{ lineNo: number; isCode: boolean }> = [];
+    for (let i = 0; i < doc.lineCount; i++) {
+        const t = doc.lineAt(i).text;
+        const m = /^(\d{1,5})\s+/.exec(t);
+        if (!m) continue;
+        headers.push({
+            lineNo: parseInt(m[1], 10),
+            isCode: /^\d{1,5}\s+CODE\s*$/i.test(t.trim())
+        });
+    }
+    if (!headers.length) return undefined;
+
+    const targetMatch = /^(\d{1,5})\s+/.exec(doc.lineAt(codeHeaderIdx).text);
+    if (!targetMatch) return undefined;
+    const targetLineNo = parseInt(targetMatch[1], 10);
+
+    const read16 = (o: number) => bytes[o] | (bytes[o + 1] << 8);
+    const isValidRec = (off: number) => {
+        if (off + 4 > bytes.length) return false;
+        const len = read16(off);
+        return len >= 5 && len !== 0xffff && off + len <= bytes.length;
+    };
+
+    // Candidate starts for first BASIC line (prefer CODE token match when first line is CODE)
+    const first = headers[0];
+    const startCandidates: number[] = [];
+    for (let off = 0; off + 4 <= bytes.length; off++) {
+        if (!isValidRec(off)) continue;
+        const ln = read16(off + 2);
+        if (ln !== first.lineNo) continue;
+        if (first.isCode && bytes[off + 4] !== 0xC2) continue; // CODE token
+        startCandidates.push(off);
+    }
+
+    // Pick candidate that matches the longest header chain via len jumps
+    let bestStart = -1;
+    let bestScore = -1;
+
+    for (const startOff of startCandidates) {
+        let off = startOff;
+        let score = 0;
+        for (let i = 0; i < headers.length; i++) {
+            if (!isValidRec(off)) break;
+            const ln = read16(off + 2);
+            if (ln !== headers[i].lineNo) break;
+            score++;
+            off += read16(off);
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            bestStart = startOff;
+        }
+    }
+
+    if (bestStart < 0) return undefined;
+
+    // Walk from best start to target
+    let off = bestStart;
+    for (let i = 0; i < headers.length; i++) {
+        if (!isValidRec(off)) return undefined;
+        const ln = read16(off + 2);
+        if (ln !== headers[i].lineNo) return undefined;
+
+        if (ln === targetLineNo) {
+            // CODE payload always starts +7 bytes from line start
+            return baseAddr + (off - bestStart) + 7;
+        }
+
+        off += read16(off);
+    }
+
+    return undefined;
+}
+
 
 
 // ------------------------------------------------------------
@@ -97,9 +220,19 @@ validate: (groups: string[], rawMatch: string) => CheckResult[];
 };
 
 
+let mtxDbg: vscode.OutputChannel | undefined;
+const DEBUG_MTX = true;
+function dbg(msg: string) {
+    if (!DEBUG_MTX) return;
+    if (!mtxDbg) mtxDbg = vscode.window.createOutputChannel('MTX Basic Debug');
+    mtxDbg.appendLine(msg);
+}
+
 export function activate(ctx: vscode.ExtensionContext) {
   const diagCollection = vscode.languages.createDiagnosticCollection('mtxbasic');
   ctx.subscriptions.push(diagCollection);
+        dbg('[activate] extension activated');
+        mtxDbg?.show(true); // ensure channel opens
 
 
         // Returns the address (baseAddr + offset) of a BASIC line number inside tokenized bytes.
@@ -808,6 +941,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 //{ id: 'DIM', pattern: 'DIM',  cmdname:'stdcmd'  ,args: [{ kind: 'expr', min: 1}], expectEnd: true }, // size ofthe array is dependent on RAM available. So DIM A(1000) is OK and DIM A(100,100) is OK but difficult to be specific.
                 { id: 'DRAW', pattern: 'DRAW',  cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
                 { id: 'DSI', pattern: 'DSI',  cmdname:'strcmd'  ,args: [] , expectEnd: true },
+                { id: 'EDITOR', pattern: 'EDITOR',  cmdname:'strcmd'  ,args: [{ kind: 'strexpr'}] , expectEnd: true }, //typically A$ format
                 //{ id: 'ELSE', pattern: 'ELSE', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE e.g. ELSE LET B=20
                 { id: 'EXP', pattern: 'EXP', cmdname:'numfn'  ,args: [{ kind: 'numeric',min:-88.0,max:88.0, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true }, 
                 //{ id: 'FOR', pattern: 'FOR', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE SPECIAL
@@ -841,6 +975,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 { id: 'MOD', pattern: 'MOD', cmdname:'numfn'  ,args: [{ kind: 'numeric'},{ kind: 'numeric' }], expectEnd: true }, //range to be confirmed
                 { id: 'MVSPR', pattern: 'MVSPR', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 1, max: 8 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true }, //3rd param needs for detail
                 { id: 'NEXT', pattern: 'NEXT', cmdname:'stdcmd'  ,args: [{ kind: 'expr', required:false}], expectEnd: true }, //CONTROL STRUCTURE MUST BE Alphanumeric expr. No expr is also valid
+                { id: 'NEW', pattern: 'NEW',  cmdname:'stdcmd'  ,args: [] , expectEnd: true },
                 { id: 'NODDY', pattern: 'NODDY',  cmdname:'stdcmd'  ,args: [], expectEnd: true,description: 'Marks the start of NODDY text language section'  }, //setup similar to CODE
                 { id: 'NOT', pattern: 'NOT',  cmdname:'stdcmd'  ,args: [] },// removed , expectEnd: true so that A=NOT*5 is valid
                 //{ id: 'ON', pattern: 'ON', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}] }, //CONTROL STRUCTURE and associated with GOTO or GOSUB
@@ -1512,7 +1647,20 @@ export function activate(ctx: vscode.ExtensionContext) {
 
                 for (const seg of segments) {
 
-                                
+                        // lowercase REM is a syntax error; seg.text has already been
+                        // upper‑cased by the segmentiser, so look at the original line.
+                        const origLine = doc.lineAt(i).text;
+                        // throw away an optional line number and following spaces
+                        const stripped = origLine.replace(/^\s*\d+\s*/, '');
+
+                        if (/^\s*rem\b/.test(stripped) && !/^\s*REM\b/.test(stripped)) {
+                                const idx = origLine.search(/\brem\b/i);     // location of bad keyword
+                                diags.push(new vscode.Diagnostic(
+                                new vscode.Range(i, idx, i, idx + 3),
+                                'keyword REM must be upper‑case',
+                                vscode.DiagnosticSeverity.Error));
+                        }
+                        
                         // --- compute quoted-string ranges for this segment so diagnostics ignore text inside quotes ---
                         const stringRanges: [number, number][] = [];
                         let inStr = false;
@@ -2284,7 +2432,12 @@ export function activate(ctx: vscode.ExtensionContext) {
                 const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);
                 if (onMatch) {
                     const [, selectorExprRaw, branchKeyword, targetsRaw] = onMatch;
-                    const selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
+                    //parenthesis caused an issue with ON MOD(Z(1),2) not detecting the inner comma resulting insufficient arguments 
+                    //const selectorExpr = stripOuterParentheses(stripTrailingCommentUnquoted(selectorExprRaw.trim())); //didn't work
+                    let selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
+                    // drop the function name and its parentheses, leaving just the contents
+                        selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/,'$1');
+
                     const selectorType = classifyExpr(selectorExpr);
                     if (!selectorType.hasNumeric) {
                         const idx = seg.text.indexOf(selectorExpr, onMatch.index ?? 0);
@@ -3008,7 +3161,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**ABS**: Gives the absolute value of the specified number.\n\n` +
                     `Usage: ABS(number) \n\n` +
                     `The result has the same magnitude but the sign will always be positive.\n\n` +
-                    `EXAMPLE: \n\n` +                     
+                    `EXAMPLE: \n\n` + 
                     `10 LET A=ABS(59): PRINT "A= ";A\n\n` + 
                     `20 LET B=ABS(-59): PRINT "B= ";B\n\n` + 
                     `When RUN, this gives the following A= 59 B= 59`);
@@ -3038,7 +3191,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: ANGLE angle_rad \n\n` +
                     `The angle_rad is in radians measured in an anticlockwise direction from the horizontal.\n\n` + 
                     `The computer holds a 'direction' which is used in commands such as ARC, DRAW and MVSPR.\n\n` + 
-                    `The direction is made up of two components: ANGLE and PHI (see later)\n\n` +                    
+                    `The direction is made up of two components: ANGLE and PHI (see later)\n\n` +
                     `For conversion to degrees: degrees = radians*360/2/PI\n\n` + 
                     `For conversion to radians: radians = degrees*PI*2/360, except 0 degrees = 0 radians`);
             }
@@ -3049,17 +3202,17 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `is the direction currently held by the computer. Both the PLOT position and the direction are updated.\n\n` + 
                     `If the ARC length + PLOT x or y coordinates are outwith 0..255 or 0..191 respectively will result in an error.\n\n` + 
                     `The angle parameter, theta in radians determines the curvature of the arc by specifying what angle is subtended.\n\n` +
-                    `In other words the larger the angle, the tighter the curve.\n\n` +                     
+                    `In other words the larger the angle, the tighter the curve.\n\n` + 
                     `If the angle is greater than 360º or 2*pi radians, the arc will retrace its path.\n\n` +
                     `Must be in graphics mode (VS 4) for command to exexute without an error` );
             }
             if (word === 'ASC') {
 		return new vscode.Hover(`**ASC**:  Returns the ASCII code of the first character of the string.\n\n` +
                     `Usage: ASC(string) \n\n` +
-                    `Printable (screen displayable) ASCII codes are from 32 to 126.\n\n` +                    
+                    `Printable (screen displayable) ASCII codes are from 32 to 126.\n\n` +
                     `Example: \n\n` + 
                     `10 LET A=ASC("TEST")\n\n` +
-                    `20 PRINT "A= ";A\n\n` +                     
+                    `20 PRINT "A= ";A\n\n` + 
                     `When RUN, this gives the ASCII code for T which is 84 in decimal, A= 84`);
             }
             if (word === 'ASSEM') {
@@ -3071,7 +3224,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**ATN**:  Returns the angle whose tangent is the specified number..\n\n` +
                     `Usage: ATN(number) \n\n` +
                     `The arc tangent. The number and the result are in radians\n\n` + 
-                    `The arc tangent result is typically in the range -pi/2 to pi/2. The number and the result are in radians\n\n` +                     
+                    `The arc tangent result is typically in the range -pi/2 to pi/2. The number and the result are in radians\n\n` + 
                     `EXAMPLE: \n\n` + 
                     `10 PRINT TAN(0.785): REM TAN of 0.785 rads (45 degrees) = 1\n\n` + 
                     `20 PRINT ATN(1): REM ATN of 1 rads is 0.785 rads = 45 degress`);
@@ -3088,7 +3241,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `P=1  Over print. Characters are merged with those already present.\n\n` + 
                     `P=2  Unplot. Plots the paper colour\n\n` +  
                     `P=3  Over-plot. Plots Plots the ink colour if paper was there before and the paper colour if ink was there before.\n\n` + 
-                    `     During CLS, and other functions, text is not over written but colours may change.\n\n` +                      
+                    `     During CLS, and other functions, text is not over written but colours may change.\n\n` +  
                     `The effect during plotting is to do nothing. This can be used to move the PLOT=SPRITE around the screen whilst leaving the screen unchanged.`);
             } 
             if (word === 'AUTO') {
@@ -3102,7 +3255,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Sets the RS232 channel 1 or 0 to the selected baud rate. The following rates are allowed:-\n\n` + 
                     `75, 110, 150, 300, 600, 1200, 2400, 4800, 9600, 19200\n\n` + 
                     `Example: \n\n` + 
-                    `10 BAUD 0,1200\n\n` +                     
+                    `10 BAUD 0,1200\n\n` + 
                     `This sets channel 0 to 1200 baud rate`);
             } 
             if (word === 'CHR$') {
@@ -3111,7 +3264,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Example: \n\n` + 
                     `10 PRINT CHR$(65): REM prints A on the screen\n\n` + 
                     `Screen displayable ASCII characters are 32 to 126\n\n` + 
-                    `ASCII codes 0 to 31 have special meaning and can be used to send special codes for printing to a printer.\n\n` +                     
+                    `ASCII codes 0 to 31 have special meaning and can be used to send special codes for printing to a printer.\n\n` + 
                     `These printable special codes can set printer to bold or underline for example, See LPRINT`);
             }            
             if (word === 'CIRCLE') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
@@ -3133,14 +3286,14 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `To print the time see TIME$. For example: To print the time in the top left corner:\n\n` + 
                     `10 CLOCK “120000”: CLS\n\n` + 
                     `20 PRINT TIME$;CHR$(26);\n\n` + 
-                    `30 GOTO 20: REM CHR$(26) Homes the cursor\n\n` +                    
+                    `30 GOTO 20: REM CHR$(26) Homes the cursor\n\n` +
                     `see TIME$`);
             } 
             if (word === 'CLS') {
 		return new vscode.Hover(`**CLS**:  Clear the screen.\n\n` +
                     `Usage: CLS \n\n` +
                     `In TEXT mode CLS will clear the screen (or Virtual screen).\n\n` + 
-                    `in GRAPHICS mode CLS will clear the screen unless one of the screen attributes has been set using the ATTR function,\n\n` +                     
+                    `in GRAPHICS mode CLS will clear the screen unless one of the screen attributes has been set using the ATTR function,\n\n` + 
                     `in which case it may be necessary to switch off the attribute before CLS will operate.`);
             } 
             if (word === 'CODE') {
@@ -3150,11 +3303,11 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `NOTE: In this free form VS code extension, ASSEM line number is not used. Instead use \\<space or TAB\\> \\<line number\\>  CODE (no space after it).\n\n` + 
                     `CODE command must be on a separate line and NOT be part of a multi line, e.g. 20 CLS: CODE: PRINT "test"  \n\n` +
                     `Example: \n\n` +
-                    `10 REM START OF PROGRAM\n\n` +                    
+                    `10 REM START OF PROGRAM\n\n` +
                     `20 CODE\n\n` + 
                     ` 401E LABEL: LD A,(HL)\n\n` +
                     ` 401F RET\n\n` +   
-                    `The hexadecimal line numbers (401E and 401F) when using VS Code are required, when saving the code (.mtx file), a check of hex address will update if incorrect\n\n` +                      
+                    `The hexadecimal line numbers (401E and 401F) when using VS Code are required, when saving the code (.mtx file), a check of hex address will update if incorrect\n\n` +  
                     `Note to differentiate a BASIC line number from a hexadecimal line number, the hexadecimal line number must be on a separate line and indented by either a space or a TAB.\n\n` + 
                     `Refer to the MTX Series Owners Manual for details on assembler and Z80 assembly language`);
             }            
@@ -3180,7 +3333,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
             }
             if (word === 'COS') {
 		return new vscode.Hover(`**COS**:  Returns the cosine of the angle.\n\n` +
-                    `Usage: COS(angle) \n\n` +                    
+                    `Usage: COS(angle) \n\n` +
                     `Returns the cosine of the angle specified in radians`);
             }            
             if (word === 'CRVS') {              
@@ -3202,7 +3355,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Y: Y-coordinate (0 to 23).\n\n` + 
                     `EXAMPLE: \n\n` + 
                     `10 CSR 12,10\n\n` +
-                    `Moves the cursor to position 12,10\n\n` +                     
+                    `Moves the cursor to position 12,10\n\n` + 
                     `Any subsequent Printing or Input will occur at the new cursor position.`);
             }
             if (word === 'CTLSPR') {
@@ -3215,20 +3368,20 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `P=3  Number of circling sprites. Sprites that will orbit when they go off the edge of the screen (must not exceed number of sprites)\n\n` +   
                     `P=4  Plot Sprite.A PLOT SPRITE can be chosen which will subsequently appear whenever a point is plotted. This sprite will move around the screen following any points or lines drawn by the BASIC GRAPHICS commands. This sprite can be any of the 32 defined in the normal way.\n\n` +
                     `P=5  number of moving sprites 0 to 32. This is the number of sprites that will move by themselves according to the x-speed and y-speed set in the SPRITE and ADJSPR commands\n\n` + 
-                    `P=6  magnitude (mag 1 or 2) and size (8x8 or 16x16)\n\n` +                     
+                    `P=6  magnitude (mag 1 or 2) and size (8x8 or 16x16)\n\n` + 
                     `X=0 mag 1, 8x8 ; X=1 mag 2, 8x8 ; X=2 mag 1, 16x16 and X=3 mag 2, 16x16`);
             }  
             if (word === 'DATA') {
 		return new vscode.Hover(`**DATA**:  A data list construct accessible using a READ statement.\n\n` +
                     `Usage: DATA \\<list of values\\> \n\n` +
-                    `DATA list can be a list of numbers or alphanumeric words or strings, e.g. 10 DATA 1,2,1CODE,"test"  20 READ A,B,C$,D$\n\n` +                     
+                    `DATA list can be a list of numbers or alphanumeric words or strings, e.g. 10 DATA 1,2,1CODE,"test"  20 READ A,B,C$,D$\n\n` + 
                     `DATA statements aren't themselves executed and will be ignored other than when required by a READ statement.\n\n` + 
                     `If all of the data on a line has been read by a READ statement, the computer will search for the next DATA statement and update the DATA POINTER accordingly.\n\n` + 
                     `If no more DATA is available, a No Data error will occur. DATA can be numbers of strings.\n\n` + 
                     `Example: \n\n` + 
                     `10 FOR I = 1 to 10: READ X: PRINT X: NEXT I\n\n` + 
                     `20 DATA 1,1,2,2,3,3,\n\n` + 
-                    `30 DATA 4,4,5,5\n\n` +                     
+                    `30 DATA 4,4,5,5\n\n` + 
                     `See READ and RESTORE`);
             }
             if (word === 'DIM') {
@@ -3238,7 +3391,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Example: \n\n` + 
                     `10 DIM A(10,10),A$(1000)\n\n` + 
                     `Each element of a numeric array takes 5 bytes and each element of a character array takes 1 byte.\n\n` + 
-                    `All strings are treated as character arrays rather than variable length strings. The amount of space allocated to the character array will depend on whether or not a DIM statement is used.\n\n` +                    
+                    `All strings are treated as character arrays rather than variable length strings. The amount of space allocated to the character array will depend on whether or not a DIM statement is used.\n\n` +
                     `An array cannot be redimensioned unless all of the variables are cleared. See manual for more detail and examples`);
             }
             if (word === 'DRAW') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
@@ -3254,7 +3407,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Within this instruction, the break key is not operational but will generate CTL C.\n\n` + 
                     `Special CTL and ESC functions help navigate around the screenm area.\n\n` + 
                     `CTL W (TAB back) ; CTL ] (PMODE) ; CTL \\ (SMODE) ; CTL ^ (Cursor ON) ; CTL _ (Cursor off) \n\n` +  
-                    `CTL D (letter A to 0 = paper A to 0 (1 to 15) ; CTL F (letter A to 0 = ink A to 0 (1 to 15)\n\n` +                     
+                    `CTL D (letter A to 0 = paper A to 0 (1 to 15) ; CTL F (letter A to 0 = ink A to 0 (1 to 15)\n\n` + 
                     `ESC I (Insert Line) ; ESC J (delete line) ; ESC K (duplicate line)`);
             } 
             if (word === 'EDIT') {
@@ -3265,7 +3418,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
             } 
              if (word === 'EDITOR') {
 		return new vscode.Hover(`**EDITOR**:  Provides the programmer the facility to accept input from a defined area of the screen.\n\n` +
-                    `Usage: EDITOR \\<variable list\\> \n\n` +
+                    `Usage: EDITOR \\<string or string variable list\\> \n\n` +
                     `The area is defined by virtual screen 0 which may be set using the CRVS command\n\n` + 
                     `Example: \n\n` + 
                     `10 CRVS 0 ,0,20 , 10, 10,1,40 \n\n` + 
@@ -3283,7 +3436,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: EXP(number) \n\n` +
                     `EXP is the exponential function whose value is e raised to the power of the specified number\n\n` + 
                     `EXAMPLE: \n\n` + 
-                    `10 PRINT EXP(1)\n\n` +                    
+                    `10 PRINT EXP(1)\n\n` +
                     `Returns 2.71828183`);
             }  
             if (word === 'FOR') {
@@ -3299,12 +3452,12 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**GENPAT**:  Defines a character or sprite pattern with the specified parameters.\n\n` +
                     `Usage: GENPAT P,N,d1,d2,d3,d4,d5.d6,d7,d8 \n\n` +
                     `The command is used to generate all types of patterns (d1 to d8) required by BASIC for characters and SPRITES.There are 5 modes:-\n\n` + 
-                    `Mode 1: P=0, To redefine an ASCII character, N=32 TO 127\n\n` +                     
+                    `Mode 1: P=0, To redefine an ASCII character, N=32 TO 127\n\n` + 
                     `Mode 2: P=1, To define a non ASCII character (User Definable Characters, UDC),N=129 TO 154\n\n` + 
-                    `Mode 3: P=2 To define ink and paper colour for each line of a character. This only applies to UDC with codes, N=147 TO 154\n\n` +    
-                    `Mode 4: P=3, To define an 8 by 8 sprite pattern, N=0 TO 31\n\n` +                     
-                    `Mode 5. P=4 to 7. To define each quadrant of a 16 by 16 sprite (NW, SW, NE, SE respectively),N=0 TO 31\n\n` +                    
-                    `Pattern Byte Data: d1 to d8 in range 0 to 255\n\n` +                                          
+                    `Mode 3: P=2 To define ink and paper colour for each line of a character. This only applies to UDC with codes, N=147 TO 154\n\n` +
+                    `Mode 4: P=3, To define an 8 by 8 sprite pattern, N=0 TO 31\n\n` + 
+                    `Mode 5. P=4 to 7. To define each quadrant of a 16 by 16 sprite (NW, SW, NE, SE respectively),N=0 TO 31\n\n` +
+                    `Pattern Byte Data: d1 to d8 in range 0 to 255\n\n` +  
                     `Refer to the manual for details`);
             } 
             if (word === 'GOSUB') {
@@ -3316,7 +3469,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `EXAMPLE: \n\n` +  
                     `10 FOR I= 1 to 10: GOSUB 100: NEXT\n\n` + 
                     `20 STOP\n\n` + 
-                    `100 PRINT I, SIN(I): RETURN\n\n` +                     
+                    `100 PRINT I, SIN(I): RETURN\n\n` + 
                     `see RETURN and ON`);
             } 
             if (word === 'GOTO') {
@@ -3325,7 +3478,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `EXAMPLE: \n\n` + 
                     `10 GOTO 30\n\n` + 
                     `20: PRINT "LINE 20": STOP\n\n` + 
-                    `30 PRINT "LINE 40"\n\n` +                     
+                    `30 PRINT "LINE 40"\n\n` + 
                     `If the line doesn't exist an error will occur. See also ON`);
             }   
             if (word === 'GR$') {
@@ -3334,8 +3487,8 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `This function should be used if you wish to print the graphics screen to a high resolution printer.\n\n` + 
                     `X and Y: locations on the virtual screen.\n\n` + 
                     `B: the number of bits to be read, if b=1, equivalent to a POINT function.\n\n` + 
-                    `EXAMPLE: \n\n` +                     
-                    `The bits are read in a vertical direction, ie. GR$(20,190,4) gives a character made up as follows:\n\n` +                     
+                    `EXAMPLE: \n\n` + 
+                    `The bits are read in a vertical direction, ie. GR$(20,190,4) gives a character made up as follows:\n\n` + 
                     `bit 7=0 ; bit 6=0 ; bit 5=0 ; bit 4=0 ; bit 3=pixel at 20,190 ; bit 2=pixel 20,189 ; bit 1=pixel 20,188 ; bit 0=pixel 20,187`);
             } 
             if (word === 'IF') {
@@ -3346,7 +3499,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `statement is any legal BASIC statement (which may include an IF statement).\n\n` + 
                     `If the boolean expression is true, the statement after the THEN is executed.\n\n` + 
                     `If the boolean expression is false and ELSE is not present, the program continues at the next line.\n\n` + 
-                    `If the boolean expression is false and ELSE is present, the program continues after the ELSE.\n\n` +                    
+                    `If the boolean expression is false and ELSE is present, the program continues after the ELSE.\n\n` +
                     `EXAMPLE: 20 IF A$="Y" OR A$="y" THEN GOTO 40 ELSE GOTO 100`);
             }  
             if (word === 'INK') {
@@ -3355,7 +3508,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Selects the INK colour. colour is a number in the range 0 to 15 .\n\n` + 
                     `0 = Transparent ; 1 = Black ; 2 = Medium Green ; 3 = Light Green ; 4 = Dark Blue\n\n` + 
                     `5 = Light Blue ; 6 = Dark Red ; 7 = Cyan ; 8 = Medium Red ; 9 = Light Red\n\n` + 
-                    `10 = Dark Yellow ; 11 = Light Yellow ; 12 = Dark Green ; 13 = Magenta ; 14 = Grey ; 15 = White\n\n` +                     
+                    `10 = Dark Yellow ; 11 = Light Yellow ; 12 = Dark Green ; 13 = Magenta ; 14 = Grey ; 15 = White\n\n` + 
                     `Seee colour table in the appendix 7`);
             }
             if (word === 'INKEY$') {
@@ -3365,7 +3518,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `This is in practice a very useful function since it enables you to write programs where the computer interacts with the person operating the keyboard.\n\n` + 
                     `10 PRINT "PRESS Y TO CONTINUE”\n\n` + 
                     `20 LET A$=INKEY$\n\n` +       
-                    `30 IF A$<>"Y" THEN GOTO 20\n\n` +                     
+                    `30 IF A$<>"Y" THEN GOTO 20\n\n` + 
                     `40 PRINT "YOU PRESSED Y"`);
             }            
             if (word === 'INP') {
@@ -3381,13 +3534,13 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `variable list can be variable or string variable, e.g. INPUT A, B, ABC$\n\n` + 
                     `If the {string} is not present, a question mark will appear as a Prompt whenever the INPUT statement is used.\n\n` + 
                     `If the (string) is present, it replaces the question mark as a Prompt. The string must be followed by a semicolon.\n\n` +   
-                    `If non-numeric information is entered into a numeric variable, or the too few items are input,\n\n` +                    
+                    `If non-numeric information is entered into a numeric variable, or the too few items are input,\n\n` +
                     `a question mark will appear after information which means that it should all be typed in again.`);
             }  
             if (word === 'INT') {
 		return new vscode.Hover(`**INT**:  Returns the integer part of the number.\n\n` +
                     `Usage: INT(number) \n\n` +
-                    `PRINT INT(-2.5)\n\n` +                      
+                    `PRINT INT(-2.5)\n\n` +  
                     `Returns -2`);
             }  
             if (word === 'LEFT$') {
@@ -3404,7 +3557,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Gives the length of a string.\n\n` + 
                     `Note that a space must be left between LEN and (string) otherwise LEN will be considered as a numeric array.\n\n` + 
                     `EXAMPLE: \n\n` + 
-                    `10 PRINT LEN ("ABC"+"DEF")\n\n` +                     
+                    `10 PRINT LEN ("ABC"+"DEF")\n\n` + 
                     `Returns 6`);
             }
             if (word === 'LET') {
@@ -3412,15 +3565,15 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: LET	variable=value\n\n` +
                     `The LET statement assigns a value to a variable. \n\n` + 
                     `The value and variable must be of the same type.\n\n` + 
-                    `i.e. numbers cannot be assigned to string variables and strings cannot be assigned to numeric variables.\n\n` +                    
+                    `i.e. numbers cannot be assigned to string variables and strings cannot be assigned to numeric variables.\n\n` +
                     `EXAMPLE: \n\n` + 
                     `10 LET X=2\n\n` + 
-                    `20 LET A$=”abc"\n\n` +                    
+                    `20 LET A$=”abc"\n\n` +
                     `This assigns the value 2 to the variable X and the value "abc" to the variable A$.`);
             }  
             if (word === 'LINE') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
 		return new vscode.Hover(`**LINE**:  Draws a line between 2 sets of coordinates. See also DRAW\n\n` +
-                    `Usage: LINE X1,Y1,X2,Y2 \n\n` +                     
+                    `Usage: LINE X1,Y1,X2,Y2 \n\n` + 
                     `Draws a line from coordinates (X1,Y1) to (X2,Y2)\n\n` +
                     `Must be in graphics mode (VS 4) for command to exexute without an error, see LINE`);
             } 
@@ -3429,7 +3582,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: LIST \\<start line number\\>,\\<end line number\\>\n\n` +
                     `LIST lists a program to the screen.\n\n` + 
                     `3 variations: \n\n` + 
-                    `LIST, LIST start line number or LIST start line number,end line number\n\n` +                    
+                    `LIST, LIST start line number or LIST start line number,end line number\n\n` +
                     `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like LIST.`);
             } 
             if (word === 'LLIST') {
@@ -3448,9 +3601,9 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**LOAD**:  Loads a file from cassette tape into memory. (see also USER DISC for disc loading options)\n\n` +  
 		    `Usage: LOAD "tapename.extension" \n\n` +
                     `The tapename and extension is limited to 14 alphanumeric characters, including extension (see later for MEMU variation). e.g. LOAD "FILENAME90.BAS"\n\n` + 
-                    `LOAD "" is used to reload the last save program, assuming the reset keys have not been pressed or command NEW executed. \n\n` +                     
+                    `LOAD "" is used to reload the last save program, assuming the reset keys have not been pressed or command NEW executed. \n\n` + 
                     `The extension is optional and is typically either be "BAS" or "mtx" for MTX BASIC programs with or without built-in Z80 assembly code.\n\n` +  
-                    `If using the MEMU emualator, the emulator automatically adds .mtx at the end of the filename and not part of the standard 14 character limit.\n\n` +                    
+                    `If using the MEMU emualator, the emulator automatically adds .mtx at the end of the filename and not part of the standard 14 character limit.\n\n` +
                     `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like LOAD.`);
             }             
             if (word === 'LPRINT') {
@@ -3461,7 +3614,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `The expressions can be string expressions or mathematical expressions and any number of commas can be used to tabulate the information.\n\n` + 
                     `A comma moves the cursor to the next TAB position. A Semicolon leaves the cursor immediately after the printed information.\n\n` +  
                     `EXAMPLE: \n\n` + 
-                    `10 LPRINT “SIN of 8 = “;SIN(8)\n\n` +                    
+                    `10 LPRINT “SIN of 8 = “;SIN(8)\n\n` +
                     `Sends SIN of 8 = 0.989358247 to the printer`);
             } 
             if (word === 'MID$') {
@@ -3476,33 +3629,33 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**MOD**:  Returns the remainder on dividing X by Y.\n\n` +
                     `Usage: MOD(X,Y) \n\n` +
                     `Returns the remainder on dividing X by Y\n\n` + 
-                    `MOD (X,Y) is equivalent to X-INT(X/Y)*Y\n\n` +                    
+                    `MOD (X,Y) is equivalent to X-INT(X/Y)*Y\n\n` +
                     `Gives an error if division by 0\n\n` + 
                     `EXAMPLE: \n\n` + 
-                    `PRINT MOD(10,7)\n\n` +                     
+                    `PRINT MOD(10,7)\n\n` + 
                     `Returns a remainder of 3`);
             } 
             if (word === 'MVSPR ') {
 		return new vscode.Hover(`**MVSPR**:  General purpose sprite command with the specified parameters.\n\n` +
                     `Usage: MVSPR P,N,D \n\n` +
                     `The functions are combined to allow complicated movements to occur whilst using only a single instruction. Add the P values together to get the movement combination required.\n\n` + 
-                    `D is slightly more complicated as it must be able to reflect a value for several activities. If D is not in the range of any one of the chosen activities an error will occur.\n\n` +                     
+                    `D is slightly more complicated as it must be able to reflect a value for several activities. If D is not in the range of any one of the chosen activities an error will occur.\n\n` + 
                     `P=1 , MOVEMENT of Sprite in the direction specified by D (0 to 8). The step size is set in CTLSPR 1\n\n` + 
                     `P=2 , Pattern Selection, changes the sprite pattern to pattern number D, defined by a GENPAT statement\n\n` +  
                     `P=4 , Redirect picks up the current velocity vector and switches it to the new direction.\n\n` + 
-                    `P=8 , Plot at centre causes a point to be plotted at the centre of the sprite specified by N. This is not directly affected by the value of D at all.\n\n` +                    
+                    `P=8 , Plot at centre causes a point to be plotted at the centre of the sprite specified by N. This is not directly affected by the value of D at all.\n\n` +
                     `N selects the sprite number (0 to 32)`);
             } 
             if (word === 'NEW') {
 		return new vscode.Hover(`**NEW**:  Clears any program in memory\n\n` +
                     `Usage: NEW \n\n` +
-                    `This command resets the computers system variables thereby preparing it to accept a new program.\n\n` +                     
+                    `This command resets the computers system variables thereby preparing it to accept a new program.\n\n` + 
                     `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like NEW.`);
             }   
             if (word === 'NEXT') {
 		return new vscode.Hover(`**NEXT**: Next specifies the end of a FOR control loop.\n\n` +
                     `Usage: NEXT \\<control variable\\> \n\n` +
-                    `If the control variable is specified, the NEXT is matched with FOR and all nested FOR blocks which are either complete or incomplete are terminated.\n\n` +                      
+                    `If the control variable is specified, the NEXT is matched with FOR and all nested FOR blocks which are either complete or incomplete are terminated.\n\n` +  
                     `If the variable is not specified it is assumed that this NEXT belongs to the last active FOR statement. See FOR`);
             } 
             if (word === 'NODDY') {
@@ -3534,7 +3687,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `EXAMPLE: \n\n` + 
                     `10 LET X=2\n\n` + 
                     `20 ON X GOTO 100,200,300,400,500\n\n` + 
-                    `If X=0 it would branch to 100, X=1 would branch to 200, etc\n\n` +                     
+                    `If X=0 it would branch to 100, X=1 would branch to 200, etc\n\n` +
                     `If line 20 was GOSUB rather than GOTO, it would jump to the subroutine and execute until it encounters a RETURN statement`);
             }              
             if (word === 'OR') {
@@ -3543,7 +3696,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Example: \n\n` + 
                     `10 LET X=1\n\n` + 
                     `20 IF X=1 OR X=2 THEN PRINT "True" ELSE PRINT "False"\n\n` +
-                    `30 PRINT (X=1 OR X=2)\n\n` +                      
+                    `30 PRINT (X=1 OR X=2)\n\n` +
                     `In this case, returns True at line 20 and -1 at line 30.`);
             }             
             if (word === 'OUT') {
@@ -3552,11 +3705,13 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Refer to MTX series Owners Manual, Technical Section, System Block Diagram`);
             }            
             if (word === 'PANEL') {
-		return new vscode.Hover(`**PANEL**:  Z80 disasembler.\n\n` +
+		return new vscode.Hover(`**PANEL**:  Z80 debugger and hex/ascii dump of memory .\n\n` +
                     `Usage: PANEL \n\n` +
-                    `Passes control to the PANEL dissassembler editor.\n\n` + 
-                    `Refer to the MTX Series Owners Manual for details ON PANEL.\n\n` +                    
-                    `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like PANEL.`);
+                    `Passes control to the PANEL editor.\n\n` + 
+                    `List programs, displays ROM, RAM, and z80 registers and allows users to step through code 1 line at a time.\n\n` +
+                    `Refer to the MTX Series Owners Manual for details ON PANEL.\n\n` +
+                    `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like PANEL.\n\n`+
+                    `NOTE: Use utility tools mtxdisassembly.py & mtxhexdump.py to provide some of the functionality of PANEL outwith a MTX or MEMU emulator.`);
             }  
             if (word === 'PAPER') {
 		return new vscode.Hover(`**PAPER**:  Specifies the PAPER colour on the screen.\n\n` +
@@ -3564,20 +3719,20 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Selects the PAPER colour. colour is a number in the range 0 to 15 .\n\n` + 
                     `0 = Transparent ; 1 = Black ; 2 = Medium Green ; 3 = Light Green ; 4 = Dark Blue\n\n` + 
                     `5 = Light Blue ; 6 = Dark Red ; 7 = Cyan ; 8 = Medium Red ; 9 = Light Red\n\n` + 
-                    `10 = Dark Yellow ; 11 = Light Yellow ; 12 = Dark Green ; 13 = Magenta ; 14 = Grey ; 15 = White\n\n` +                     
+                    `10 = Dark Yellow ; 11 = Light Yellow ; 12 = Dark Green ; 13 = Magenta ; 14 = Grey ; 15 = White\n\n` +
                     `Seee colour table in the appendix 7`);
             }  
             if (word === 'PAUSE') {
 		return new vscode.Hover(`**PAUSE**:  with the specified parameters.\n\n` +
                     `Usage: PAUSE number \n\n` +
                     `The program will pause for a length of time dependent on number. \n\n` + 
-                    `The time cannot be specified accurately but will vary according to how many incidental functions\n\n` +                   
+                    `The time cannot be specified accurately but will vary according to how many incidental functions\n\n` +
                     `the computer is performing at the same time such as flashing the cursor or updating the clock.`);
             }   
             if (word === 'PEEK') {
 		return new vscode.Hover(`**PEEK**:  Returns the contents of the specified address in the current memory page.\n\n` +
                     `Usage: PEEK memory address\n\n` +
-                    `Notice that the MTX pages its memory in 32K blocks and so care must be taken to ensure that when PEEK\n\n` +                     
+                    `Notice that the MTX pages its memory in 32K blocks and so care must be taken to ensure that when PEEK\n\n` +
                     `is used you are peeking the correct page. The top 16K of memory is available to all pages`);
             }            
             if (word === 'PHI') { // doesn't generate a MTX BASIC SE.C error if VS 4 not specified beforehand
@@ -3599,7 +3754,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `The MTX stores an accurate value of PI so that it doesn't have to be calculated each time that it is needed.\n\n` + 
                     `PI can be considered as a number and used whenever a number would be used\n\n` + 
                     `EXAMPLE: \n\n` + 
-                    `PRINT PI\n\n` +                     
+                    `PRINT PI\n\n` + 
                     `PRINT COS(PI/2)`);
             }  
             if (word === 'PLOD') {
@@ -3608,13 +3763,13 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `PLOD is used to run a Noddy program where string is the name of the Noddy page at which execution starts.\n\n` + 
                     `PLOD may be used within a BASIC program and control may be switched backwards and forwards.\n\n` + 
                     `When a Noddy program returns, execution continues at the next basic line.\n\n` + 
-                    `EXAMPLE: \n\n` +                     
+                    `EXAMPLE: \n\n` + 
                     `10 PLOD "PROG1"`);
             }
             if (word === 'PLOT') { // generates a MTX BASIC SE.C error if VS 4 not specified beforehand
 		return new vscode.Hover(`**PLOT**:  Plots a point on the graphics screen.\n\n` +
                     `Usage: PLOT X,Y \n\n` +
-                    `Plots a point in the graphics screen at the graphics coordinates (X,Y)\n\n` +                     
+                    `Plots a point in the graphics screen at the graphics coordinates (X,Y)\n\n` + 
                     `Must be in graphics mode (VS 4) for command to exexute without an error, see LINE, see COLOUR and ATTR`);
             }   
             if (word === 'POKE') {
@@ -3623,7 +3778,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `The POKE command loads a the specified memory location with the specified value\n\n` + 
                     `If more than 32K of memory is present, the basic program may spread over several pages (see ROM BASED MEMORY MAP).\n\n` + 
                     `The top 16K will always be present but POKE-ing into any other area may be dangerous unless other precautions are taken.\n\n` + 
-                    `EXAMPLE: load 100 into memory address 50000\n\n` +                     
+                    `EXAMPLE: load 100 into memory address 50000\n\n` + 
                     `POKE 50000,100`);
             }            
             if (word === 'PRINT') {
@@ -3634,14 +3789,14 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `The expressions can be string expressions or mathematical expressions and any number of commas can be used to tabulate the information.\n\n` + 
                     `A comma moves the cursor to the next TAB position. A Semicolon leaves the cursor immediately after the printed information.\n\n` +  
                     `EXAMPLE: \n\n` + 
-                    `10 PRINT “SIN of 8 = “;SIN(8)\n\n` +                    
+                    `10 PRINT “SIN of 8 = “;SIN(8)\n\n` +
                     `Displays on the screen SIN of 8 = 0.989358247`);
             } 
             if (word === 'RAND') {
 		return new vscode.Hover(`**RAND**:  Seeds the random number generator. (see also RND)\n\n` +
                     `Usage: RAND number \n\n` +
                     `This command sets the seed for the random number generator. If no number is specified the seed will be set to a random number.\n\n` + 
-                    `10 RAND 1000\n\n` +                     
+                    `10 RAND 1000\n\n` + 
                     `20 FOR I=1 to 100: PRINT INT(RND*50): NEXT I`);
             } 
             if (word === 'READ') {
@@ -3652,7 +3807,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Data statements may occur anywhere within a program and are accessed sequentially in order either from the start of the program or from the value specified in a RESTORE statement.\n\n` + 
                     `EXAMPLE: \n\n` +  
                     `10 READ A, B, A$,B $(8) \n\n` + 
-                    `20 PRINT A, B, A$, B$ \n\n` +                     
+                    `20 PRINT A, B, A$, B$ \n\n` + 
                     `30 DATA 1, 2, AA, BB`);
             }  
             if (word === 'REM') {
@@ -3660,7 +3815,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: REM \\<anything\\> \n\n` +
                     `The REM command allows comments to be inserted into a program.\n\n` +    
                     `The REM command and any text associated with it doesn't need to be in double quotes but this can lead to spurious errors, like if a colon (:) which splits up statements.\n\n` +   
-                    `To avoid spurious errors, .\n\n` +                    
+                    `To avoid spurious errors, .\n\n` +
                     `The REM statement is ignored by the computer and is used only for documentation.`);
             } 
             if (word === 'RESTORE') {
@@ -3670,9 +3825,9 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `This is particularly useful if the same DATA has to be read in two or more parts of a program\n\n` + 
                     `EXAMPLE: \n\n` + 
                     `10 DIM A(20)\n\n` +  
-                    `20 FOR I= 1 TO 10: READ A: PRINT A: NEXT I\n\n` +                     
+                    `20 FOR I= 1 TO 10: READ A: PRINT A: NEXT I\n\n` + 
                     `60 RESTORE 100\n\n` + 
-                    `70 FOR I= 1 TO 10: READ A(I): NEXT I\n\n` +                     
+                    `70 FOR I= 1 TO 10: READ A(I): NEXT I\n\n` + 
                     `100 DATA 1,2,3,4,5,6,7,8,9,0`);
             } 
             if (word === 'RETURN') {
@@ -3691,7 +3846,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
             if (word === 'RND') {
 		return new vscode.Hover(`**RND**:  pseudo random number seeded by RAND.\n\n` +
                     `Usage: RND \n\n` +                   
-                    `RND returns a pseudo random number.\n\n` +                     
+                    `RND returns a pseudo random number.\n\n` + 
                     `see example at RAND`);
             }
             if (word === 'ROM') {
@@ -3706,15 +3861,15 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: RUN \n\n` +
                     `RUN tells the computer to start running the program from beginning.\n\n` + 
                     `All variables will be cleared.\n\n` + 
-                    `A program can also be run by using a GOTO statement as a direct command. In this case the variables will be unaltered.\n\n` +                    
+                    `A program can also be run by using a GOTO statement as a direct command. In this case the variables will be unaltered.\n\n` +
                     `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ROM.`);
             } 
             if (word === 'SAVE') {
 		return new vscode.Hover(`**SAVE**:  Saves a program from memory to cassete tape. (see USER DISC for disc save options).\n\n` +  
 		    `Usage: SAVE "tapename.extension" \n\n` +
-                    `The tapename is limited to 15 alphanumeric characters including extension (see later for MEMU variation). e.g. SAVE "FILENAME90.BAS" \n\n` +                       
+                    `The tapename is limited to 15 alphanumeric characters including extension (see later for MEMU variation). e.g. SAVE "FILENAME90.BAS" \n\n` +   
                     `The extension is optional and is typically either be ".BAS" or ".mtx" for MTX BASIC programs with or without built-in Z80 assembly code.\n\n` +
-                    `If using the MEMU emulator, the emulator automatically strips off any characters beyond 15 characters, typically this removes the MEMU added .mtx extension, unless within the 15 chars.\n\n` +                      
+                    `If using the MEMU emulator, the emulator automatically strips off any characters beyond 15 characters, typically this removes the MEMU added .mtx extension, unless within the 15 chars.\n\n` +  
                     `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like SAVE.`);
             }              
             if (word === 'SBUF') {
@@ -3724,7 +3879,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `The Buffer is made at the top of memory below the system variables\n\n` + 
                     `EXAMPLE:\n\n` + 
                     `SBUF 8\n\n` +
-                    `This will make space for 8 blocks of sound data for each of the 3 channels and the noise channel.\n\n` +                     
+                    `This will make space for 8 blocks of sound data for each of the 3 channels and the noise channel.\n\n` + 
                     `Each block takes 10 bytes. The above statement therefore takes a total of 320 bytes. i.e. 8 * 4 * 10.(8*channels*block length).`);
             }  
             if (word === 'SGN') {
@@ -3732,7 +3887,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: SGN(number) \n\n` +
                     `Returns a result depending on the sign if the specified number.\n\n` + 
                     `If the number is positive the result is +1 If the number is negative the result is —1 If the number is zero the result is 0.\n\n` + 
-                    `10 PRINT SGN(-2.5): PRINT SGN(5): PRINT SGN(0)` +                     
+                    `10 PRINT SGN(-2.5): PRINT SGN(5): PRINT SGN(0)` + 
                     `Returns -1, 5 and 0 respectively`);
             } 
             if (word === 'SIN') {
@@ -3740,7 +3895,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: SIN(angle) \n\n` +
                     `Returns the sine of the angle specified in radians.\n\n` +            
                     `EXAMPLE: \n\n` + 
-                    `10 PRINT “SIN of 8 = “;SIN(8)\n\n` +                    
+                    `10 PRINT “SIN of 8 = “;SIN(8)\n\n` +
                     `Displays on the screen SIN of 8 = 0.989358247`);  
 	    }
             if (word === 'SOUND') {
@@ -3754,7 +3909,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `volume: loudness (DIRECT: 0 to 15, CONTINUOUS: 0 to 1023)  See Part 4, Ref. Section for SOUND & Appendix 8 of manual \n\n` + 
                     `freq_inc (+/- 1023) and vol_inc (+/- 1023, even though +/-32767 allowed). Every 1/64th of a second the PC adds the increment to both frequency & volume increment. \n\n` + 
                     `duration: This continues for a length of time equal to the duration which is measured in 1/64ths of a second\n\n` + 
-                    `mode=0, freq and vol parameters will be ignored which means that the increments will increment whatever values of frequency and volume were current when the command was encountered.\n\n` +                     
+                    `mode=0, freq and vol parameters will be ignored which means that the increments will increment whatever values of frequency and volume were current when the command was encountered.\n\n` + 
                     `mode=1, the freq and vol will be loaded into the sound buffer to initialise the frequency and volume of the relevant channel`);
             }
             if (word === 'SPK$') {
@@ -3765,7 +3920,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `10 CLS: FOR I=32 TO 64:PRINT CHR$(I);:NEXT I\n\n` + 
                     `20 CSR 0,0\n\n` +  
                     `30 FOR I=32 TO 64: LET A$(I)=SPK$: NEXT\n\n` + 
-                    `40 PRINT\n\n` +                     
+                    `40 PRINT\n\n` + 
                     `50 PRINT A$`);
             } 
             if (word === 'SPRITE') {
@@ -3774,7 +3929,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `N: sprite number (1 to 32)\n\n` + 
                     `P: sprite pattern number (size 0: 0 to 127 and size 1: 0 to 31)\n\n` + 
                     `XP: position x off centre (range -4095 to 4095)\n\n` + 
-                    `YP: position y off centre (range -4095 to 4095)\n\n` +                     
+                    `YP: position y off centre (range -4095 to 4095)\n\n` + 
                     `XS: speed in the x direction (-128 to 127) where 1 unit of speed moves the sprite 1/8 pixel every master speed cycle as set by CTLSPR 0\n\n` + 
                     `YS:  speed in the y direction (plus upwards) range -128 to 127\n\n` + 
                     `C: colour (0 to 15)\n\n` + 
@@ -3785,13 +3940,13 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**SQR**:  Calculates the square root of a number.\n\n` +
                     `Usage: SQR(number) \n\n` +
                     `EXAMPLE: \n\n` + 
-                    `10 PRINT SQR(2)\n\n` +                     
+                    `10 PRINT SQR(2)\n\n` + 
                     `Returns 1.41421356`);
             }            
             if (word === 'STEP') {
 		return new vscode.Hover(`**STEP**:  Increm,ents the FOR loop. (SEE FOR-NEXT)\n\n` +
                     `Usage: STEP \\<increment\\> \n\n` +
-                    `STEP increments can be integer or decimal.\n\n` +                     
+                    `STEP increments can be integer or decimal.\n\n` + 
                     `If STEP is not specified in a FOR-NEXT loop, the default STEP of 1 is applied.`);
             } 
             if (word === 'STOP') {
@@ -3805,18 +3960,18 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Gives the string which represents the specified number.\n\n` + 
                     `EXAMPLE: \n\n` + 
                     `10 PRINT STR$(2+2)\n\n` + 
-                    `Returns 4 as a string not a numerical value.\n\n` +                     
+                    `Returns 4 as a string not a numerical value.\n\n` + 
                     `Note that STR$ has a string value and can therefore not be used in numeric expressions.`);
             }   
             if (word === 'TAN') {
 		return new vscode.Hover(`**TAN**:  Returns the tangent of the angle specified in radians.\n\n` +
                     `Usage: TAN(angle) \n\n` +
-                    `EXAMPLE: \n\n` +                     
+                    `EXAMPLE: \n\n` + 
                     `10 PRINT TAN(0.785): REM TAN of 0.785 rads (45 degrees) = 1`);
             } 
             if (word === 'THEN') {
 		return new vscode.Hover(`**THEN**:  execute the statement after the word THEN if the IF condition is met.\n\n` +
-                    `Usage: THEN \\<statements\\> \n\n` +                     
+                    `Usage: THEN \\<statements\\> \n\n` + 
                     `See IF-THEN-ELSE`);
             } 
             if (word === 'TIME$') {
@@ -3828,18 +3983,18 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `S S is the number of seconds\n\n` +    
                     `EXAMPLE: \n\n` +
                     `10 CLOCK "000000"\n\n` + 
-                    `20 CSR 10,10:PRINT TIME$ \n\n` +                      
+                    `20 CSR 10,10:PRINT TIME$ \n\n` +  
                     `30 GOTO 20`);
             }
             if (word === 'TO') {
 		return new vscode.Hover(`**TO**: See FOR-NEXT loop.\n\n` +
-                    `Usage: TO \n\n` +                     
+                    `Usage: TO \n\n` + 
                     ``);
             } 
             if (word === 'USER') {
 		return new vscode.Hover(`**USER**:  Used for Disc operations.\n\n` +
                     `Usage: USER command \n\n` +
-                    `or BASIC Disc Operating System (BDOS) usage and utility programs.\n\n` +                    
+                    `or BASIC Disc Operating System (BDOS) usage and utility programs.\n\n` +
                     `see MTX Series Owners manual, technical appendices, appendix 13.`);
             }  
             if (word === 'USR') {
@@ -3852,7 +4007,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `8007 LD BC,100\n\n` + 
                     `800A RET\n\n` +  
                     `20 PRINT USR(32775):REM 32775 decimal = 8007 hexadecimal\n\n` + 
-                    `100 is displayed on the screen.\n\n` +                    
+                    `100 is displayed on the screen.\n\n` +
                     `see examples in the MTX Series Owners manual, reference section, page 171 `);
             } 
             if (word === 'VAL') {
@@ -3864,26 +4019,26 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `PRINT VAL("100000000000"): REM returns 1E+12\n\n` + 
                     `PRINT VAL("1000ABCDEF00"): REM returns 1000\n\n` + 
                     `PRINT VAL("abc12"): REM returns 0 (no number at start)\n\n` + 
-                    `PRINT VAL("12"+"12"): REM returns 1212\n\n` +                     
+                    `PRINT VAL("12"+"12"): REM returns 1212\n\n` + 
                     `PRINT VAL("23")+10: REM returns 33`);
             } 
             if (word === 'VERIFY') {
 		return new vscode.Hover(`**VERIFY**:  Verifies a program in tape against the program currently in the computer.\n\n` +
-                    `Usage: VERIFY \n\n` +                    
+                    `Usage: VERIFY \n\n` +
                     `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like VERIFY`);
             }  
             if (word === 'VIEW') {
 		return new vscode.Hover(`**VIEW**:  The view command moves the window relative to the sprite planes whilst leaving the position of the sprites unchanged.\n\n` +
                     `Usage: VIEW direction, distance \n\n` +
                     `direction	0 to 7\n\n` + 
-                    `distance	0 to 255\n\n` +                      
+                    `distance	0 to 255\n\n` +  
                     `The Sprite Screen is -4095 to +4095 in both the x and y directions`);
             } 
             if (word === 'VS') {
 		return new vscode.Hover(`**VS**:  Selects which virtual screen to view.\n\n` +
                     `Usage: VS N \n\n` +
                     `This command selects a virtual screen from those already defined or created using the CRVS command. \n\n` + 
-                    `The computer will automatically switch to the type of screen selected whether graphics or text.\n\n` +                    
+                    `The computer will automatically switch to the type of screen selected whether graphics or text.\n\n` +
                     `See CRVS`);
             }
         } // skip MTX BASIC hover support if not a BASIC file
@@ -3964,6 +4119,7 @@ ctx.subscriptions.push(
         'mtxbasic',
         {
             provideCompletionItems(document: vscode.TextDocument, position: vscode.Position) {
+                dbg(`[completion] hit line=${position.line} col=${position.character}`);
                 const lineText = document.lineAt(position.line).text;
                 const linePrefix = lineText.substring(0, position.character);
                 
@@ -3974,87 +4130,34 @@ ctx.subscriptions.push(
                     return undefined;
                 }
                 
-                // Check if we're inside a CODE block
-                let inCodeBlock = false;
+                // Find nearest CODE header above current line
+                const codeHeaderIdx = findCodeHeaderLineIndexInDoc(document, position.line - 1);
+                dbg(`[completion] codeHeaderIdx=${codeHeaderIdx}`);
+                if (codeHeaderIdx < 0) {
+                dbg('[completion] no CODE header found above cursor');
+                return undefined;
+                }
+
+                let inCodeBlock = true;
                 let lastAddress = hexBaseAddress;
-                
-                // Scan backwards to find CODE declaration and calculate current address
-                for (let i = position.line - 1; i >= 0; i--) {
-                    const line = document.lineAt(i).text;
-                    
-                    // Check if we hit a CODE statement
-                    if (/^\d{1,5}\s+CODE\s*$/.test(line.trim())) {
-                        inCodeBlock = true;
-                        
-                        // Calculate bytes used by all previous BASIC lines (including CODE line)
-                        let totalBytes = 0;
-                        for (let j = 0; j <= i; j++) {
-                            const basicLine = document.lineAt(j).text;
-                            if (/^\d{1,5}\s/.test(basicLine)) {
-                                // Convert this line to bytes to get its length
-                                try {
-                                    const lineBytes = basicTokeniseLine(basicLine, hexBaseAddress + totalBytes);
-                                    const isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                                    if (isCodeLine) {
-                                        // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
-                                        // (8-byte placeholder includes EOF that gets replaced by Z80 code)
-                                        totalBytes += lineBytes.length - 1;
-                                    } else {
-                                        totalBytes += lineBytes.length;
-                                    }
-                                } catch (e) {
-                                    // Skip lines that can't be tokenized
-                                }
-                            }
-                        }
-                        
-                        // Start Z80 code at the address after all BASIC lines
-                        // Note: Z80 code is embedded WITHIN the CODE line structure at offset 7
-                        // (after 2-byte length + 2-byte line# + 1-byte CODE token + 2-byte opcode length)
-                        // basicTokeniseLine returns 8 bytes for CODE placeholder, but Z80 starts at byte 7
-                        lastAddress = hexBaseAddress + totalBytes;
-                        
-                        // Now calculate bytes in current CODE block from scratch
-                        for (let j = i + 1; j < position.line; j++) {
-                            const z80Line = document.lineAt(j).text;
-                            const match = /^\s+[0-9A-F]{4}\s+(.*)$/.exec(z80Line);
-                            if (match) {
-                                const instruction = match[1].trim();
-                                try {
-                                    //const parsed = parseZ80Line(instruction, j);
-                                    const parsed = parseZ80Line(z80Line, j);
-                                    if (parsed) {
-                                        let instrLength = 1;
-                                        if (parsed.isDirective) {
-                                            instrLength = getDirectiveLength(parsed);
-                                        } else if (parsed.mnemonic) {
-                                            instrLength = getInstructionLength(parsed.mnemonic, parsed.operands);
-                                        }
-                                        lastAddress += instrLength;
-                                    } else { 
-                                        // Estimate 1 byte if parsing returns null
-                                        lastAddress += 1;
-                                    }
-                                } catch (e) {
-                                    // Estimate 1 byte if we can't parse
-                                    lastAddress += 1;
-                                }
-                            }
-                        }
-                        
-                        break;
-                    }
-                    
-                    // If we hit another BASIC line number, we're not in CODE block
-                    if (/^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
-                        break;
-                    }
+
+                const canonicalStart = getCanonicalCodeStartFromHeader(document, codeHeaderIdx, hexBaseAddress);
+                const explicitStart = findFirstHexAddressInCodeBlock(document, codeHeaderIdx);
+
+                if (canonicalStart !== undefined) {
+                lastAddress = canonicalStart;
+                if (explicitStart !== undefined && explicitStart !== canonicalStart) {
+                        dbg(`[completion] explicit mismatch explicit=${explicitStart.toString(16).toUpperCase()} canonical=${canonicalStart.toString(16).toUpperCase()}`);
                 }
-                
-                if (!inCodeBlock) {
-                    return undefined;
+                } else if (explicitStart !== undefined) {
+                lastAddress = explicitStart; // fallback only
+                dbg(`[completion] fallback explicit start=${lastAddress.toString(16).toUpperCase()}`);
                 }
-                
+
+                dbg(`[completion] computed last=${lastAddress.toString(16).toUpperCase()}`);
+
+                if (!inCodeBlock) return undefined;
+                                
                 // Create completion item with the calculated address
                 const completionItem = new vscode.CompletionItem(
                     lastAddress.toString(16).toUpperCase().padStart(4, '0'),
@@ -4076,19 +4179,22 @@ ctx.subscriptions.push(
 
 // Command: Renumber Z80 addresses in CODE block at cursor
 const renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', async () => {
+        dbg('[activate] extension activated');
+        dbg('[renumberZ80] command hit');
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
-                vscode.window.showErrorMessage('No active MTX BASIC editor');
-                return;
+            dbg('[renumberZ80] no active editor');
+            vscode.window.showErrorMessage('No active MTX BASIC editor');
+            return;
         }
-        
+
         const doc = editor.document;
         const position = editor.selection.active;
-        
+
         // Find which CODE block we're in
         let codeStartLine = -1;
         let codeEndLine = -1;
-        
+
         // Scan backwards to find CODE declaration
         for (let i = position.line; i >= 0; i--) {
                 const line = doc.lineAt(i).text;
@@ -4096,22 +4202,20 @@ const renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', a
                         codeStartLine = i;
                         break;
                 }
-                // Stop if we hit another BASIC line number (not in CODE block)
                 if (i < position.line && /^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
                         vscode.window.showErrorMessage('Cursor is not inside a CODE block');
                         return;
                 }
         }
-        
+
         if (codeStartLine === -1) {
                 vscode.window.showErrorMessage('No CODE block found');
                 return;
         }
-        
+
         // Scan forward to find end of CODE block
         for (let i = codeStartLine + 1; i < doc.lineCount; i++) {
                 const line = doc.lineAt(i).text;
-                // End of CODE block: hit another BASIC line number or end of file
                 if (/^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
                         codeEndLine = i - 1;
                         break;
@@ -4121,78 +4225,66 @@ const renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', a
                         break;
                 }
         }
-        
-        // Calculate starting address for this CODE block
-        let totalBytes = 0;
-        for (let j = 0; j <= codeStartLine; j++) {
-                const basicLine = doc.lineAt(j).text;
-                if (/^\d{1,5}\s/.test(basicLine)) {
-                        try {
-                                const lineBytes = basicTokeniseLine(basicLine, hexBaseAddress + totalBytes);
-                                const isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                                if (isCodeLine) {
-                                        // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
-                                        // (8-byte placeholder includes EOF that gets replaced by Z80 code)
-                                        totalBytes += lineBytes.length - 1;
-                                } else {
-                                        totalBytes += lineBytes.length;
-                                }
-                        } catch (e) {
-                                // Skip lines that can't be tokenized
-                        }
-                }
+
+        // --- REPLACED: start-address calculation for current CODE block ---
+        const codeHeaderIdx = findCodeHeaderLineIndexInDoc(doc, codeStartLine);
+
+        let currentAddress = hexBaseAddress;
+        const canonicalStart = getCanonicalCodeStartFromHeader(doc, codeHeaderIdx, hexBaseAddress);
+        const explicitStart = codeHeaderIdx >= 0 ? findFirstHexAddressInCodeBlock(doc, codeHeaderIdx) : undefined;
+
+        if (canonicalStart !== undefined) {
+        currentAddress = canonicalStart; // authoritative
+        if (explicitStart !== undefined && explicitStart !== canonicalStart) {
+                dbg(`[renumberZ80] explicit mismatch explicit=${explicitStart.toString(16).toUpperCase()} canonical=${canonicalStart.toString(16).toUpperCase()}`);
         }
-        
-        // Z80 code is embedded WITHIN the CODE line structure at offset 7
-        // basicTokeniseLine returns 8 bytes for CODE placeholder, but Z80 starts at byte 7
-        let currentAddress = hexBaseAddress + totalBytes;
-        
-        // Build new lines with updated addresses
+        } else if (explicitStart !== undefined) {
+        currentAddress = explicitStart; // fallback only
+        dbg(`[renumberZ80] fallback explicit start=${currentAddress.toString(16).toUpperCase()}`);
+        }
+        // --- END REPLACED ---
+
+        dbg(`[renumberZ80] codeStartLine=${codeStartLine} codeEndLine=${codeEndLine}`);
+
+        // Now process and renumber the Z80 lines within this block
         const edits: { line: number; newText: string }[] = [];
-        
+
         for (let i = codeStartLine + 1; i <= codeEndLine; i++) {
                 const line = doc.lineAt(i).text;
                 const match = /^(\s+)([0-9A-Fa-f]{4}\s+)(.*)$/.exec(line);
-                
+
                 if (match) {
                         const indent = match[1];
                         const instruction = match[3].trim();
-                        
-                        // Calculate new address
+
                         const newAddr = currentAddress.toString(16).toUpperCase().padStart(4, '0');
                         const newLine = `${indent}${newAddr} ${instruction}`;
-                        
-                        // Only add edit if address changed
+
                         if (newLine !== line) {
                                 edits.push({ line: i, newText: newLine });
                         }
-                        
-                        // Calculate instruction length for next address
+
                         try {
                                 const parsed = parseZ80Line(`${newAddr} ${instruction}`, i);
                                 if (parsed) {
                                         let instrLength = 1;
-                                        if (parsed.isDirective) {
-                                                instrLength = getDirectiveLength(parsed);
-                                        } else if (parsed.mnemonic) {
-                                                instrLength = getInstructionLength(parsed.mnemonic, parsed.operands);
-                                        }
+                                        if (parsed.isDirective) instrLength = getDirectiveLength(parsed);
+                                        else if (parsed.mnemonic) instrLength = getInstructionLength(parsed.mnemonic, parsed.operands);
                                         currentAddress += instrLength;
                                 } else {
-                                        currentAddress += 1; // Default estimate
+                                        currentAddress += 1;
                                 }
-                        } catch (e) {
-                                currentAddress += 1; // Default estimate on error
+                        } catch {
+                                currentAddress += 1;
                         }
                 }
         }
-        
+
         if (edits.length === 0) {
                 vscode.window.showInformationMessage('Z80 addresses are already correct');
                 return;
         }
-        
-        // Apply all edits in a single transaction
+
         await editor.edit(editBuilder => {
                 for (const edit of edits) {
                         const line = doc.lineAt(edit.line);
@@ -4203,7 +4295,7 @@ const renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', a
                         editBuilder.replace(range, edit.newText);
                 }
         });
-        
+
         vscode.window.showInformationMessage(`Renumbered ${edits.length} Z80 address${edits.length !== 1 ? 'es' : ''}`);
 });
 
