@@ -1,0 +1,99 @@
+The key is changing from constant.numeric.hex.mtxbasic to constant.numeric.hex.z80 or any non-standard scope name that VS Code's color decorator won't recognize as a color.
+
+For auto-calculating hex addresses in extension.ts:
+You need to add a completion provider that calculates the next address. Based on your code, you already have functions to calculate byte lengths. Here's what you need to add to the activate function (around line 96):
+
+// Register completion provider for Z80 assembly addresses after CODE
+ctx.subscriptions.push(
+    vscode.languages.registerCompletionItemProvider(
+        'mtxbasic',
+        {
+            provideCompletionItems(document: vscode.TextDocument, position: vscode.Position) {
+                const lineText = document.lineAt(position.line).text;
+                
+                // Only provide completion if we're on an indented line (inside CODE block)
+                if (!/^\s+/.test(lineText)) {
+                    return undefined;
+                }
+                
+                // Check if we're inside a CODE block
+                let inCodeBlock = false;
+                let lastAddress = hexBaseAddress;
+                
+                // Scan backwards to find CODE declaration and calculate current address
+                for (let i = position.line - 1; i >= 0; i--) {
+                    const line = document.lineAt(i).text;
+                    
+                    // Check if we hit a CODE statement
+                    if (/^\d{1,5}\s+CODE\s*$/.test(line.trim())) {
+                        inCodeBlock = true;
+                        
+                        // Calculate bytes used by all previous BASIC lines
+                        let totalBytes = 0;
+                        for (let j = 0; j < i; j++) {
+                            const basicLine = document.lineAt(j).text;
+                            if (/^\d{1,5}\s/.test(basicLine)) {
+                                // Convert this line to bytes to get its length
+                                try {
+                                    const lineBytes = basicTokeniseLine(basicLine, hexBaseAddress + totalBytes);
+                                    totalBytes += lineBytes.length;
+                                } catch (e) {
+                                    // Skip lines that can't be tokenized
+                                }
+                            }
+                        }
+                        
+                        // Add CODE line itself (approximately 7 bytes: line len + line num + CODE token + 0x0d + next ptr)
+                        totalBytes += 7;
+                        
+                        // Now calculate bytes in current CODE block
+                        for (let j = i + 1; j < position.line; j++) {
+                            const z80Line = document.lineAt(j).text;
+                            const match = /^\s+([0-9A-Fa-f]{4})\s+(.*)/.exec(z80Line);
+                            if (match) {
+                                const addr = parseInt(match[1], 16);
+                                const instruction = match[2].trim();
+                                try {
+                                    const parsed = parseZ80Line(instruction, addr);
+                                    if (parsed.bytes) {
+                                        lastAddress = addr + parsed.bytes.length;
+                                    }
+                                } catch (e) {
+                                    // Estimate 1 byte if we can't parse
+                                    lastAddress = addr + 1;
+                                }
+                            }
+                        }
+                        
+                        // If no addresses found yet, start from base + BASIC bytes
+                        if (lastAddress === hexBaseAddress) {
+                            lastAddress = hexBaseAddress + totalBytes;
+                        }
+                        
+                        break;
+                    }
+                    
+                    // If we hit another BASIC line number, we're not in CODE block
+                    if (/^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
+                        break;
+                    }
+                }
+                
+                if (!inCodeBlock) {
+                    return undefined;
+                }
+                
+                // Create completion item with the calculated address
+                const completionItem = new vscode.CompletionItem(
+                    lastAddress.toString(16).toUpperCase().padStart(4, '0'),
+                    vscode.CompletionItemKind.Value
+                );
+                completionItem.detail = 'Next Z80 address';
+                completionItem.insertText = lastAddress.toString(16).toUpperCase().padStart(4, '0') + ' ';
+                
+                return [completionItem];
+            }
+        },
+        ' ' // Trigger on space
+    )
+);

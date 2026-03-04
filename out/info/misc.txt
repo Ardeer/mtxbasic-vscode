@@ -1,0 +1,144 @@
+working version of BASIC tokenising
+function basicTokeniseLine(line: string): number[] {
+  const bytes: number[] = [];
+
+  // detect and strip leading line number if present
+  const lnMatch = /^\s*(\d+)\s*(.*)$/.exec(line);
+  let hasLineNumber = false;
+  let lineNumber = 0;
+  if (lnMatch) {
+    hasLineNumber = true;
+    lineNumber = parseInt(lnMatch[1], 10) || 0;
+    line = lnMatch[2];
+  }
+
+  const rest = line.replace(/\r?\n$/, '');
+  const restTrim = rest.trim();
+
+  // quick helper to wrap with length+lineNumber when needed
+  const wrapWithLineHeader = (payloadBytes: number[]) => {
+    const totalLength = 2 + 2 + payloadBytes.length; // includes length field + line number + payload
+    return [
+      totalLength & 0xff, (totalLength >> 8) & 0xff,
+      lineNumber & 0xff, (lineNumber >> 8) & 0xff,
+      ...payloadBytes
+    ];
+  };
+
+  // --- (i) REM NODDY handling ---
+  if (/^REM\b/i.test(restTrim) && /\bNODDY\b/i.test(restTrim)) {
+    // find substring after the "REM" token
+    const afterRem = rest.replace(/^\s*REM\s*/i, '');
+    // if the REM text contains "NODDY" start noddy block processing from the NODDY part
+    const noddyIndex = afterRem.toUpperCase().indexOf('NODDY');
+    const noddyText = noddyIndex >= 0 ? afterRem.slice(noddyIndex + 5).trim() : '';
+    // convertNoddyBlock expects lines; pass single-line array (caller may pass multi-line later)
+    const noddyBytes = convertNoddyBlock(noddyText ? [noddyText] : []);
+    // payload = REM token byte + noddy bytes
+    const remTok = tokensSorted.find(t => t.tokenUpper === 'REM')?.dec ?? 0x80;
+    const payload = [remTok, ...noddyBytes];
+    // append EOL
+    payload.push(0xFF);
+    if (hasLineNumber) return wrapWithLineHeader(payload);
+    return payload;
+  }
+
+  // --- (ii) CODE handling (start of a code block) ---
+  if (/^CODE(?:\b|$)/i.test(restTrim)) {
+    // token for CODE
+    const codeTok = tokensSorted.find(t => t.tokenUpper === 'CODE')?.dec ?? 0xC2;
+    // placeholders
+    const totalOpcodeLength = 0; // bytes 6-7 are opcode length placeholder (LSB/MSB)
+    const totalMtxDirectiveLength = 0; // tracked separately by block processor later
+    // total code line length (7 + opcode + directives + 1(EOL)) per spec when initially emitted
+    const totalCodeLength = 7 + totalOpcodeLength + totalMtxDirectiveLength + 1;
+    const payload: number[] = [];
+    payload.push(codeTok);
+    // opcode length placeholder (LSB/MSB)
+    payload.push(totalOpcodeLength & 0xff, (totalOpcodeLength >> 8) & 0xff);
+    // EOL marker
+    payload.push(0xFF);
+    // wrap with length and line number header
+    const out = [
+      totalCodeLength & 0xff, (totalCodeLength >> 8) & 0xff,
+      lineNumber & 0xff, (lineNumber >> 8) & 0xff,
+      ...payload
+    ];
+    return out;
+  }
+
+  // --- (iii) Standard BASIC line tokenisation (existing behavior, with fixes) ---
+  let i = 0;
+  let inQuote = false;
+  const L = rest.length;
+
+  while (i < L) {
+    if (inQuote) {
+      let j = i;
+      while (j < L && rest[j] !== '"') j++;
+      const chunk = rest.substring(i, j);
+      bytes.push(...compressSpacesAndAscii(chunk));
+      if (j < L && rest[j] === '"') {
+        bytes.push(0x22);
+        inQuote = false;
+        i = j + 1;
+      } else {
+        i = j;
+      }
+      continue;
+    }
+
+    // try tokens longest-first
+    let matched = false;
+    const remaining = L - i;
+    for (const tk of tokensSorted) {
+      const tlen = tk.token.length;
+      if (tlen > remaining) continue;
+      const substr = rest.substring(i, i + tlen);
+      if (substr === tk.token || substr.toUpperCase() === tk.tokenUpper) {
+        bytes.push(tk.dec);
+        i += tlen;
+        matched = true;
+
+        // REM handling: the rest of the line is treated literally (preserve case & space-compress)
+        if (tk.tokenUpper === 'REM') {
+          if (i < L) {
+            const restText = rest.substring(i);
+            bytes.push(...compressSpacesAndAscii(restText));
+          }
+          i = L;
+        } else {
+          // If token is alphabetic (keyword/command or function like LEN/CHR$ etc)
+          // consume a single following space (do not emit 0x20). This prevents emitting trailing 32 bytes.
+          if (i < L && rest[i] === ' ') {
+            if (/^[A-Z]+\$?$/.test(tk.tokenUpper)) {
+              i++; // swallow the space
+            }
+          }
+        }
+        break;
+      }
+    }
+    if (matched) continue;
+
+    // single char handling
+    const ch = rest[i];
+    if (ch === '"') {
+      bytes.push(0x22);
+      inQuote = true;
+      i++;
+      continue;
+    }
+    const code = rest.charCodeAt(i);
+    // uppercase letters outside quotes/REM
+    if (code >= 97 && code <= 122) bytes.push(code - 32);
+    else bytes.push(code);
+    i++;
+  }
+
+  // Append EOL marker after processing the entire line
+  bytes.push(0xFF);
+
+  if (hasLineNumber) return wrapWithLineHeader(bytes);
+  return bytes;
+}

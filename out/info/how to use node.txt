@@ -1,0 +1,73 @@
+tsc mtxtokens.ts && node -e "const {refineConvertTextToHex}=require('./mtxtokens.js');const fs=require('fs');const txt=fs.readFileSync('PANELCOD.BAS','utf8');const lines=txt.split(/\r?\n/);for (const line of lines) { const bytes = refineConvertTextToHex(line); console.log('Line:', line, '=> Bytes:', bytes); }"
+
+tsc mtxtokens.ts && node -e "const {convertTextToHex}=require('./mtxtokens.js');const line='100 USER SAVE \"PANEL.COD\"';const bytes=convertTextToHex(line);console.log('Converted bytes:',bytes);"
+
+tsc mtxtokens.ts && node -e "const {refineConvertTextToHex}=require('./mtxtokens.js');const line='10 CODE';const bytes=refineConvertTextToHex(line);console.log('Refined bytes:',bytes);"
+
+node -e "const {refineConvertTextToHex}=require('./mtxtokens.js');const line='100 USER SAVE \"PANEL.COD\"';const bytes=refineConvertTextToHex(line);console.log('Converted bytes:',bytes);"
+
+node -e "const {basicTokeniseLine}=require('./mtxtokens.js');const line='100 USER SAVE \"PANEL.COD\"';const bytes=basicTokeniseLine(line);console.log('BASIC line Converted bytes:',bytes);"
+
+this gave as output
+BASIC line Converted bytes: 	[ 49, 48, 48,  32, 135, 32, 181, 32, 34, 80, 65,  78,  69,  76, 46, 67, 79, 68, 34, 255 ]
+
+should be 			[ 18, 00, 100, 00, 135, 181, 34, 80, 65, 78, 69, 76, 46, 67, 79, 68, 34, 255 ]
+
+code was updated to give 	[ 18, 0,  100,  0, 135, 181, 34, 80, 65, 78, 69, 76, 46, 67, 79, 68, 34, 255 ]
+
+
+# test BASIC line tokenisation
+node -e "const {basicTokeniseLine}=require('./out/mtxtokens.js');console.log(basicTokeniseLine('100 USER SAVE \"PANEL.COD\"'));"
+# expect: [18,0,100,0,135,181,34,80,65,78,69,76,46,67,79,68,34,255]
+
+# test CODE placeholder
+node -e "const {basicTokeniseLine}=require('./out/mtxtokens.js');console.log(basicTokeniseLine('100 CODE'));"
+# expect: [8,0,100,0,194,0,0,255]
+
+# test processCodeBlock converting mnemonics to opcodes
+node -e "const {processCodeBlock}=require('./mtxtokens.js');const {processedBytes,totalLength}=processCodeBlock('0000 LD A,(#FA9E)');console.log(totalLength,processedBytes);"
+# expect opcode bytes including 0x3A,0x9E,0xFA and totalLength 3
+
+tsc out/mtxtokens.ts
+
+node -e "const {basicTokeniseLine}=require('./mtxtokens.js');console.log(basicTokeniseLine('10 CODE\n0000 LD A,#C3\n0002 LD (#FA9E),A\n0005 LD HL,#B012'));"
+
+node -e "const {parseZ80Line}=require('./z80codes.js');const fs=require('fs');const txt=fs.readFileSync('PANELCOD.BAS','utf8');const lines=txt.split(/\r?\n/);const l=lines[1];console.log('line:',JSON.stringify(l));console.log(parseZ80Line(l,1));"
+
+// Node test: tokenize PANELCOD.BAS using basicTokeniseLine
+const fs = require('fs');
+const path = require('path');
+const { basicTokeniseLine } = require('../out/mtxtokens.js');
+
+const filePath = path.join(__dirname, '..', 'out', 'PANELCOD.BAS');
+if (!fs.existsSync(filePath)) {
+  console.error('File not found:', filePath);
+  process.exit(2);
+}
+
+const txt = fs.readFileSync(filePath, 'utf8');
+const lines = txt.split(/\r?\n/);
+
+console.log('Tokenising file:', filePath);
+for (const line of lines) {
+  if (!line.trim()) continue;
+  try {
+    const bytes = basicTokeniseLine(line);
+    console.log('LINE:', line);
+    console.log('BYTES:', bytes);
+  } catch (err) {
+    console.error('Error tokenising line:', line, err && err.stack ? err.stack : err);
+  }
+}
+
+console.log('Done.');
+
+run with
+node test/panel-cod-node-test.js
+
+The above was not useful. The following was a better test of code breakdown and updating of the byte count.
+
+node -e "const {basicTokeniseLine}=require('./mtxtokens.js');console.log(basicTokeniseLine('10 CODE\n0000 LD A,#C3\n0002 LD (#FA9E),A\n0005 LD HL,#B012'));"
+
+expected [16,0,10,0,194,8,0,62,195,50,158,250,33,18,176,255]
+actual   [16,0,10,0,194,8,0,62,195,50,158,250,33,18,176,255]

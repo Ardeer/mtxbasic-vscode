@@ -3,11 +3,14 @@
   "displayName": "mtxbasic",
   "description": "MTX BASIC Programming Language and syntax highlighting",
   "version": "0.0.1",
+  "uuid": "60e22a20-246c-4726-8a96-08eba935788c",
   "publisher": "Ardeer",
+  "license": "GNU GENERAL PUBLIC LICENSE",
   "engines": {
     "vscode": "^1.103.0"
   },
   "icon": "images/MTX_series.jpg",
+  "main": "./out/extension.js",
   "categories": [
     "Programming Languages"
   ],
@@ -15,20 +18,21 @@
     "type": "git",
     "url": "https://github.com/Ardeer/mtxbasic-vscode.git"
   },
-  	"contributes": {
+  "contributes": {
     "languages": [
       {
         "id": "mtxbasic",
         "aliases": [
-          "BASIC",
-          "basic",
-          "mtx basic",
-          "MTX BASIC"
+          "MTX-BASIC",
+          "mtx-basic"
         ],
         "extensions": [
           ".bas",
-          ".b"
-        ]
+          ".BAS",
+          ".txt",
+          ".mtx"
+        ],
+        "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
@@ -37,6 +41,82 @@
         "scopeName": "source.mtxbasic",
         "path": "./src/language/mtxbasic.tmLanguage.json"
       }
+    ],
+    "configurationDefaults": {
+      "[mtxbasic]": {
+        "editor.hover.enabled": "on",
+        "editor.renderWhitespace": "all",
+        "editor.renderControlCharacters": true,
+        "editor.colorDecorators": false,
+        "editor.suggest.showWords": false,
+        "editor.wordBasedSuggestions": "off",
+        "editor.quickSuggestions": {
+          "other": false,
+          "comments": false,
+          "strings": false
+        },
+        "editor.inlineSuggest.enabled": false,
+        "editor.suggestOnTriggerCharacters": true,
+        "editor.acceptSuggestionOnEnter": "off"
+      }
+    },
+    "commands": [
+      {
+        "command": "mtxbasic.saveHex",
+        "title": "MTX: Save HEX from active editor"
+      },
+      {
+        "command": "mtxbasic.renumberZ80",
+        "title": "MTX: Renumber Z80 Addresses in CODE Block"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "mtxbasic.saveHex",
+          "when": "editorLangId == mtxbasic"
+        },
+        {
+          "command": "mtxbasic.renumberZ80",
+          "when": "editorLangId == mtxbasic"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "mtxbasic.renumberZ80",
+          "when": "editorLangId == mtxbasic",
+          "group": "mtxbasic"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "mtxbasic.saveHex",
+        "key": "ctrl+shift+h",
+        "mac": "cmd+shift+h",
+        "when": "editorLangId == mtxbasic"
+      },
+      {
+        "command": "mtxbasic.renumberZ80",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorLangId == mtxbasic"
+      }
     ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "extension build",
+    "dev": "extension dev",
+    "preview": "extension preview"
+  },
+  "dependencies": {
+    "@types/vscode": "^1.104.0"
+  },
+  "devDependencies": {
+    "extension": "^2.1.3"
   }
+
 }

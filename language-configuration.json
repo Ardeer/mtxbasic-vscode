@@ -1,0 +1,33 @@
+{
+    "comments": {
+        // symbol used for single line comment. Remove this entry if your language does not support line comments - Not applicable for MTX BASIC
+
+        // symbols used for start and end a block comment. Remove this entry if your language does not support block comments - Not applicable for MTX BASIC
+
+    },
+    // symbols used as brackets
+    "brackets": [
+        ["(", ")"]
+    ],
+    // symbols that are auto closed when typing
+    "autoClosingPairs": [
+        ["(", ")"],
+        ["\"", "\""]
+    ],
+    // symbols that that can be used to surround a selection
+    "surroundingPairs": [
+        ["(", ")"],
+        ["\"", "\""]
+    ],
+    // Define word pattern to exclude certain words from suggestions
+    "wordPattern": "\\b[A-Za-z][A-Za-z0-9]*\\$?\\b",
+    // Indentation rules
+    "onEnterRules": [
+        {
+            "beforeText": "^\\d{1,5}\\s+CODE\\s*$",
+            "action": {
+                "indent": "indent"
+            }
+        }
+    ]
+}

@@ -1,476 +1,142 @@
 {
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "mtxbasic",
   "scopeName": "source.mtxbasic",
+  "patterns": [
+    { "include": "#keywords" },
+    { "include": "#strings" },
+    { "include": "#z80assembly" }
+  ],
   "repository": {
-    "keyword.control.basic": {
+    "keywords": {
             "patterns": [
           {
-            "name": "keyword.control.basic",
-            "match": "?<=\\b(CONT|ELSE|FOR|GOSUB|GOTO|IF|LET|NEXT|ON|PAUSE|RETURN|STEP|STOP|THEN|TO)\\b"
-          }
-        ]
-      },
-
-  "meta.control.parameters.basic": {
-    "patterns": [
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bON\\s)([A-Za-z][A-Za-z0-9]*|\\d+)"      
-      },
-      {
-        "name": "keyword.control.basic",
-        "match": "(?<=\\bON\\s(?:[A-Za-z][A-Za-z0-9]*|\\d+)\\s)(GOTO|GOSUB)\\b"
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bGOTO\\s)\\d+"
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bGOSUB\\s)\\d+"
-      },
-      {
-        "name": "constant.numeric.line-number.basic",
-        "match": "(?<=\\bGOTO\\s|\\bGOSUB\\s)\\d+"
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bRETURN\\s)\\d+"
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bFOR\\s)[A-Za-z][A-Za-z0-9]*"
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bSTEP\\s)\\d+"      
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bTO\\s)\\d+"      
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bNEXT\\s)[A-Za-z][A-Za-z0-9]*"
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bIF\\s)[^\\s]+"
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bTHEN\\s)\\d+"
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bLET\\s)[A-Za-z][A-Za-z0-9]*"      
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bPAUSE\\s)\\d+"      
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bCONT\\s)\\b"
-      },
-      {
-        "name": "variable.parameter.basic",
-        "match": "(?<=\\bSTOP\\s)\\b"
-      }
-    ]
-  },
-
-    "keyword.command.basic": {
-            "patterns": [
-          {
-            "name": "keyword.command.basic",
-            "match": "?<=\\b(ABS|AND|ANGLE|ARC|ASC|ATN|BAUD|CLOCK|COS|DATA|DIM|EXP|INT|LEFT\\$|LEN|LN|LPRINT|MID\\$|MOD|NOT|OR|OUT|PEEK|PHI|PI|PLOD|POKE|RAND|READ|REM|RESTORE|RIGHT\\$|RND|ROM|SBUF|SGN|SIN|SOUND|STR\\$|TAN|TIME\\$|USER|USR|VAL)\\b"
-          }
-        ]
-      },
-
-    "meta.command.parameters.basic": {
-        "patterns": [
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bABS\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
+            "name": "keyword.control.mtxbasic",
+            "match": "\\b(CONT|ELSE|FOR|GOSUB|GOTO|IF|NEXT|ON|PAUSE|RETURN|STEP|STOP|THEN|TO)\\b"
           },
           {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bAND\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
+            "name": "keyword.command.mtxbasic",
+            "match": "\\b(ADJSPR|ANGLE|ARC|ATTR|BAUD|CIRCLE|CLOCK|CLEAR|CLS|CODE|COLOUR|CRVS|CSR|CTLSPR|DATA|DIM|DRAW|DSI|EDITOR|GENPAT|INK|INPUT|LEN|LET|LINE|LLIST|LPRINT|LOAD|MVSPR|NEW|NODDY|OUT|PAPER|PEEK|PHI|PI|PLOD|PLOT|POKE|PRINT|RAND|READ|REM|RESTORE|RND|SAVE|SBUF|SOUND|SPRITE|USER|VIEW|VS)\\b"
           },
           {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bANGLE\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
+            "name": "keyword.other.mtxbasic",
+            "match": "(?<![A-Za-z0-9_])(?:INKEY\\$|SPK\\$|TIME\\$)(?![A-Za-z0-9_])"
           },
           {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bARC\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
+            "name": "entity.name.function.string.mtxbasic",
+            "match": "(?<![A-Za-z0-9_])(?:CHR\\$|GR\\$|LEFT\\$|MID\\$|RIGHT\\$|STR\\$)(?![A-Za-z0-9_])"
+          },          
+          {
+            "name": "entity.name.function.numeric.mtxbasic",
+            "match": "\\b(ABS|ASC|ATN|COS|EXP|INP|INT|LN|MOD|SGN|SIN|SQR|TAN|USR|VAL)\\b"
+          },           
+          {
+            "name": "illegal.keyword.control.mtxbasic",
+            "match": "\\b(ASSEM|AUTO|EDIT|FRE|LIST|LLIST|PANEL|RUN|VERIFY)\\b"
           },
           {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bASC\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bATN\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bBAUD\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bCLOCK\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bCLS\\s)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bCOS\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bDATA\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bDIM\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bEXP\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bINT\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bLEFT\\$\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bLEN\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bLN\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bMID\\$\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bLPRINT\\s)[A-Za-z][A-Za-z0-9]*"      
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bMOD\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bNOT\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bOR\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bOUT\\s*)(port|value)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bPEEK\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bPHI\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bPI\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bPLOD\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bPOKE\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bRAND\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bREAD\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bRESTORE\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bRIGHT\\$\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bRND\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bROM\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bSBUF\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bSGN\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bSIN\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bSOUND\\s)(chan|freq|vol|freq_inc|vol_inc|duration|mode)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bSTR\\$\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bTAN\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bTIME\\$\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bUSER\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bUSR\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bVAL\\s*)([A-Za-z][A-Za-z0-9]*|\\d+(?:\\.\\d+)?)"
-          }
-        ]
-      },
-
-    "keyword.screen.basic": {
-        "patterns": [
-          {
-            "name": "keyword.screen.basic",
-            "match": "?<=\\b(ADJSPR|ATTR|CIRCLE|CLS|COLOUR|CRVS|CSR|CTLSPR|DRAW|DSI|GENPAT|GR\\$|INK|INP|INPUT|LINE|MVSPR|PAPER|PLOT|PRINT|SPK\\$|SPRITE|VIEW|VS)\\b"
-          }
-        ]
-      },
-
-    "meta.screen.parameters.basic": {
-      "patterns": [
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bADJSPR\\s)(p|n|v)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bATTR\\s)(x|y|a|b|c|d|e|f)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bCIRCLE\\s)(x|y|r|m)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bCLS\\s)(p|n)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bCOLOUR\\s)(p|n)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bCRVS\\s)(n|t|x|y|w|h|s)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bCSR\\s)(x|y)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bCTLSPR\\s)(p|n|v)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bDRAW\\s)(x|y|m)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bGENPAT\\s)(p|n|d)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bINK\\s)(p|n)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bLINE\\s)(x1|y1|x2|y2|w)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bMVSPR\\s)(p|n|x|y)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bPAPER\\s)(p|n)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bPLOT\\s)(x|y)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bSPK\\$\\s)(n)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bSPRITE\\s)(p|n|x|y|w|h|a)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bVIEW\\s)(n)\\b"
-          },
-          {
-            "name": "variable.parameter.basic",
-            "match": "(?<=\\bVS\\s)(n)\\b"
-          }        
-        ]
-      },
-
-    "keyword.Z80.basic": {
-            "patterns": [
-          {
-            "name": "keyword.Z80.basic",
-            "match": "?<=\\b(CODE)\\b"
-          }
-        ]
-      },      
-
-    "illegal.keyword.control.basic": {
-        "patterns": [
-          {
-            "name": "illegal.keyword.control.basic",
-            "match": "?<=\\b(ASSEM|AUTO|CLEAR|EDIT|EDITOR|FRE|LIST|LLIST|LOAD|NEW|NODDY|PANEL|RUN|SAVE|VERIFY)\\b"
-          }
-        ]
-      },
-
-    "meta.line-number.basic": {
-      "patterns": [
-          {
-            "name": "constant.numeric.line-number.basic",
-            "match": "^(\\d{1,5})(?=\\s)"
-          }
-        ]
-      },
-
-    "keyword.operator.arithmetic.basic": {
-          "patterns": [
-            {
-              "name": "keyword.operator.arithmetic.basic",
-              "match": "(\\+|\\-|\\*|/|\\^)"
-            }
-          ]
+            "name": "keyword.control.noddy.mtxbasic",
+            "match": "\\*(?:ADVANCE|BRANCH|DISPLAY|ENTER|GOTO|IF|LIST|OFF|PAUSE|RETURN|RETURN)\\b"
         },
-
-    "meta.brackets.parenthesis.basic": {
-        "patterns": [
-            {
-              "name": "meta.brackets.parenthesis.basic",
-              "match": "(\\(|\\))"
-            }
-          ]
-        },
-
-    "keyword.operator.boolean.basic": {
-        "patterns": [
-          {
-            "name": "keyword.operator.boolean.basic",
-            "match": "\\b(AND|OR|NOT)\\b"
-          }
-        ]
-      },
-
-    "keyword.operator.relational.basic": {
-        "patterns": [
-          {
-            "name": "keyword.operator.relational.basic",
-            "match": "(<>|<=|>=|=|<|>)"
-          }
-        ]
-      },
-
-    "comment.line.rem.basic": {
-      "patterns": [
         {
-          "name": "comment.line.rem.basic",
-          "match": "\\bREM.*$"
-        }
+            "name": "entity.name.tag.noddy.mtxbasic", 
+            "match": "\\^\\w+"
+        },
+        {
+            "name": "string.unquoted.noddy-title.mtxbasic",
+            "match": "^Noddy page title is \\w+$"
+        },
+          {
+            "name": "constant.numeric.line-number.mtxbasic",
+            "match": "^(\\d{1,5})(?=\\s)"
+          },
+          {
+            "name": "keyword.operator.arithmetic.mtxbasic",
+            "match": "(\\+|\\-|\\*|/|\\^)"
+          },
+          {
+            "name": "meta.brackets.parenthesis.mtxbasic",
+            "match": "(\\(|\\))"
+          },
+          {
+            "name": "keyword.operator.boolean.mtxbasic",
+            "match": "\\b(AND|NOT|OR)\\b"
+          },
+          {
+            "name": "keyword.operator.relational.mtxbasic",
+            "match":"(<>|<=|>=|=|<|>)"
+          },
+          {
+             "name": "variable.name.mtxbasic",
+             "match": "\\b[A-Za-z0-9_][A-Za-z0-9_]*\\$?\\b"
+          },            
+          {
+            "name": "constant.numeric.mtxbasic",
+            "match": "-?\\b((([0-9]+\\.?[0-9]*)|(\\.[0-9]+))((e|E)(\\+|-)?[0-9]+)?)\\b"
+          },
+          { "name": "constant.hexadecimal.mtxbasic",
+            "match": "\\b(#[0-9A-Fa-f_]+|£[0-9A-Fa-f_]+)\\b"
+          },
+          {
+            "name": "keyword.control.mtxbasic",
+            "match": "(?<=^\\s*(\\d{1,5})\\s*)\\bCODE\\s*$\\b"
+          },        
+          {
+            "name": "variable.parameter.mtxbasic",
+            "match": "(?<=\\bON)\\s([A-Za-z0-9_][A-Za-z0-9_]*|\\d+)"
+          },
+          {
+            "name": "keyword.control.mtxbasic",
+            "match": "(?<=\\bON\\s(?:[A-Za-z0-9_][A-Za-z0-9_]*|\\d+)\\s)(GOTO|GOSUB)\\b"
+          },
+          {
+            "name": "constant.numeric.line-number.mtxbasic",
+            "match": "(?<=\\b(GOTO|GOSUB)\\b)\\s*\\d{1,5}"
+          }            
       ]
     },
-    "string.quoted.double.basic": {
-      "patterns": [
-        {
-          "name": "string.quoted.double.basic",
+    "strings": {
+          "name": "string.quoted.double.mtxbasic",
           "begin": "\"",
           "end": "\"",
           "patterns": [
             {
-              "name": "constant.character.escape.basic",
-              "match": "\\\\."
+                "name": "constant.character.escape.mtxbasic",
+            "match": "\\\\."
             }
-          ]
-        }
-      ]
-    },
-    "constant.numeric.basic": {
+        ]
+      }, 
+    "z80assembly": {
       "patterns": [
         {
-          "name": "constant.numeric.basic",
-          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+          "name": "constant.numeric.hex-address.z80",
+          "match": "^\\s+([0-9A-Fa-f_]{4})\\b"
+        },
+        {
+          "name": "entity.name.label.z80",
+          "match": "\\b([A-Za-z0-9_][A-Za-z0-9_]*):"
+        },
+        {
+          "name": "keyword.mnemonic.z80",
+          "match": "\\b(ADC|ADD|AND|BIT|CALL|CCF|CP|CPD|CPDR|CPI|CPIR|CPL|DAA|DEC|DI|DJNZ|EI|EX|EXX|HALT|IM|IN|INC|IND|INDR|INI|INIR|JP|JR|LD|LDD|LDDR|LDI|LDIR|NEG|NOP|OR|OTDR|OTIR|OUT|OUTD|OUTI|POP|PUSH|RES|RET|RETI|RETN|RL|RLA|RLC|RLCA|RLD|RR|RRA|RRC|RRCA|RRD|RST|SBC|SCF|SET|SLA|SRA|SRL|SUB|XOR)\\b"
+        },
+        {
+          "name": "storage.register.z80",
+          "match": "\\b(A|B|C|D|E|H|L|AF|BC|DE|HL|IX|IY|SP|PC|I|R)\\b"
+        },
+        {
+          "name": "keyword.directive.z80",
+          "match": "\\b(DB|DW|DS)\\b"
+        },
+        {
+          "name": "constant.numeric.hex.z80",
+          "match": "#[0-9A-Fa-f_]+"
+        },
+        {
+          "name": "comment.line.semicolon.z80",
+          "match": ";.*$"
         }
       ]
     }
-  },
-  "patterns": [
-    { "include": "#keyword.control.basic" },
-    { "include": "#meta.control.parameters.basic" },
-    { "include": "#keyword.command.basic" },
-    { "include": "#meta.command.parameters.basic" },
-    { "include": "#keyword.screen.basic" },
-    { "include": "#meta.screen.parameters.basic" },
-    { "include": "#keyword.Z80.basic" },
-    { "include": "#illegal.keyword.control.basic" },
-    { "include": "#meta.line-number.basic" },
-    { "include": "#keyword.operator.arithmetic.basic" },
-    { "include": "#meta.brackets.parenthesis.basic" },
-    { "include": "#keyword.operator.boolean.basic" },
-    { "include": "#keyword.operator.relational.basic" },
-    { "include": "#comment.line.rem.basic" },
-    { "include": "#string.quoted.double.basic" },
-    { "include": "#constant.numeric.basic" }
-  ]
+  }
 }

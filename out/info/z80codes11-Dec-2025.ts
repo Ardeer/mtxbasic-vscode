@@ -1,0 +1,1872 @@
+/** z80 hex to mnemomic conversion table
+AFWilson
+31-Oct-2022
+v0.1
+updated 31-May-2023, "00A" to "00F" should be "0A" to "0F"
+updated 07-Jun-2023 extra spaces between some instructions like CALL PO,..
+updated 27-Jun-2023 added missing ["ED5B XXXX","LD DE,(XXXX)"],
+converted to typescript 8-Dec-2025
+*/
+
+
+/** z80 hex to mnemomic conversion table notes
+no CB30 to CB37
+no DDCB ZZ 36
+no FDCB ZZ 36
+MTX assembler includes the following directives: 
+DB n ; define byte, e.g.  n=10 or #0A or "A"
+DW XXXX ; define 16-bit word
+DS n254 ; define space, where n254 = 0 to 254 as 255 (#FF) is reserved for end of program marker
+*/
+
+/** z80 format within the CODE structure
+<TABspace> <hex_addr><space> {<label>:} <z80 assembly command> {;<comment>}
+1) no line number (same exception as used for NODDY)
+2) TAB space indent
+3) 16-bit hexadecimal address (0000) - no prefix or postfix to indicate a number
+4) space
+5) optional label followed by a colon
+6) z80 assembly command
+7) optional semicolon followed by text comment (no quotes or double quotes required, same as for REM in MTX BASIC
+8) end of line
+
+Notes:
+a) Initially, whenever CODE is encountered, it should automatically generate the following default line as per the MTX assembler.
+<linenumber> CODE
+	0000 RET
+The user can overwrite this default line with their own z80 assembly code lines.
+b) The 16-bit hexadecimal address initially to always start at 0000 but internally be coded as hexAddr = baseAddr+offsetAddr
+baseAddr = 0000 (default) until machine type determined then either 4000 (MTX512, 64KB machine) or 8000 (MTX500, 32KB machine)
+offsetAddr = 0000 (default). A separate function to be created to scan the MTX BASIC listing prior to CODE and convert text into hexadecimal and use this to generate a new offset
+c) where XXXX or n or e or d is used in the z80Cmds below, these are only placeholders to ensure the correct format is used by the user, e.g. XXXX = 16-bit hexadecimal value, n = 8-bit hexadecimal value, e = 8-bit signed value, d = 8-bit offset value
+d) where XXXX or n or e or d placeholders are to be replaced by the appropriate hexadecimal values (prefixed by #) or integer values (no # prefix) or labels
+*/
+
+/** z80 assembly specifications
+column 0 = hexadecimal code (string) plus additional information
+	XXXX = 16-bit hexadecimal address
+	XX = 8-bit unsigned (1-byte)
+	YY = 8-bit signed (1-byte)
+	ZZ = offset (1-byte)
+	
+column 1 = z80 assembly command (string) plus additional information
+	XXXX = XXXX (2-byte)
+	n = XX (1-byte)
+	e = YY signed (1-byte)
+	d = offset (1-byte)
+column 2 = total number of bytes for complete z80 command including additional information
+
+Note: initially only column 1 is used within the MTX BASIC CODE command. Columns 0 and 2 will be used later for a different purpose.
+*/
+
+/***
+ 
+
+1)From the list of z80Cmds, create a sub-set that contains the z80 commands that contain XXXX, (XXXX), n, (n), e and d. These will be the outliers which can be confused with labels.
+2) Check the command entry against an exact match in the z80Cmds list (excluding the sub-set), only z80 commands like PUSH AF or LD A,D will be correct. Else generate an error, 
+so PUSH AFA would be an error.
+3) then compare against the sub-set that could be a number or a label
+3a) if # prefix present then following digits are hexadecimal. Compare against XXXX or n to see if 16 or 8-bit
+3b) if [0-9] then its a decimal number.
+3c) if [A-Z] then assume its a label (store, the line number where labels are used, so that these can be checked at 4)
+4) at the end of the codeblock, cross-check commands that use labels against actual labels. If a label is used in a command and label not found, then report error "label not found".
+5) final check, where relative jumps (Jr & DJNZ) are used, these limit the forward and backward jumps to -128 to 127 + 2 to account for the command byte and the displacement byte. 
+Using z80Cmds length bytes to dtermine if the jumps are within the correct range (-126 to 129, accounting for the 2 bytes for the command+displacement), 
+if not, the report error, relative jump too big. 
+ */
+
+// Import hex functions from stdFns
+import { isHexNumber, parseHex } from './stdFns.js';
+
+const z80Cmds: {opCode: string, z80: string, length: number}[] = [
+{opCode: "00", z80: "NOP", length: 1},
+{opCode: "01 XXXX", z80: "LD BC,XXXX", length: 3},
+{opCode: "02", z80: "LD (BC),A", length: 1},
+{opCode: "03", z80: "INC BC", length: 1},
+{opCode: "04", z80: "INC B", length: 1},
+{opCode: "05", z80: "DEC B", length: 1},
+{opCode: "06 XX", z80: "LD B,XX", length: 2},
+{opCode: "07", z80: "RLCA", length: 1},
+{opCode: "08", z80: "EX AF,AF'", length: 1},
+{opCode: "09", z80: "ADD HL,BC", length: 1},
+{opCode: "0A", z80: "LD A,(BC)", length: 1},
+{opCode: "0B", z80: "DEC BC", length: 1},
+{opCode: "0C", z80: "INC C", length: 1},
+{opCode: "0D", z80: "DEC C", length: 1},
+{opCode: "0E XX", z80: "LD C,XX", length: 2},
+{opCode: "0F", z80: "RRCA", length: 1},
+{opCode: "10 YY", z80: "DJNZ YY", length: 2},
+{opCode: "11 XXXX", z80: "LD DE,XXXX", length: 3},
+{opCode: "12", z80: "LD (DE),A", length: 1},
+{opCode: "13", z80: "INC DE", length: 1},
+{opCode: "14", z80: "INC D", length: 1},
+{opCode: "15", z80: "DEC D", length: 1},
+{opCode: "16 XX", z80: "LD D,XX", length: 2},
+{opCode: "17", z80: "RLA", length: 1},
+{opCode: "18 YY", z80: "JR YY", length: 2},
+{opCode: "19", z80: "ADD HL,DE", length: 1},
+{opCode: "1A", z80: "LD A,(DE)", length: 1},
+{opCode: "1B", z80: "DEC DE", length: 1},
+{opCode: "1C", z80: "INC E", length: 1},
+{opCode: "1D", z80: "DEC E", length: 1},
+{opCode: "1E XX", z80: "LD E,XX", length: 2},
+{opCode: "1F", z80: "RRA", length: 1},
+{opCode: "20 YY", z80: "JR NZ,YY", length: 2},
+{opCode: "21 XXXX", z80: "LD HL,XXXX", length: 3},
+{opCode: "22 XXXX", z80: "LD (XXXX),HL", length: 3},
+{opCode: "23", z80: "INC HL", length: 1},
+{opCode: "24", z80: "INC H", length: 1},
+{opCode: "25", z80: "DEC H", length: 1},
+{opCode: "26 XX", z80: "LD H,XX", length: 2},
+{opCode: "27", z80: "DAA", length: 1},
+{opCode: "28 YY", z80: "JR Z,YY", length: 2},
+{opCode: "29", z80: "ADD HL,HL", length: 1},
+{opCode: "2A XXXX", z80: "LD HL,(XXXX)", length: 3},
+{opCode: "2B", z80: "DEC HL", length: 1},
+{opCode: "2C", z80: "INC L", length: 1},
+{opCode: "2D", z80: "DEC L", length: 1},
+{opCode: "2E XX", z80: "LD L,XX", length: 2},
+{opCode: "2F", z80: "CPL", length: 1},
+{opCode: "30 YY", z80: "JR NC,YY", length: 2},
+{opCode: "31 XXXX", z80: "LD SP,XXXX", length: 3},
+{opCode: "32 XXXX", z80: "LD (XXXX),A", length: 3},
+{opCode: "33", z80: "INC SP", length: 1},
+{opCode: "34", z80: "INC (HL)", length: 1},
+{opCode: "35", z80: "DEC (HL)", length: 1},
+{opCode: "36 XX", z80: "LD (HL),XX", length: 2},
+{opCode: "37", z80: "SCF", length: 1},
+{opCode: "38 YY", z80: "JR C,YY", length: 2},
+{opCode: "39", z80: "ADD HL,SP", length: 1},
+{opCode: "3A XXXX", z80: "LD A,(XXXX)", length: 3},
+{opCode: "3B", z80: "DEC SP", length: 1},
+{opCode: "3C", z80: "INC A", length: 1},
+{opCode: "3D", z80: "DEC A", length: 1},
+{opCode: "3E XX", z80: "LD A,XX", length: 2},
+{opCode: "3F", z80: "CCF", length: 1},
+{opCode: "40", z80: "LD B,B", length: 1},
+{opCode: "41", z80: "LD B,C", length: 1},
+{opCode: "42", z80: "LD B,D", length: 1},
+{opCode: "43", z80: "LD B,E", length: 1},
+{opCode: "44", z80: "LD B,H", length: 1},
+{opCode: "45", z80: "LD B,L", length: 1},
+{opCode: "46", z80: "LD B,(HL)", length: 1},
+{opCode: "47", z80: "LD B,A", length: 1},
+{opCode: "48", z80: "LD C,B", length: 1},
+{opCode: "49", z80: "LD C,C", length: 1},
+{opCode: "4A", z80: "LD C,D", length: 1},
+{opCode: "4B", z80: "LD C,E", length: 1},
+{opCode: "4C", z80: "LD C,H", length: 1},
+{opCode: "4D", z80: "LD C,L", length: 1},
+{opCode: "4E", z80: "LD C,(HL)", length: 1},
+{opCode: "4F", z80: "LD C,A", length: 1},
+{opCode: "50", z80: "LD D,B", length: 1},
+{opCode: "51", z80: "LD D,C", length: 1},
+{opCode: "52", z80: "LD D,D", length: 1},
+{opCode: "53", z80: "LD D,E", length: 1},
+{opCode: "54", z80: "LD D,H", length: 1},
+{opCode: "55", z80: "LD D,L", length: 1},
+{opCode: "56", z80: "LD D,(HL)", length: 1},
+{opCode: "57", z80: "LD D,A", length: 1},
+{opCode: "58", z80: "LD E,B", length: 1},
+{opCode: "59", z80: "LD E,C", length: 1},
+{opCode: "5A", z80: "LD E,D", length: 1},
+{opCode: "5B", z80: "LD E,E", length: 1},
+{opCode: "5C", z80: "LD E,H", length: 1},
+{opCode: "5D", z80: "LD E,L", length: 1},
+{opCode: "5E", z80: "LD E,(HL)", length: 1},
+{opCode: "5F", z80: "LD E,A", length: 1},
+{opCode: "60", z80: "LD H,B", length: 1},
+{opCode: "61", z80: "LD H,C", length: 1},
+{opCode: "62", z80: "LD H,D", length: 1},
+{opCode: "63", z80: "LD H,E", length: 1},
+{opCode: "64", z80: "LD H,H", length: 1},
+{opCode: "65", z80: "LD H,L", length: 1},
+{opCode: "66", z80: "LD H,(HL)", length: 1},
+{opCode: "67", z80: "LD H,A", length: 1},
+{opCode: "68", z80: "LD L,B", length: 1},
+{opCode: "69", z80: "LD L,C", length: 1},
+{opCode: "6A", z80: "LD L,D", length: 1},
+{opCode: "6B", z80: "LD L,E", length: 1},
+{opCode: "6C", z80: "LD L,H", length: 1},
+{opCode: "6D", z80: "LD L,L", length: 1},
+{opCode: "6E", z80: "LD L,(HL)", length: 1},
+{opCode: "6F", z80: "LD L,A", length: 1},
+{opCode: "70", z80: "LD (HL),B", length: 1},
+{opCode: "71", z80: "LD (HL),C", length: 1},
+{opCode: "72", z80: "LD (HL),D", length: 1},
+{opCode: "73", z80: "LD (HL),E", length: 1},
+{opCode: "74", z80: "LD (HL),H", length: 1},
+{opCode: "75", z80: "LD (HL),L", length: 1},
+{opCode: "76", z80: "HALT", length: 1},
+{opCode: "77", z80: "LD (HL),A", length: 1},
+{opCode: "78", z80: "LD A,B", length: 1},
+{opCode: "79", z80: "LD A,C", length: 1},
+{opCode: "7A", z80: "LD A,D", length: 1},
+{opCode: "7B", z80: "LD A,E", length: 1},
+{opCode: "7C", z80: "LD A,H", length: 1},
+{opCode: "7D", z80: "LD A,L", length: 1},
+{opCode: "7E", z80: "LD A,(HL)", length: 1},
+{opCode: "7F", z80: "LD A,A", length: 1},
+{opCode: "80", z80: "ADD A,B", length: 1},
+{opCode: "81", z80: "ADD A,C", length: 1},
+{opCode: "82", z80: "ADD A,D", length: 1},
+{opCode: "83", z80: "ADD A,E", length: 1},
+{opCode: "84", z80: "ADD A,H", length: 1},
+{opCode: "85", z80: "ADD A,L", length: 1},
+{opCode: "86", z80: "ADD A,(HL)", length: 1},
+{opCode: "87", z80: "ADD A,A", length: 1},
+{opCode: "88", z80: "ADC A,B", length: 1},
+{opCode: "89", z80: "ADC A,C", length: 1},
+{opCode: "8A", z80: "ADC A,D", length: 1},
+{opCode: "8B", z80: "ADC A,E", length: 1},
+{opCode: "8C", z80: "ADC A,H", length: 1},
+{opCode: "8D", z80: "ADC A,L", length: 1},
+{opCode: "8E", z80: "ADC A,(HL)", length: 1},
+{opCode: "8F", z80: "ADC A,A", length: 1},
+{opCode: "90", z80: "SUB B", length: 1},
+{opCode: "91", z80: "SUB C", length: 1},
+{opCode: "92", z80: "SUB D", length: 1},
+{opCode: "93", z80: "SUB E", length: 1},
+{opCode: "94", z80: "SUB H", length: 1},
+{opCode: "95", z80: "SUB L", length: 1},
+{opCode: "96", z80: "SUB (HL)", length: 1},
+{opCode: "97", z80: "SUB A", length: 1},
+{opCode: "98", z80: "SBC A,B", length: 1},
+{opCode: "99", z80: "SBC A,C", length: 1},
+{opCode: "9A", z80: "SBC A,D", length: 1},
+{opCode: "9B", z80: "SBC A,E", length: 1},
+{opCode: "9C", z80: "SBC A,H", length: 1},
+{opCode: "9D", z80: "SBC A,L", length: 1},
+{opCode: "9E", z80: "SBC A,(HL)", length: 1},
+{opCode: "9F", z80: "SBC A,A", length: 1},
+{opCode: "A0", z80: "AND B", length: 1},
+{opCode: "A1", z80: "AND C", length: 1},
+{opCode: "A2", z80: "AND D", length: 1},
+{opCode: "A3", z80: "AND E", length: 1},
+{opCode: "A4", z80: "AND H", length: 1},
+{opCode: "A5", z80: "AND L", length: 1},
+{opCode: "A6", z80: "AND (HL)", length: 1},
+{opCode: "A7", z80: "AND A", length: 1},
+{opCode: "A8", z80: "XOR B", length: 1},
+{opCode: "A9", z80: "XOR C", length: 1},
+{opCode: "AA", z80: "XOR D", length: 1},
+{opCode: "AB", z80: "XOR E", length: 1},
+{opCode: "AC", z80: "XOR H", length: 1},
+{opCode: "AD", z80: "XOR L", length: 1},
+{opCode: "AE", z80: "XOR (HL)", length: 1},
+{opCode: "AF", z80: "XOR A", length: 1},
+{opCode: "B0", z80: "OR B", length: 1},
+{opCode: "B1", z80: "OR C", length: 1},
+{opCode: "B2", z80: "OR D", length: 1},
+{opCode: "B3", z80: "OR E", length: 1},
+{opCode: "B4", z80: "OR H", length: 1},
+{opCode: "B5", z80: "OR L", length: 1},
+{opCode: "B6", z80: "OR (HL)", length: 1},
+{opCode: "B7", z80: "OR A", length: 1},
+{opCode: "B8", z80: "CP B", length: 1},
+{opCode: "B9", z80: "CP C", length: 1},
+{opCode: "BA", z80: "CP D", length: 1},
+{opCode: "BB", z80: "CP E", length: 1},
+{opCode: "BC", z80: "CP H", length: 1},
+{opCode: "BD", z80: "CP L", length: 1},
+{opCode: "BE", z80: "CP (HL)", length: 1},
+{opCode: "BF", z80: "CP A", length: 1},
+{opCode: "C0", z80: "RET NZ", length: 1},
+{opCode: "C1", z80: "POP BC", length: 1},
+{opCode: "C2 XXXX", z80: "JP NZ,XXXX", length: 3},
+{opCode: "C3 XXXX", z80: "JP XXXX", length: 3},
+{opCode: "C4 XXXX", z80: "CALL NZ,XXXX", length: 3},
+{opCode: "C5", z80: "PUSH BC", length: 1},
+{opCode: "C6 XX", z80: "ADD A,XX", length: 2},
+{opCode: "C7", z80: "RST 00", length: 1},
+{opCode: "C8", z80: "RET Z", length: 1},
+{opCode: "C9", z80: "RET", length: 1},
+{opCode: "CA XXXX", z80: "JP Z,XXXX", length: 3},
+{opCode: "CB00", z80: "RLC B", length: 2},
+{opCode: "CB01", z80: "RLC C", length: 2},
+{opCode: "CB02", z80: "RLC D", length: 2},
+{opCode: "CB03", z80: "RLC E", length: 2},
+{opCode: "CB04", z80: "RLC H", length: 2},
+{opCode: "CB05", z80: "RLC L", length: 2},
+{opCode: "CB06", z80: "RLC (HL)", length: 2},
+{opCode: "CB07", z80: "RLC A", length: 2},
+{opCode: "CB08", z80: "RRC B", length: 2},
+{opCode: "CB09", z80: "RRC C", length: 2},
+{opCode: "CB0A", z80: "RRC D", length: 2},
+{opCode: "CB0B", z80: "RRC E", length: 2},
+{opCode: "CB0C", z80: "RRC H", length: 2},
+{opCode: "CB0D", z80: "RRC L", length: 2},
+{opCode: "CB0E", z80: "RRC (HL)", length: 2},
+{opCode: "CB0F", z80: "RRC A", length: 2},
+{opCode: "CB10", z80: "RL B", length: 2},
+{opCode: "CB11", z80: "RL C", length: 2},
+{opCode: "CB12", z80: "RL D", length: 2},
+{opCode: "CB13", z80: "RL E", length: 2},
+{opCode: "CB14", z80: "RL H", length: 2},
+{opCode: "CB15", z80: "RL L", length: 2},
+{opCode: "CB16", z80: "RL (HL)", length: 2},
+{opCode: "CB17", z80: "RL A", length: 2},
+{opCode: "CB18", z80: "RR B", length: 2},
+{opCode: "CB19", z80: "RR C", length: 2},
+{opCode: "CB1A", z80: "RR D", length: 2},
+{opCode: "CB1B", z80: "RR E", length: 2},
+{opCode: "CB1C", z80: "RR H", length: 2},
+{opCode: "CB1D", z80: "RR L", length: 2},
+{opCode: "CB1E", z80: "RR (HL)", length: 2},
+{opCode: "CB1F", z80: "RR A", length: 2},
+{opCode: "CB20", z80: "SLA B", length: 2},
+{opCode: "CB21", z80: "SLA C", length: 2},
+{opCode: "CB22", z80: "SLA D", length: 2},
+{opCode: "CB23", z80: "SLA E", length: 2},
+{opCode: "CB24", z80: "SLA H", length: 2},
+{opCode: "CB25", z80: "SLA L", length: 2},
+{opCode: "CB26", z80: "SLA (HL)", length: 2},
+{opCode: "CB27", z80: "SLA A", length: 2},
+{opCode: "CB28", z80: "SRA B", length: 2},
+{opCode: "CB29", z80: "SRA C", length: 2},
+{opCode: "CB2A", z80: "SRA D", length: 2},
+{opCode: "CB2B", z80: "SRA E", length: 2},
+{opCode: "CB2C", z80: "SRA H", length: 2},
+{opCode: "CB2D", z80: "SRA L", length: 2},
+{opCode: "CB2E", z80: "SRA (HL)", length: 2},
+{opCode: "CB2F", z80: "SRA A", length: 2},
+{opCode: "CB38", z80: "SRL B", length: 2},
+{opCode: "CB39", z80: "SRL C", length: 2},
+{opCode: "CB3A", z80: "SRL D", length: 2},
+{opCode: "CB3B", z80: "SRL E", length: 2},
+{opCode: "CB3C", z80: "SRL H", length: 2},
+{opCode: "CB3D", z80: "SRL L", length: 2},
+{opCode: "CB3E", z80: "SRL (HL)", length: 2},
+{opCode: "CB3F", z80: "SRL A", length: 2},
+{opCode: "CB40", z80: "BIT 0,B", length: 2},
+{opCode: "CB41", z80: "BIT 0,C", length: 2},
+{opCode: "CB42", z80: "BIT 0,D", length: 2},
+{opCode: "CB43", z80: "BIT 0,E", length: 2},
+{opCode: "CB44", z80: "BIT 0,H", length: 2},
+{opCode: "CB45", z80: "BIT 0,L", length: 2},
+{opCode: "CB46", z80: "BIT 0,(HL)", length: 2},
+{opCode: "CB47", z80: "BIT 0,A", length: 2},
+{opCode: "CB48", z80: "BIT 1,B", length: 2},
+{opCode: "CB49", z80: "BIT 1,C", length: 2},
+{opCode: "CB4A", z80: "BIT 1,D", length: 2},
+{opCode: "CB4B", z80: "BIT 1,E", length: 2},
+{opCode: "CB4C", z80: "BIT 1,H", length: 2},
+{opCode: "CB4D", z80: "BIT 1,L", length: 2},
+{opCode: "CB4E", z80: "BIT 1,(HL)", length: 2},
+{opCode: "CB4F", z80: "BIT 1,A", length: 2},
+{opCode: "CB50", z80: "BIT 2,B", length: 2},
+{opCode: "CB51", z80: "BIT 2,C", length: 2},
+{opCode: "CB52", z80: "BIT 2,D", length: 2},
+{opCode: "CB53", z80: "BIT 2,E", length: 2},
+{opCode: "CB54", z80: "BIT 2,H", length: 2},
+{opCode: "CB55", z80: "BIT 2,L", length: 2},
+{opCode: "CB56", z80: "BIT 2,(HL)", length: 2},
+{opCode: "CB57", z80: "BIT 2,A", length: 2},
+{opCode: "CB58", z80: "BIT 3,B", length: 2},
+{opCode: "CB59", z80: "BIT 3,C", length: 2},
+{opCode: "CB5A", z80: "BIT 3,D", length: 2},
+{opCode: "CB5B", z80: "BIT 3,E", length: 2},
+{opCode: "CB5C", z80: "BIT 3,H", length: 2},
+{opCode: "CB5D", z80: "BIT 3,L", length: 2},
+{opCode: "CB5E", z80: "BIT 3,(HL)", length: 2},
+{opCode: "CB5F", z80: "BIT 3,A", length: 2},
+{opCode: "CB60", z80: "BIT 4,B", length: 2},
+{opCode: "CB61", z80: "BIT 4,C", length: 2},
+{opCode: "CB62", z80: "BIT 4,D", length: 2},
+{opCode: "CB63", z80: "BIT 4,E", length: 2},
+{opCode: "CB64", z80: "BIT 4,H", length: 2},
+{opCode: "CB65", z80: "BIT 4,L", length: 2},
+{opCode: "CB66", z80: "BIT 4,(HL)", length: 2},
+{opCode: "CB67", z80: "BIT 4,A", length: 2},
+{opCode: "CB68", z80: "BIT 5,B", length: 2},
+{opCode: "CB69", z80: "BIT 5,C", length: 2},
+{opCode: "CB6A", z80: "BIT 5,D", length: 2},
+{opCode: "CB6B", z80: "BIT 5,E", length: 2},
+{opCode: "CB6C", z80: "BIT 5,H", length: 2},
+{opCode: "CB6D", z80: "BIT 5,L", length: 2},
+{opCode: "CB6E", z80: "BIT 5,(HL)", length: 2},
+{opCode: "CB6F", z80: "BIT 5,A", length: 2},
+{opCode: "CB70", z80: "BIT 6,B", length: 2},
+{opCode: "CB71", z80: "BIT 6,C", length: 2},
+{opCode: "CB72", z80: "BIT 6,D", length: 2},
+{opCode: "CB73", z80: "BIT 6,E", length: 2},
+{opCode: "CB74", z80: "BIT 6,H", length: 2},
+{opCode: "CB75", z80: "BIT 6,L", length: 2},
+{opCode: "CB76", z80: "BIT 6,(HL)", length: 2},
+{opCode: "CB77", z80: "BIT 6,A", length: 2},
+{opCode: "CB78", z80: "BIT 7,B", length: 2},
+{opCode: "CB79", z80: "BIT 7,C", length: 2},
+{opCode: "CB7A", z80: "BIT 7,D", length: 2},
+{opCode: "CB7B", z80: "BIT 7,E", length: 2},
+{opCode: "CB7C", z80: "BIT 7,H", length: 2},
+{opCode: "CB7D", z80: "BIT 7,L", length: 2},
+{opCode: "CB7E", z80: "BIT 7,(HL)", length: 2},
+{opCode: "CB7F", z80: "BIT 7,A", length: 2},
+{opCode: "CB80", z80: "RES 0,B", length: 2},
+{opCode: "CB81", z80: "RES 0,C", length: 2},
+{opCode: "CB82", z80: "RES 0,D", length: 2},
+{opCode: "CB83", z80: "RES 0,E", length: 2},
+{opCode: "CB84", z80: "RES 0,H", length: 2},
+{opCode: "CB85", z80: "RES 0,L", length: 2},
+{opCode: "CB86", z80: "RES 0,(HL)", length: 2},
+{opCode: "CB87", z80: "RES 0,A", length: 2},
+{opCode: "CB88", z80: "RES 1,B", length: 2},
+{opCode: "CB89", z80: "RES 1,C", length: 2},
+{opCode: "CB8A", z80: "RES 1,D", length: 2},
+{opCode: "CB8B", z80: "RES 1,E", length: 2},
+{opCode: "CB8C", z80: "RES 1,H", length: 2},
+{opCode: "CB8D", z80: "RES 1,L", length: 2},
+{opCode: "CB8E", z80: "RES 1,(HL)", length: 2},
+{opCode: "CB8F", z80: "RES 1,A", length: 2},
+{opCode: "CB90", z80: "RES 2,B", length: 2},
+{opCode: "CB91", z80: "RES 2,C", length: 2},
+{opCode: "CB92", z80: "RES 2,D", length: 2},
+{opCode: "CB93", z80: "RES 2,E", length: 2},
+{opCode: "CB94", z80: "RES 2,H", length: 2},
+{opCode: "CB95", z80: "RES 2,L", length: 2},
+{opCode: "CB96", z80: "RES 2,(HL)", length: 2},
+{opCode: "CB97", z80: "RES 2,A", length: 2},
+{opCode: "CB98", z80: "RES 3,B", length: 2},
+{opCode: "CB99", z80: "RES 3,C", length: 2},
+{opCode: "CB9A", z80: "RES 3,D", length: 2},
+{opCode: "CB9B", z80: "RES 3,E", length: 2},
+{opCode: "CB9C", z80: "RES 3,H", length: 2},
+{opCode: "CB9D", z80: "RES 3,L", length: 2},
+{opCode: "CB9E", z80: "RES 3,(HL)", length: 2},
+{opCode: "CB9F", z80: "RES 3,A", length: 2},
+{opCode: "CBA0", z80: "RES 4,B", length: 2},
+{opCode: "CBA1", z80: "RES 4,C", length: 2},
+{opCode: "CBA2", z80: "RES 4,D", length: 2},
+{opCode: "CBA3", z80: "RES 4,E", length: 2},
+{opCode: "CBA4", z80: "RES 4,H", length: 2},
+{opCode: "CBA5", z80: "RES 4,L", length: 2},
+{opCode: "CBA6", z80: "RES 4,(HL)", length: 2},
+{opCode: "CBA7", z80: "RES 4,A", length: 2},
+{opCode: "CBA8", z80: "RES 5,B", length: 2},
+{opCode: "CBA9", z80: "RES 5,C", length: 2},
+{opCode: "CBAA", z80: "RES 5,D", length: 2},
+{opCode: "CBAB", z80: "RES 5,E", length: 2},
+{opCode: "CBAC", z80: "RES 5,H", length: 2},
+{opCode: "CBAD", z80: "RES 5,L", length: 2},
+{opCode: "CBAE", z80: "RES 5,(HL)", length: 2},
+{opCode: "CBAF", z80: "RES 5,A", length: 2},
+{opCode: "CBB0", z80: "RES 6,B", length: 2},
+{opCode: "CBB1", z80: "RES 6,C", length: 2},
+{opCode: "CBB2", z80: "RES 6,D", length: 2},
+{opCode: "CBB3", z80: "RES 6,E", length: 2},
+{opCode: "CBB4", z80: "RES 6,H", length: 2},
+{opCode: "CBB5", z80: "RES 6,L", length: 2},
+{opCode: "CBB6", z80: "RES 6,(HL)", length: 2},
+{opCode: "CBB7", z80: "RES 6,A", length: 2},
+{opCode: "CBB8", z80: "RES 7,B", length: 2},
+{opCode: "CBB9", z80: "RES 7,C", length: 2},
+{opCode: "CBBA", z80: "RES 7,D", length: 2},
+{opCode: "CBBB", z80: "RES 7,E", length: 2},
+{opCode: "CBBC", z80: "RES 7,H", length: 2},
+{opCode: "CBBD", z80: "RES 7,L", length: 2},
+{opCode: "CBBE", z80: "RES 7,(HL)", length: 2},
+{opCode: "CBBF", z80: "RES 7,A", length: 2},
+{opCode: "CBC0", z80: "SET 0,B", length: 2},
+{opCode: "CBC1", z80: "SET 0,C", length: 2},
+{opCode: "CBC2", z80: "SET 0,D", length: 2},
+{opCode: "CBC3", z80: "SET 0,E", length: 2},
+{opCode: "CBC4", z80: "SET 0,H", length: 2},
+{opCode: "CBC5", z80: "SET 0,L", length: 2},
+{opCode: "CBC6", z80: "SET 0,(HL)", length: 2},
+{opCode: "CBC7", z80: "SET 0,A", length: 2},
+{opCode: "CBC8", z80: "SET 1,B", length: 2},
+{opCode: "CBC9", z80: "SET 1,C", length: 2},
+{opCode: "CBCA", z80: "SET 1,D", length: 2},
+{opCode: "CBCB", z80: "SET 1,E", length: 2},
+{opCode: "CBCC", z80: "SET 1,H", length: 2},
+{opCode: "CBCD", z80: "SET 1,L", length: 2},
+{opCode: "CBCE", z80: "SET 1,(HL)", length: 2},
+{opCode: "CBCF", z80: "SET 1,A", length: 2},
+{opCode: "CBD0", z80: "SET 2,B", length: 2},
+{opCode: "CBD1", z80: "SET 2,C", length: 2},
+{opCode: "CBD2", z80: "SET 2,D", length: 2},
+{opCode: "CBD3", z80: "SET 2,E", length: 2},
+{opCode: "CBD4", z80: "SET 2,H", length: 2},
+{opCode: "CBD5", z80: "SET 2,L", length: 2},
+{opCode: "CBD6", z80: "SET 2,(HL)", length: 2},
+{opCode: "CBD7", z80: "SET 2,A", length: 2},
+{opCode: "CBD8", z80: "SET 3,B", length: 2},
+{opCode: "CBD9", z80: "SET 3,C", length: 2},
+{opCode: "CBDA", z80: "SET 3,D", length: 2},
+{opCode: "CBDB", z80: "SET 3,E", length: 2},
+{opCode: "CBDC", z80: "SET 3,H", length: 2},
+{opCode: "CBDD", z80: "SET 3,L", length: 2},
+{opCode: "CBDE", z80: "SET 3,(HL)", length: 2},
+{opCode: "CBDF", z80: "SET 3,A", length: 2},
+{opCode: "CBE0", z80: "SET 4,B", length: 2},
+{opCode: "CBE1", z80: "SET 4,C", length: 2},
+{opCode: "CBE2", z80: "SET 4,D", length: 2},
+{opCode: "CBE3", z80: "SET 4,E", length: 2},
+{opCode: "CBE4", z80: "SET 4,H", length: 2},
+{opCode: "CBE5", z80: "SET 4,L", length: 2},
+{opCode: "CBE6", z80: "SET 4,(HL)", length: 2},
+{opCode: "CBE7", z80: "SET 4,A", length: 2},
+{opCode: "CBE8", z80: "SET 5,B", length: 2},
+{opCode: "CBE9", z80: "SET 5,C", length: 2},
+{opCode: "CBEA", z80: "SET 5,D", length: 2},
+{opCode: "CBEB", z80: "SET 5,E", length: 2},
+{opCode: "CBEC", z80: "SET 5,H", length: 2},
+{opCode: "CBED", z80: "SET 5,L", length: 2},
+{opCode: "CBEE", z80: "SET 5,(HL)", length: 2},
+{opCode: "CBEF", z80: "SET 5,A", length: 2},
+{opCode: "CBF0", z80: "SET 6,B", length: 2},
+{opCode: "CBF1", z80: "SET 6,C", length: 2},
+{opCode: "CBF2", z80: "SET 6,D", length: 2},
+{opCode: "CBF3", z80: "SET 6,E", length: 2},
+{opCode: "CBF4", z80: "SET 6,H", length: 2},
+{opCode: "CBF5", z80: "SET 6,L", length: 2},
+{opCode: "CBF6", z80: "SET 6,(HL)", length: 2},
+{opCode: "CBF7", z80: "SET 6,A", length: 2},
+{opCode: "CBF8", z80: "SET 7,B", length: 2},
+{opCode: "CBF9", z80: "SET 7,C", length: 2},
+{opCode: "CBFA", z80: "SET 7,D", length: 2},
+{opCode: "CBFB", z80: "SET 7,E", length: 2},
+{opCode: "CBFC", z80: "SET 7,H", length: 2},
+{opCode: "CBFD", z80: "SET 7,L", length: 2},
+{opCode: "CBFE", z80: "SET 7,(HL)", length: 2},
+{opCode: "CBFF", z80: "SET 7,A", length: 2},
+{opCode: "CC XXXX", z80: "CALL Z,XXXX", length: 3},
+{opCode: "CD XXXX", z80: "CALL XXXX", length: 3},
+{opCode: "CE XX", z80: "ADC A,XX", length: 2},
+{opCode: "CF", z80: "RST 8", length: 1},
+{opCode: "D0", z80: "RET NC", length: 1},
+{opCode: "D1", z80: "POP DE", length: 1},
+{opCode: "D2 XXXX", z80: "JP NC,XXXX", length: 3},
+{opCode: "D3 XX", z80: "OUT (XX),A", length: 2},
+{opCode: "D4 XXXX", z80: "CALL NC,XXXX", length: 3},
+{opCode: "D5", z80: "PUSH DE", length: 1},
+{opCode: "D6 XX", z80: "SUB XX", length: 2},
+{opCode: "D7", z80: "RST 10", length: 1},
+{opCode: "D8", z80: "RET C", length: 1},
+{opCode: "D9", z80: "EXX", length: 1},
+{opCode: "DA XXXX", z80: "JP C,XXXX", length: 3},
+{opCode: "DB XX", z80: "IN A,(XX)", length: 2},
+{opCode: "DC XXXX", z80: "CALL C,XXXX", length: 3},
+{opCode: "DD09", z80: "ADD IX,BC", length: 2},
+{opCode: "DD19", z80: "ADD IX,DE", length: 2},
+{opCode: "DD21 XXXX", z80: "LD IX,XXXX", length: 4},
+{opCode: "DD22 XXXX", z80: "LD (XXXX),IX", length: 4},
+{opCode: "DD23", z80: "INC IX", length: 2},
+{opCode: "DD29", z80: "ADD IX,IX", length: 2},
+{opCode: "DD2A XXXX", z80: "LD IX,(XXXX)", length: 4},
+{opCode: "DD2B", z80: "DEC IX", length: 2},
+{opCode: "DD34 ZZ", z80: "INC (IX+ZZ)", length: 3},
+{opCode: "DD35 ZZ", z80: "DEC (IX+ZZ)", length: 3},
+{opCode: "DD36 ZZ XX", z80: "LD (IX+ZZ),XX", length: 4},
+{opCode: "DD39", z80: "ADD IX,SP", length: 2},
+{opCode: "DD46 ZZ", z80: "LD B,(IX+ZZ)", length: 3},
+{opCode: "DD4E ZZ", z80: "LD C,(IX+ZZ)", length: 3},
+{opCode: "DD56 ZZ", z80: "LD D,(IX+ZZ)", length: 3},
+{opCode: "DD5E ZZ", z80: "LD E,(IX+ZZ)", length: 3},
+{opCode: "DD66 ZZ", z80: "LD H,(IX+ZZ)", length: 3},
+{opCode: "DD6E ZZ", z80: "LD L,(IX+ZZ)", length: 3},
+{opCode: "DD70 ZZ", z80: "LD (IX+ZZ),B", length: 3},
+{opCode: "DD71 ZZ", z80: "LD (IX+ZZ),C", length: 3},
+{opCode: "DD72 ZZ", z80: "LD (IX+ZZ),D", length: 3},
+{opCode: "DD73 ZZ", z80: "LD (IX+ZZ),E", length: 3},
+{opCode: "DD74 ZZ", z80: "LD (IX+ZZ),H", length: 3},
+{opCode: "DD75 ZZ", z80: "LD (IX+ZZ),L", length: 3},
+{opCode: "DD77 ZZ", z80: "LD (IX+ZZ),A", length: 3},
+{opCode: "DD7E ZZ", z80: "LD A,(IX+ZZ)", length: 3},
+{opCode: "DD86 ZZ", z80: "ADD A,(IX+ZZ)", length: 3},
+{opCode: "DD8E ZZ", z80: "ADC A,(IX+ZZ)", length: 3},
+{opCode: "DD96 ZZ", z80: "SUB (IX+ZZ)", length: 3},
+{opCode: "DD9E ZZ", z80: "SBC A,(IX+ZZ)", length: 3},
+{opCode: "DDA6 ZZ", z80: "AND (IX+ZZ)", length: 3},
+{opCode: "DDAE ZZ", z80: "XOR (IX+ZZ)", length: 3},
+{opCode: "DDB6 ZZ", z80: "OR (IX+ZZ)", length: 3},
+{opCode: "DDBE ZZ", z80: "CP (IX+ZZ)", length: 3},
+{opCode: "DDCB ZZ 06", z80: "RLC (IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 0E", z80: "RRC (IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 16", z80: "RL (IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 1E", z80: "RR (IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 26", z80: "SLA (IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 2E", z80: "SRA (IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 3E", z80: "SRL (IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 46", z80: "BIT 0,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 4E", z80: "BIT 1,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 56", z80: "BIT 2,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 5E", z80: "BIT 3,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 66", z80: "BIT 4,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 6E", z80: "BIT 5,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 76", z80: "BIT 6,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 7E", z80: "BIT 7,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 86", z80: "RES 0,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 8E", z80: "RES 1,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 96", z80: "RES 2,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ 9E", z80: "RES 3,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ A6", z80: "RES 4,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ AE", z80: "RES 5,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ B6", z80: "RES 6,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ BE", z80: "RES 7,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ C6", z80: "SET 0,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ CE", z80: "SET 1,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ D6", z80: "SET 2,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ DE", z80: "SET 3,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ E6", z80: "SET 4,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ EE", z80: "SET 5,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ F6", z80: "SET 6,(IX+ZZ)", length: 4},
+{opCode: "DDCB ZZ FE", z80: "SET 7,(IX+ZZ)", length: 4},
+{opCode: "DDE1", z80: "POP IX", length: 2},
+{opCode: "DDE3", z80: "EX (SP),IX", length: 2},
+{opCode: "DDE5", z80: "PUSH IX", length: 2},
+{opCode: "DDE9", z80: "JP (IX)", length: 2},
+{opCode: "DDF9", z80: "LD SP,IX", length: 2},
+{opCode: "DE XX", z80: "SBC A,XX", length: 2},
+{opCode: "DF", z80: "RST 18", length: 1},
+{opCode: "E0", z80: "RET PO", length: 1},
+{opCode: "E1", z80: "POP HL", length: 1},
+{opCode: "E2 XXXX", z80: "JP PO,XXXX", length: 3},
+{opCode: "E3", z80: "EX (SP),HL", length: 1},
+{opCode: "E4 XXXX", z80: "CALL PO,XXXX", length: 3},
+{opCode: "E5", z80: "PUSH HL", length: 1},
+{opCode: "E6 XX", z80: "AND XX", length: 2},
+{opCode: "E7", z80: "RST 20", length: 1},
+{opCode: "E8", z80: "RET PE", length: 1},
+{opCode: "E9", z80: "JP (HL)", length: 1},
+{opCode: "EA XXXX", z80: "JP PE,XXXX", length: 3},
+{opCode: "EB", z80: "EX DE,HL", length: 1},
+{opCode: "EC XXXX", z80: "CALL PE,XXXX", length: 3},
+{opCode: "ED40", z80: "IN B,(C)", length: 2},
+{opCode: "ED41", z80: "OUT (C),B", length: 2},
+{opCode: "ED42", z80: "SBC HL,BC", length: 2},
+{opCode: "ED43 XXXX", z80: "LD (XXXX),BC", length: 4},
+{opCode: "ED44", z80: "NEG", length: 2},
+{opCode: "ED45", z80: "RETN", length: 2},
+{opCode: "ED46", z80: "IM 0", length: 2},
+{opCode: "ED47", z80: "LD I,A", length: 2},
+{opCode: "ED48", z80: "IN C,(C)", length: 2},
+{opCode: "ED49", z80: "OUT (C),C", length: 2},
+{opCode: "ED4A", z80: "ADC HL,BC", length: 2},
+{opCode: "ED4B XXXX", z80: "LD BC,(XXXX)", length: 4},
+{opCode: "ED4D", z80: "RETI", length: 2},
+{opCode: "ED4F", z80: "LD R,A", length: 2},
+{opCode: "ED50", z80: "IN D,(C)", length: 2},
+{opCode: "ED51", z80: "OUT (C),D", length: 2},
+{opCode: "ED52", z80: "SBC HL,DE", length: 2},
+{opCode: "ED53 XXXX", z80: "LD (XXXX),DE", length: 4},
+{opCode: "ED56", z80: "IM 1", length: 2},
+{opCode: "ED57", z80: "LD A,I", length: 2},
+{opCode: "ED58", z80: "IN E,(C)", length: 2},
+{opCode: "ED59", z80: "OUT (C),E", length: 2},
+{opCode: "ED5A", z80: "ADC HL,DE", length: 2},
+{opCode: "ED5B XXXX", z80: "LD DE,(XXXX)", length: 4},
+{opCode: "ED5E", z80: "IM 2", length: 2},
+{opCode: "ED5F", z80: "LD A,R", length: 2},
+{opCode: "ED60", z80: "IN H,(C)", length: 2},
+{opCode: "ED61", z80: "OUT (C),H", length: 2},
+{opCode: "ED62", z80: "SBC HL,HL", length: 2},
+{opCode: "ED67", z80: "RRD", length: 2},
+{opCode: "ED68", z80: "IN L,(C)", length: 2},
+{opCode: "ED69", z80: "OUT (C),L", length: 2},
+{opCode: "ED6A", z80: "ADC HL,HL", length: 2},
+{opCode: "ED6F", z80: "RLD", length: 2},
+{opCode: "ED72", z80: "SBC HL,SP", length: 2},
+{opCode: "ED73 XXXX", z80: "LD (XXXX),SP", length: 4},
+{opCode: "ED78", z80: "IN A,(C)", length: 2},
+{opCode: "ED79", z80: "OUT (C),A", length: 2},
+{opCode: "ED7A", z80: "ADC HL,SP", length: 2},
+{opCode: "ED7B XXXX", z80: "LD SP,(XXXX)", length: 4},
+{opCode: "EDA0", z80: "LDI", length: 2},
+{opCode: "EDA1", z80: "CPI", length: 2},
+{opCode: "EDA2", z80: "INI", length: 2},
+{opCode: "EDA3", z80: "OUTI", length: 2},
+{opCode: "EDA8", z80: "LDD", length: 2},
+{opCode: "EDA9", z80: "CPD", length: 2},
+{opCode: "EDAA", z80: "IND", length: 2},
+{opCode: "EDAB", z80: "OUTD", length: 2},
+{opCode: "EDB0", z80: "LDIR", length: 2},
+{opCode: "EDB1", z80: "CPIR", length: 2},
+{opCode: "EDB2", z80: "INIR", length: 2},
+{opCode: "EDB3", z80: "OTIR", length: 2},
+{opCode: "EDB8", z80: "LDDR", length: 2},
+{opCode: "EDB9", z80: "CPDR", length: 2},
+{opCode: "EDBA", z80: "INDR", length: 2},
+{opCode: "EDBB", z80: "OTDR", length: 2},
+{opCode: "EE XX", z80: "XOR XX", length: 2},
+{opCode: "EF", z80: "RST 28", length: 1},
+{opCode: "F0", z80: "RET P", length: 1},
+{opCode: "F1", z80: "POP AF", length: 1},
+{opCode: "F2 XXXX", z80: "JP P,XXXX", length: 3},
+{opCode: "F3", z80: "DI", length: 1},
+{opCode: "F4 XXXX", z80: "CALL P,XXXX", length: 3},
+{opCode: "F5", z80: "PUSH AF", length: 1},
+{opCode: "F6 XX", z80: "OR XX", length: 2},
+{opCode: "F7", z80: "RST 30", length: 1},
+{opCode: "F8", z80: "RET M", length: 1},
+{opCode: "F9", z80: "LD SP,HL", length: 1},
+{opCode: "FA XXXX", z80: "JP M,XXXX", length: 3},
+{opCode: "FB", z80: "EI", length: 1},
+{opCode: "FC XXXX", z80: "CALL M,XXXX", length: 3},
+{opCode: "FD09", z80: "ADD IY,BC", length: 2},
+{opCode: "FD19", z80: "ADD IY,DE", length: 2},
+{opCode: "FD21 XXXX", z80: "LD IY,XXXX", length: 4},
+{opCode: "FD22 XXXX", z80: "LD (XXXX),IY", length: 4},
+{opCode: "FD23", z80: "INC IY", length: 2},
+{opCode: "FD29", z80: "ADD IY,IY", length: 2},
+{opCode: "FD2A XXXX", z80: "LD IY,(XXXX)", length: 4},
+{opCode: "FD2B", z80: "DEC IY", length: 2},
+{opCode: "FD34 ZZ", z80: "INC (IY+ZZ)", length: 3},
+{opCode: "FD35 ZZ", z80: "DEC (IY+ZZ)", length: 3},
+{opCode: "FD36 ZZ XX", z80: "LD (IY+ZZ),XX", length: 4},
+{opCode: "FD39", z80: "ADD IY,SP", length: 2},
+{opCode: "FD46 ZZ", z80: "LD B,(IY+ZZ)", length: 3},
+{opCode: "FD4E ZZ", z80: "LD C,(IY+ZZ)", length: 3},
+{opCode: "FD56 ZZ", z80: "LD D,(IY+ZZ)", length: 3},
+{opCode: "FD5E ZZ", z80: "LD E,(IY+ZZ)", length: 3},
+{opCode: "FD66 ZZ", z80: "LD H,(IY+ZZ)", length: 3},
+{opCode: "FD6E ZZ", z80: "LD L,(IY+ZZ)", length: 3},
+{opCode: "FD70 ZZ", z80: "LD (IY+ZZ),B", length: 3},
+{opCode: "FD71 ZZ", z80: "LD (IY+ZZ),C", length: 3},
+{opCode: "FD72 ZZ", z80: "LD (IY+ZZ),D", length: 3},
+{opCode: "FD73 ZZ", z80: "LD (IY+ZZ),E", length: 3},
+{opCode: "FD74 ZZ", z80: "LD (IY+ZZ),H", length: 3},
+{opCode: "FD75 ZZ", z80: "LD (IY+ZZ),L", length: 3},
+{opCode: "FD77 ZZ", z80: "LD (IY+ZZ),A", length: 3},
+{opCode: "FD7E ZZ", z80: "LD A,(IY+ZZ)", length: 3},
+{opCode: "FD86 ZZ", z80: "ADD A,(IY+ZZ)", length: 3},
+{opCode: "FD8E ZZ", z80: "ADC A,(IY+ZZ)", length: 3},
+{opCode: "FD96 ZZ", z80: "SUB (IY+ZZ)", length: 3},
+{opCode: "FD9E ZZ", z80: "SBC A,(IY+ZZ)", length: 3},
+{opCode: "FDA6 ZZ", z80: "AND (IY+ZZ)", length: 3},
+{opCode: "FDAE ZZ", z80: "XOR (IY+ZZ)", length: 3},
+{opCode: "FDB6 ZZ", z80: "OR (IY+ZZ)", length: 3},
+{opCode: "FDBE ZZ", z80: "CP (IY+ZZ)", length: 3},
+{opCode: "FDCB ZZ 06", z80: "RLC (IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 0E", z80: "RRC (IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 16", z80: "RL (IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 1E", z80: "RR (IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 26", z80: "SLA (IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 2E", z80: "SRA (IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 3E", z80: "SRL (IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 46", z80: "BIT 0,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 4E", z80: "BIT 1,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 56", z80: "BIT 2,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 5E", z80: "BIT 3,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 66", z80: "BIT 4,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 6E", z80: "BIT 5,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 76", z80: "BIT 6,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 7E", z80: "BIT 7,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 86", z80: "RES 0,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 8E", z80: "RES 1,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 96", z80: "RES 2,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ 9E", z80: "RES 3,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ A6", z80: "RES 4,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ AE", z80: "RES 5,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ B6", z80: "RES 6,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ BE", z80: "RES 7,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ C6", z80: "SET 0,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ CE", z80: "SET 1,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ D6", z80: "SET 2,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ DE", z80: "SET 3,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ E6", z80: "SET 4,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ EE", z80: "SET 5,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ F6", z80: "SET 6,(IY+ZZ)", length: 4},
+{opCode: "FDCB ZZ FE", z80: "SET 7,(IY+ZZ)", length: 4},
+{opCode:"FDE1",z80:"POP IY",length: 2},
+{opCode:"FDE3",z80:"EX (SP),IY",length: 2},
+{opCode:"FDE5",z80:"PUSH IY",length: 2},
+{opCode:"FDE9",z80:"JP (IY)",length: 2},
+{opCode:"FDF9",z80:"LD SP,IY",length: 2},
+{opCode:"FE XX",z80:"CP XX",length: 2},
+{opCode:"FF",z80:"RST 38",length: 1}
+];
+
+// ... existing z80Cmds array and imports stay the same (lines 1-870) ...
+
+// ============================================
+// SIMPLIFIED Z80 VALIDATION - REWRITTEN
+// ============================================
+
+/**
+ * Represents a parsed Z80 assembly line
+ */
+interface Z80ParsedLine {
+    address: string;
+    label?: string;
+    mnemonic?: string;
+    operands?: string[];
+    comment?: string;
+    isDirective?: boolean;
+    directiveType?: 'DB' | 'DW' | 'DS';
+    directiveValue?: string;
+    raw: string;
+    lineNumber: number;
+}
+
+/**
+ * Represents a CODE block in the document
+ */
+interface CodeBlock {
+    startLine: number;
+    endLine: number;
+    baseAddress: number;
+    lines: Z80ParsedLine[];
+    errors: Z80Error[];
+}
+
+/**
+ * Represents a Z80 validation error
+ */
+interface Z80Error {
+    line: number;
+    start: number;
+    end: number;
+    message: string;
+    severity: 'error' | 'warning' | 'info';
+}
+
+/**
+ * Label definition info
+ */
+interface LabelDef {
+    name: string;
+    lineNumber: number;
+    address: number;  // Calculated address
+}
+
+/**
+ * Label usage info (for cross-checking)
+ */
+interface LabelUsage {
+    name: string;
+    lineNumber: number;
+    instructionAddress: number;
+    isRelativeJump: boolean;  // JR or DJNZ
+}
+
+// ============================================
+// STEP 2: Build exact commands and pattern commands
+// ============================================
+
+/**
+ * Exact commands: No placeholders (XXXX, n, e, d)
+ * Pattern commands: Have placeholders that could be numbers or labels
+ */
+const exactCmds = new Set<string>();
+// Map mnemonic -> set of allowed operand-signatures for exact (non-placeholder) commands
+const exactOperandsMap = new Map<string, Set<string>>();
+const patternCmds = new Map<string, { pattern: string; is16bit: boolean; isRelative: boolean }[]>();
+
+// Build the lookup tables at module load
+(function buildLookupTables() {
+    for (const cmd of z80Cmds) {
+        const z80Upper = cmd.z80.toUpperCase();
+        const normalized = z80Upper.replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
+        
+        // Check if command has placeholders (now all uppercase, easy to detect)
+        const hasXXXX = /\bXXXX\b/.test(cmd.z80);           // 16-bit value
+        const hasIndirectXXXX = /\(XXXX\)/.test(cmd.z80);   // indirect 16-bit
+        const hasXX = /\bXX\b/.test(cmd.z80);               // 8-bit value
+        const hasIndirectXX = /\(XX\)/.test(cmd.z80);       // indirect 8-bit (port)
+        const hasYY = /\bYY\b/.test(cmd.z80);               // relative offset
+        const hasZZ = /\+ZZ\)/.test(cmd.z80);               // indexed displacement
+        
+        if (hasXXXX || hasIndirectXXXX || hasXX || hasIndirectXX || hasYY || hasZZ) {
+            // Pattern command - extract mnemonic
+            const mnemonic = normalized.split(/\s+/)[0];
+            
+            if (!patternCmds.has(mnemonic)) {
+                patternCmds.set(mnemonic, []);
+            }
+            
+            patternCmds.get(mnemonic)!.push({
+                pattern: normalized,
+                is16bit: hasXXXX || hasIndirectXXXX,
+                isRelative: hasYY
+            });
+        } else {
+            // Exact command - no placeholders
+            exactCmds.add(normalized);
+            // record operand signature: normalized without mnemonic
+            const parts = normalized.split(/\s+/);
+            const mnemonic = parts[0];
+            const ops = parts.slice(1).join(' ');
+            if (!exactOperandsMap.has(mnemonic)) exactOperandsMap.set(mnemonic, new Set());
+            exactOperandsMap.get(mnemonic)!.add(ops);
+        }
+    }
+
+})();
+
+// ============================================
+// PARSING FUNCTIONS
+// ============================================
+
+/**
+ * Split operands by comma, respecting parentheses
+ */
+function splitOperands(operandStr: string): string[] {
+    const operands: string[] = [];
+    let current = '';
+    let parenDepth = 0;
+    
+    for (const char of operandStr) {
+        if (char === '(') {
+            parenDepth++;
+            current += char;
+        } else if (char === ')') {
+            parenDepth--;
+            current += char;
+        } else if (char === ',' && parenDepth === 0) {
+            operands.push(current.trim());
+            current = '';
+        } else {
+            current += char;
+        }
+    }
+    
+    if (current.trim()) {
+        operands.push(current.trim());
+    }
+    
+    return operands;
+}
+
+/**
+ * Parse a Z80 assembly line
+ */
+function parseZ80Line(lineText: string, lineNumber: number): Z80ParsedLine | null {
+    const trimmed = lineText.trim();
+    
+    if (!trimmed) {
+        return null;
+    }
+    
+    // Skip lines that start with a line number followed by a BASIC keyword
+    // BUT NOT if they have a 4-digit hex address after whitespace
+    if (/^\d+\s+[A-Za-z]/i.test(trimmed)) {
+        // Check if this is "10 CODE" - allow it but don't parse as Z80
+        if (/^\d+\s+CODE\s*$/i.test(trimmed)) {
+            return null;  // CODE statement itself isn't Z80
+        }
+        // Check if it's a BASIC line (has line number, then BASIC command)
+        // These don't have hex addresses
+        if (!/^\d+\s+[0-9A-Fa-f]{4}\s+/.test(trimmed)) {
+            return null;  // It's a BASIC line
+        }
+    }
+    
+    const result: Z80ParsedLine = {
+        address: '',
+        raw: lineText,
+        lineNumber
+    };
+    
+    // Strip comment first
+    let workingText = trimmed;
+    const commentIdx = workingText.indexOf(';');
+    if (commentIdx !== -1) {
+        result.comment = workingText.slice(commentIdx + 1).trim();
+        workingText = workingText.slice(0, commentIdx).trim();
+    }
+    
+    if (!workingText) {
+        return result;
+    }
+    
+    // Extract 4-digit hex address (may be preceded by optional whitespace or line number)
+    // Pattern: optional digits, whitespace, then 4 hex digits
+    const addrMatch = /^(?:\d+\s+)?([0-9A-Fa-f]{4})\s+(.*)$/.exec(workingText);
+    if (addrMatch) {
+        result.address = addrMatch[1].toUpperCase();
+        workingText = addrMatch[2].trim();
+    } else {
+        // No address - might just be whitespace + instruction
+        // Remove leading line number if present
+        workingText = workingText.replace(/^\d+\s+/, '');
+    }
+    
+    // Check for label (ends with colon)
+    const labelMatch = /^([A-Za-z][A-Za-z0-9]*):\s*(.*)$/.exec(workingText);
+    if (labelMatch) {
+        result.label = labelMatch[1].toUpperCase();
+        workingText = labelMatch[2].trim();
+    }
+    
+    // Check for directives
+    const directiveMatch = /^(DB|DW|DS)\s+(.*)$/i.exec(workingText);
+    if (directiveMatch) {
+        result.isDirective = true;
+        result.directiveType = directiveMatch[1].toUpperCase() as 'DB' | 'DW' | 'DS';
+        result.directiveValue = directiveMatch[2].trim();
+        return result;
+    }
+    
+    // Parse mnemonic and operands
+    if (workingText) {
+        const spaceIdx = workingText.search(/\s/);
+        
+        if (spaceIdx === -1) {
+            result.mnemonic = workingText.toUpperCase();
+        } else {
+            result.mnemonic = workingText.slice(0, spaceIdx).toUpperCase();
+            const operandStr = workingText.slice(spaceIdx).trim();
+            if (operandStr) {
+                result.operands = splitOperands(operandStr);
+            }
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * Detect CODE blocks in document
+ */
+function detectCodeBlocks(lines: string[]): CodeBlock[] {
+    const blocks: CodeBlock[] = [];
+    const errors: Z80Error[] = [];
+    let inCodeBlock = false;
+    let currentBlock: CodeBlock | null = null;
+
+    const basicCommands = /^(ADJSPR|ANGLE|ARC|ATTR|BAUD|CIRCLE|CLOCK|CLEAR|CLS|CODE|COLOUR|CRVS|CSR|CTLSPR|DATA|DIM|DRAW|DSI|EDITOR|GENPAT|INK|INPUT|LEN|LET|LINE|LLIST|LPRINT|LOAD|MVSPR|NEW|NODDY|OUT|PAPER|PEEK|PHI|PI|PLOD|PLOT|POKE|PRINT|RAND|READ|REM|RESTORE|RND|SAVE|SBUF|SOUND|SPRITE|USER|VIEW|VS|CHR\\$|GR\\$|LEFT\\$|MID\\$|RIGHT\\$|STR\\$|INKEY\\$|SPK\\$|TIME\\$|ABS|ASC|ATN|COS|EXP|INP|INT|LN|MOD|SGN|SIN|SQR|TAN|USR|VAL|CONT|ELSE|FOR|GOSUB|GOTO|IF|NEXT|ON|PAUSE|RETURN|STEP|STOP|THEN|TO)\b/i;
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        if (!trimmed) continue;
+
+        // Check for CODE statement: "10 CODE" or similar
+        if (/^\d+\s+CODE\s*$/i.test(trimmed)) {
+            if (inCodeBlock && currentBlock) {
+                currentBlock.endLine = i - 1;
+                blocks.push(currentBlock);
+                errors.push({
+                    line: i,
+                    start: 0,
+                    end: 50,
+                    message: `DEBUG: Ended CODE block at line ${i - 1}`,
+                    severity: 'info'
+                });
+            }
+
+            currentBlock = {
+                startLine: i,
+                endLine: -1,
+                baseAddress: 0x4000,
+                lines: [],
+                errors: []
+            };
+            inCodeBlock = true;
+            errors.push({
+                line: i,
+                start: 0,
+                end: 50,
+                message: `DEBUG: Started CODE block at line ${i}`,
+                severity: 'info'
+            });
+            continue;
+        }
+
+        if (inCodeBlock) {
+            const basicLineMatch = /^(\d+)\s+([A-Za-z]+)/.exec(trimmed);
+            if (basicLineMatch) {
+                const possibleKeyword = basicLineMatch[2].toUpperCase();
+                // Only end block if it's a BASIC keyword AND not followed by hex address pattern
+                if (basicCommands.test(possibleKeyword) && !/^\d+\s+[0-9A-Fa-f]{4}\s+/.test(trimmed)) {
+                    if (currentBlock) {
+                        currentBlock.endLine = i - 1;
+                        blocks.push(currentBlock);
+                        errors.push({
+                            line: i,
+                            start: 0,
+                            end: 50,
+                            message: `DEBUG: Ended CODE block at line ${i - 1} due to BASIC keyword: ${possibleKeyword}`,
+                            severity: 'info'
+                        });
+                    }
+                    inCodeBlock = false;
+                    currentBlock = null;
+                    continue;
+                }
+            }
+
+            if (currentBlock) {
+                const parsed = parseZ80Line(line, i);
+                if (parsed) {
+                    currentBlock.lines.push(parsed);
+                }
+            }
+        }
+    }
+
+    if (inCodeBlock && currentBlock) {
+        currentBlock.endLine = lines.length - 1;
+        blocks.push(currentBlock);
+        errors.push({
+            line: lines.length - 1,
+            start: 0,
+            end: 50,
+            message: `DEBUG: CODE block ended at EOF, line ${lines.length - 1}`,
+            severity: 'info'
+        });
+    }
+
+    errors.push({
+        line: 0,
+        start: 0,
+        end: 50,
+        message: `[DEBUG] Total blocks found: ${blocks.length}`,
+        severity: 'info'
+    });
+    blocks.forEach((block, b) => {
+        errors.push({
+            line: block.startLine,
+            start: 0,
+            end: 50,
+            message: `[DEBUG] Block ${b}: lines ${block.startLine} to ${block.endLine}`,
+            severity: 'info'
+        });
+    });
+
+    // Attach errors to the first block for diagnostics
+    if (blocks.length > 0) {
+        blocks[0].errors = errors;
+    }
+    return blocks;
+}
+
+// ============================================
+// STEP 3, 4, 5, 6: VALIDATION
+// ============================================
+
+/**
+ * Check if operand is a hex number (#prefix)
+ */
+function isHexOperand(op: string): boolean {
+    return /^[#£][0-9A-Fa-f]+$/.test(op.trim());
+}
+
+/**
+ * Check if operand is a decimal number
+ */
+function isDecimalOperand(op: string): boolean {
+    return /^[0-9]+$/.test(op.trim());
+}
+
+/**
+ * Check if operand is a label (starts with A-Z)
+ */
+function isLabelOperand(op: string): boolean {
+    const trimmed = op.trim().toUpperCase();
+    // Must start with letter, be alphanumeric, and NOT be a register/condition
+    if (!/^[A-Z][A-Z0-9]*$/.test(trimmed)) {
+        return false;
+    }
+    const reserved = new Set([
+        'A', 'B', 'C', 'D', 'E', 'H', 'L', 'I', 'R',
+        'AF', 'BC', 'DE', 'HL', 'SP', 'IX', 'IY',
+        'NZ', 'Z', 'NC', 'PO', 'PE', 'P', 'M'
+    ]);
+    return !reserved.has(trimmed);
+}
+
+/**
+ * Parse hex value from operand
+ */
+function parseHexValue(op: string): number {
+    const match = /^[#£]([0-9A-Fa-f]+)$/.exec(op.trim());
+    if (match) {
+        return parseInt(match[1], 16);
+    }
+    return 0;
+}
+
+/**
+ * Get hex digit count
+ */
+function getHexDigitCount(op: string): number {
+    const match = /^[#£]([0-9A-Fa-f]+)$/.exec(op.trim());
+    return match ? match[1].length : 0;
+}
+
+/**
+ * Build normalized instruction for exact matching
+ */
+function buildNormalizedInstruction(mnemonic: string, operands?: string[]): string {
+    if (!operands || operands.length === 0) {
+        return mnemonic.toUpperCase();
+    }
+    
+    const normalizedOps = operands.map(op => op.toUpperCase().trim());
+    return `${mnemonic.toUpperCase()} ${normalizedOps.join(',')}`;
+}
+
+/**
+ * Replace value operands with placeholders for pattern matching
+ * Uses: XXXX (16-bit), XX (8-bit), YY (relative), ZZ (displacement)
+ */
+function replaceWithPlaceholders(mnemonic: string, operands: string[]): string {
+    const upperMnemonic = mnemonic.toUpperCase();
+    
+    const replacedOps = operands.map((op, idx) => {
+        const upper = op.toUpperCase().trim();
+        
+        // Keep registers, conditions, indirect registers as-is
+        if (/^(A|B|C|D|E|H|L|I|R)$/.test(upper)) return upper;
+        if (/^(AF|BC|DE|HL|SP|IX|IY|AF')$/.test(upper)) return upper;
+        if (/^(NZ|Z|NC|C|PO|PE|P|M)$/.test(upper)) return upper;
+        if (/^\((HL|BC|DE|SP|C|IX|IY)\)$/.test(upper)) return upper;
+        
+        // Indexed addressing: (IX+nn) -> (IX+ZZ)
+        if (/^\(IX[+-]/.test(upper)) {
+            return '(IX+ZZ)';
+        }
+        if (/^\(IY[+-]/.test(upper)) {
+            return '(IY+ZZ)';
+        }
+        
+        // Indirect port number for IN/OUT: (xx) -> (XX)
+        if (upperMnemonic === 'OUT' || upperMnemonic === 'IN') {
+            if (/^\([#£]?[0-9A-Fa-f]+\)$/.test(upper) || /^\([0-9]+\)$/.test(upper)) {
+                return '(XX)';
+            }
+        }
+        
+        // Indirect address: (#XXXX) or (decimal) or (label) -> (XXXX)
+        if (/^\([#£][0-9A-Fa-f]+\)$/.test(upper)) {
+            return '(XXXX)';
+        }
+        if (/^\([0-9]+\)$/.test(upper)) {
+            return '(XXXX)';
+        }
+        if (/^\([A-Z][A-Z0-9]*\)$/.test(upper)) {
+            return '(XXXX)';
+        }
+        
+        // Bit numbers 0-7 - keep as-is
+        if (/^[0-7]$/.test(upper) && ['BIT', 'SET', 'RES'].includes(upperMnemonic)) {
+            return upper;
+        }
+        
+        // IM mode - keep as-is
+        if (upperMnemonic === 'IM' && /^[0-2]$/.test(upper)) return upper;
+        
+        // RST addresses - keep as-is
+        if (upperMnemonic === 'RST') return upper;
+        
+        // For JR/DJNZ - relative offset -> YY
+        if (upperMnemonic === 'JR' || upperMnemonic === 'DJNZ') {
+            if (/^(NZ|Z|NC|C)$/.test(upper)) return upper;
+            return 'YY';
+        }
+        
+        // For JP/CALL - 16-bit address -> XXXX
+        if (upperMnemonic === 'JP' || upperMnemonic === 'CALL') {
+            if (/^(NZ|Z|NC|C|PO|PE|P|M)$/.test(upper)) return upper;
+            if (/^\((HL|IX|IY)\)$/.test(upper)) return upper;
+            return 'XXXX';
+        }
+        
+        // For LD - determine 8-bit or 16-bit based on first operand
+        if (upperMnemonic === 'LD' && idx === 1) {
+            const firstOp = operands[0]?.toUpperCase().trim() || '';
+            // 16-bit register pairs use XXXX
+            if (/^(BC|DE|HL|SP|IX|IY)$/.test(firstOp)) return 'XXXX';
+            // 8-bit contexts use XX
+            if (/^(A|B|C|D|E|H|L)$/.test(firstOp)) return 'XX';
+            if (/^\(HL\)$/.test(firstOp)) return 'XX';
+            if (/^\(IX[+-]/.test(firstOp)) return 'XX';
+            if (/^\(IY[+-]/.test(firstOp)) return 'XX';
+        }
+        
+        // For other 8-bit operations (ADD A,n; SUB n; AND n; etc.)
+        if (['ADD', 'ADC', 'SUB', 'SBC', 'AND', 'XOR', 'OR', 'CP'].includes(upperMnemonic)) {
+            // If it's a value, it's 8-bit
+            if (isHexOperand(upper) || isDecimalOperand(upper)) {
+                return 'XX';
+            }
+        }
+        
+        // Hex value - determine size
+        if (isHexOperand(upper)) {
+            const val = parseHexValue(upper);
+            return val > 255 ? 'XXXX' : 'XX';
+        }
+        
+        // Decimal value - determine size
+        if (isDecimalOperand(upper)) {
+            const val = parseInt(upper, 10);
+            return val > 255 ? 'XXXX' : 'XX';
+        }
+        
+        // Label -> XXXX (labels are 16-bit addresses)
+        if (isLabelOperand(upper)) {
+            return 'XXXX';
+        }
+        
+        return upper;
+    });
+    
+    return `${upperMnemonic} ${replacedOps.join(',')}`;
+}
+
+/**
+ * Determine whether a given operand position for a mnemonic may accept a label/hex/decimal
+ * by checking existing pattern commands for that mnemonic. Returns true if at least one
+ * pattern could accept a value placeholder (XXXX/XX/YY/ZZ) at the given operand index
+ * when the other operands are compatible with the pattern.
+ */
+function operandPositionAllowsLabel(mnemonic: string, operands: string[], opIdx: number): boolean {
+    const patterns = patternCmds.get(mnemonic);
+    if (!patterns || patterns.length === 0) return false;
+
+    const upperOperands = operands.map(o => o.toUpperCase().trim());
+
+    for (const p of patterns) {
+        const parts = p.pattern.split(/[,\s]+/).filter(Boolean); // parts[0]=MNEMONIC, parts[1]=op1, ...
+        // If operands count doesn't match pattern operands, skip
+        if (parts.length - 1 !== operands.length) continue;
+
+        let ok = true;
+        for (let j = 0; j < operands.length; j++) {
+            const part = parts[j + 1];
+            const op = upperOperands[j];
+
+            // placeholders always match
+            if (['XXXX', 'XX', 'YY', 'ZZ'].includes(part)) continue;
+
+            // allow common register/indirect tokens to match literally
+            if (part === op) continue;
+
+            // parenthesised forms in pattern like (HL) should match exact op
+            if (/^\(.+\)$/.test(part) && part === op) continue;
+
+            ok = false;
+            break;
+        }
+
+        if (!ok) continue;
+
+        const wanted = parts[opIdx + 1];
+        if (['XXXX', 'XX', 'YY', 'ZZ'].includes(wanted)) return true;
+    }
+
+    return false;
+}
+
+/**
+ * Validate a single CODE block
+ */
+function validateCodeBlock(lines: string[], startLine: number): Z80Error[] {
+    const errors: Z80Error[] = [];
+
+    // `lines` here are expected to be the assembly lines for a single CODE block.
+    // The wrapper `validateCodeBlocks` is responsible for finding blocks and
+    // calling this function per-block. Do not re-run `detectCodeBlocks` here —
+    // that caused nested recursion and premature termination when large blocks
+    // contained tokens that looked like BASIC line starts.
+    const labelDefs = new Map<string, LabelDef>();
+    const labelUsages: LabelUsage[] = [];
+    
+    // Current address tracking
+    let currentAddress = 0x4000;
+    
+    // ============================================
+    // FIRST PASS: Collect labels and their addresses
+    // ============================================
+    
+    for (let i = 0; i < lines.length; i++) {
+        const parsed = parseZ80Line(lines[i], startLine + i);
+        
+        if (!parsed) continue;
+        
+        // Use address from line if present
+        if (parsed.address) {
+            currentAddress = parseInt(parsed.address, 16);
+        }
+        
+        // Record label definition
+        if (parsed.label) {
+            labelDefs.set(parsed.label, {
+                name: parsed.label,
+                lineNumber: startLine + i,
+                address: currentAddress
+            });
+        }
+        
+        // Calculate next address based on instruction length
+        if (parsed.mnemonic && !parsed.isDirective) {
+            const instrLength = getInstructionLength(parsed.mnemonic, parsed.operands);
+            currentAddress += instrLength;
+        } else if (parsed.isDirective) {
+            currentAddress += getDirectiveLength(parsed);
+        }
+    }
+
+        // DEBUG: Show labels found
+    errors.push({
+        line: startLine,
+        start: 0,
+        end: 50,
+        message: `DEBUG LABELS: Found ${labelDefs.size} labels: ${Array.from(labelDefs.keys()).slice(0, 10).join(', ')}...`,
+        severity: 'info'
+    });
+    
+    // ============================================
+    // SECOND PASS: Validate instructions
+    // ============================================
+    
+    currentAddress = 0x4000;
+    
+    for (let i = 0; i < lines.length; i++) {
+        const parsed = parseZ80Line(lines[i], startLine + i);
+
+        // DEBUG: Show specific problem lines (47=PUSH AFA, 59=LD A,DZ)
+        const docLine = startLine + i;
+        if (docLine === 47 || docLine === 59 || docLine === 69 || docLine === 80) {
+            errors.push({
+                line: docLine,
+                start: 0,
+                end: lines[i]?.length || 50,
+                message: `DEBUG LINE ${docLine}: parsed=${parsed !== null}, mnemonic="${parsed?.mnemonic || 'null'}", operands=${JSON.stringify(parsed?.operands || [])}`,
+                severity: 'info'
+            });
+        }
+
+
+        if (!parsed || !parsed.mnemonic || parsed.isDirective) continue;
+        
+        // Update current address
+        if (parsed.address) {
+            currentAddress = parseInt(parsed.address, 16);
+        }
+        
+        const mnemonic = parsed.mnemonic.toUpperCase();
+        const operands = parsed.operands || [];
+        
+        // Build instruction string for matching
+        const instruction = buildNormalizedInstruction(mnemonic, operands);
+
+        // DEBUG: Show problem lines validation
+        if (docLine === 47 || docLine === 59 || docLine === 69 || docLine === 80) {
+            errors.push({
+                line: docLine,
+                start: 0,
+                end: lines[i]?.length || 50,
+                message: `DEBUG VALIDATE ${docLine}: instruction="${instruction}", exactMatch=${exactCmds.has(instruction)}`,
+                severity: 'info'
+            });
+        }
+        
+        
+        // ============================================
+        // STEP 3: Check exact match (no placeholders)
+        // ============================================
+        
+        if (exactCmds.has(instruction)) {
+            // Exact match - valid instruction
+            currentAddress += getInstructionLength(mnemonic, operands);
+            continue;
+        }
+
+       
+        
+        // ============================================
+        // STEP 4: Check pattern match (with placeholders)
+        // ============================================
+        
+        const patterns = patternCmds.get(mnemonic);
+        // Early validation: if an operand looks like a label/number but the mnemonic
+        // does not allow a value at that operand position (no pattern accepts XXXX/XX/YY/ZZ
+        // for that slot), report an error immediately. This handles cases like
+        // `PUSH AFA` where PUSH only accepts register pairs (AF/BC/DE/HL/IX/IY/etc).
+        let earlyError = false;
+        for (let opIdx = 0; opIdx < operands.length; opIdx++) {
+            const op = operands[opIdx].trim();
+            const upper = op.toUpperCase();
+            // If operand is a hex/decimal or looks like a label, check if allowed
+            if (isHexOperand(op) || isDecimalOperand(op) || isLabelOperand(upper)) {
+                // If any pattern allows a value here, accept it
+                const patternAllows = operandPositionAllowsLabel(mnemonic, operands, opIdx);
+
+                // Build canonical operand signature for exact-forms lookup
+                const operandSignature = operands.map(o => o.toUpperCase().trim()).join(',');
+                const exactSet = exactOperandsMap.get(mnemonic);
+
+                if (!patternAllows) {
+                    if (exactSet) {
+                        // If the exact set does not contain this exact operand signature, it's invalid
+                        if (!exactSet.has(operandSignature)) {
+                            errors.push({
+                                line: startLine + i,
+                                start: Math.max(0, lines[i].indexOf(op)),
+                                end: Math.max(0, lines[i].indexOf(op)) + op.length,
+                                message: `Invalid operand for ${mnemonic}: ${op}`,
+                                severity: 'error'
+                            });
+                            earlyError = true;
+                        }
+                    } else {
+                        // No pattern and no exact operand info -> invalid
+                        errors.push({
+                            line: startLine + i,
+                            start: Math.max(0, lines[i].indexOf(op)),
+                            end: Math.max(0, lines[i].indexOf(op)) + op.length,
+                            message: `Invalid operand for ${mnemonic}: ${op}`,
+                            severity: 'error'
+                        });
+                        earlyError = true;
+                    }
+                }
+            }
+        }
+        if (earlyError) continue;
+        
+        if (!patterns) {
+            // No patterns for this mnemonic - check if mnemonic is valid at all
+            const allMnemonics = new Set<string>();
+            for (const cmd of z80Cmds) {
+                allMnemonics.add(cmd.z80.split(/\s+/)[0].toUpperCase());
+            }
+            
+            if (!allMnemonics.has(mnemonic)) {
+                errors.push({
+                    line: startLine + i,
+                    start: 0,
+                    end: lines[i].length,
+                    message: `Unknown Z80 mnemonic: ${mnemonic}`,
+                    severity: 'error'
+                });
+            } else {
+                errors.push({
+                    line: startLine + i,
+                    start: 0,
+                    end: lines[i].length,
+                    message: `Invalid operands for ${mnemonic}: ${operands.join(',')}`,
+                    severity: 'error'
+                });
+            }
+            continue;
+        }
+        
+        // Replace values with placeholders and try to match
+        const withPlaceholders = replaceWithPlaceholders(mnemonic, operands);
+
+        // DEBUG: Show pattern matching attempt
+        errors.push({
+            line: startLine + i,
+            start: 0,
+            end: lines[i].length,
+            message: `DEBUG: withPlaceholders="${withPlaceholders}" patterns=${JSON.stringify(patterns?.map(p => p.pattern))}`,
+            severity: 'info'
+        });
+        
+
+        let matched = false;
+        let matchedPattern: { pattern: string; is16bit: boolean; isRelative: boolean } | null = null;
+        
+        for (const p of patterns) {
+            if (p.pattern === withPlaceholders) {
+                matched = true;
+                matchedPattern = p;
+                break;
+            }
+        }
+        
+        if (!matched) {
+            // Try to provide helpful error message
+            errors.push({
+                line: startLine + i,
+                start: 0,
+                end: lines[i].length,
+                message: `Invalid Z80 instruction: ${instruction}`,
+                severity: 'error'
+            });
+            continue;
+        }
+        
+        // ============================================
+        // STEP 4a, 4b, 4c: Validate operand values
+        // ============================================
+        
+        for (let opIdx = 0; opIdx < operands.length; opIdx++) {
+            const op = operands[opIdx].trim();
+            const upperOp = op.toUpperCase();
+            
+            // 4a: Hex value with # prefix
+            if (isHexOperand(op)) {
+                const val = parseHexValue(op);
+                const digits = getHexDigitCount(op);
+                
+                // Check hex digit count
+                if (digits > 4) {
+                    errors.push({
+                        line: startLine + i,
+                        start: lines[i].indexOf(op),
+                        end: lines[i].indexOf(op) + op.length,
+                        message: `Invalid hex value: ${op} (maximum 4 hex digits)`,
+                        severity: 'error'
+                    });
+                }
+                
+                // Check value range based on context
+                if (matchedPattern) {
+                    // Determine if this operand should be 8-bit or 16-bit
+                    const patternParts = matchedPattern.pattern.split(/[\s,]+/);
+                    const opPattern = patternParts[opIdx + 1] || '';
+                    
+                    if (opPattern === 'N' && val > 255) {
+                        errors.push({
+                            line: startLine + i,
+                            start: lines[i].indexOf(op),
+                            end: lines[i].indexOf(op) + op.length,
+                            message: `Value ${op} exceeds 8-bit range (0-255)`,
+                            severity: 'error'
+                        });
+                    }
+                }
+            }
+            // 4b: Decimal value
+            else if (isDecimalOperand(op)) {
+                const val = parseInt(op, 10);
+                
+                if (val > 65535) {
+                    errors.push({
+                        line: startLine + i,
+                        start: lines[i].indexOf(op),
+                        end: lines[i].indexOf(op) + op.length,
+                        message: `Value ${op} exceeds 16-bit range (0-65535)`,
+                        severity: 'error'
+                    });
+                }
+            }
+            // 4c: Label - record usage for later cross-check
+            else if (isLabelOperand(upperOp)) {
+                const isRelative = mnemonic === 'JR' || mnemonic === 'DJNZ';
+                labelUsages.push({
+                    name: upperOp,
+                    lineNumber: startLine + i,
+                    instructionAddress: currentAddress,
+                    isRelativeJump: isRelative
+                });
+            }
+        }
+        
+        currentAddress += getInstructionLength(mnemonic, operands);
+    }
+    
+    // ============================================
+    // STEP 5: Cross-check label usages
+    // ============================================
+    
+    for (const usage of labelUsages) {
+        if (!labelDefs.has(usage.name)) {
+            errors.push({
+                line: usage.lineNumber,
+                start: 0,
+                end: lines[usage.lineNumber - startLine]?.length || 0,
+                message: `Label not found: ${usage.name}`,
+                severity: 'error'
+            });
+        }
+    }
+    
+    // ============================================
+    // STEP 6: Check relative jump ranges
+    // ============================================
+    
+    for (const usage of labelUsages) {
+        if (!usage.isRelativeJump) continue;
+        
+        const labelDef = labelDefs.get(usage.name);
+        if (!labelDef) continue;  // Already reported as not found
+        
+        // Calculate relative offset
+        // JR/DJNZ are 2 bytes, offset is calculated from end of instruction
+        const instrEndAddr = usage.instructionAddress + 2;
+        const targetAddr = labelDef.address;
+        const offset = targetAddr - instrEndAddr;
+        
+        // Valid range: -128 to +127
+        if (offset < -128 || offset > 127) {
+            errors.push({
+                line: usage.lineNumber,
+                start: 0,
+                end: lines[usage.lineNumber - startLine]?.length || 0,
+                message: `Relative jump to ${usage.name} is out of range (offset: ${offset}, valid: -128 to +127)`,
+                severity: 'error'
+            });
+        }
+    }
+    
+    return errors;
+}
+
+/**
+ * Get instruction length from z80Cmds table
+ */
+function getInstructionLength(mnemonic: string, operands?: string[]): number {
+    const instruction = buildNormalizedInstruction(mnemonic, operands);
+    
+    // Try exact match first
+    for (const cmd of z80Cmds) {
+        const cmdNorm = cmd.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
+        if (cmdNorm === instruction) {
+            return cmd.length;
+        }
+    }
+    
+    // Try with placeholders
+    if (operands && operands.length > 0) {
+        const withPlaceholders = replaceWithPlaceholders(mnemonic, operands);
+        for (const cmd of z80Cmds) {
+            const cmdNorm = cmd.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
+            if (cmdNorm === withPlaceholders) {
+                return cmd.length;
+            }
+        }
+    }
+    
+    // Default to 1 if not found
+    return 1;
+}
+
+/**
+ * Get directive length (DB, DW, DS)
+ */
+function getDirectiveLength(parsed: Z80ParsedLine): number {
+    if (!parsed.isDirective || !parsed.directiveValue) return 0;
+    
+    switch (parsed.directiveType) {
+        case 'DB':
+            // Count bytes: strings count characters, numbers count 1 each
+            if (parsed.directiveValue.startsWith('"')) {
+                return parsed.directiveValue.length - 2;  // Minus quotes
+            }
+            return 1;
+        case 'DW':
+            return 2;
+        case 'DS':
+            return parseInt(parsed.directiveValue, 10) || 1;
+        default:
+            return 0;
+    }
+}
+
+/**
+ * Validate all CODE blocks in document
+ */
+function validateCodeBlocks(documentLines: string[]): Z80Error[] {
+    const allErrors: Z80Error[] = [];
+    const codeBlocks = detectCodeBlocks(documentLines);
+    
+    for (const block of codeBlocks) {
+        const assemblyLines: string[] = [];
+        for (let i = block.startLine + 1; i <= block.endLine; i++) {
+            if (i < documentLines.length) {
+                assemblyLines.push(documentLines[i]);
+            }
+        }
+        
+        const blockErrors = validateCodeBlock(assemblyLines, block.startLine + 1);
+        allErrors.push(...blockErrors);
+    }
+    
+    return allErrors;
+}
+
+/**
+ * Wrapper for single instruction validation
+ */
+function validateZ80Instruction(parsed: Z80ParsedLine): Z80Error[] {
+    return validateCodeBlock([parsed.raw], parsed.lineNumber);
+}
+
+/**
+ * Stub functions for compatibility
+ */
+function collectLabels(lines: string[], startLine: number): Map<string, LabelDef> {
+    const labels = new Map<string, LabelDef>();
+    let addr = 0x4000;
+    
+    for (let i = 0; i < lines.length; i++) {
+        const parsed = parseZ80Line(lines[i], startLine + i);
+        if (!parsed) continue;
+        
+        if (parsed.address) {
+            addr = parseInt(parsed.address, 16);
+        }
+        
+        if (parsed.label) {
+            labels.set(parsed.label, {
+                name: parsed.label,
+                lineNumber: startLine + i,
+                address: addr
+            });
+        }
+    }
+    
+    return labels;
+}
+
+function normalizeInstruction(mnemonic: string, operands?: string[]): string {
+    return replaceWithPlaceholders(mnemonic, operands || []);
+}
+
+function findZ80Command(normalizedInstruction: string): typeof z80Cmds[0] | null {
+    for (const cmd of z80Cmds) {
+        if (cmd.z80.toUpperCase() === normalizedInstruction.toUpperCase()) {
+            return cmd;
+        }
+    }
+    return null;
+}
+
+function getZ80InstructionInfo(word: string): string | null {
+    const upperWord = word.toUpperCase();
+    const matches = z80Cmds.filter(cmd => 
+        cmd.z80.toUpperCase().startsWith(upperWord + ' ') || 
+        cmd.z80.toUpperCase() === upperWord
+    );
+    
+    if (matches.length === 0) return null;
+    
+    let doc = `**${upperWord}** - Z80 Instruction\n\n`;
+    doc += `| Opcode | Instruction | Bytes |\n`;
+    doc += `|--------|-------------|-------|\n`;
+    
+    for (const match of matches.slice(0, 15)) {
+        doc += `| \`${match.opCode}\` | ${match.z80} | ${match.length} |\n`;
+    }
+    
+    if (matches.length > 15) {
+        doc += `\n*...and ${matches.length - 15} more variants*`;
+    }
+    
+    return doc;
+}
+
+// Keep LabelInfo as alias for LabelDef for compatibility
+type LabelInfo = LabelDef;
+
+function validateZ80InstructionWithLabels(parsed: Z80ParsedLine, knownLabels: Map<string, LabelInfo>): Z80Error[] {
+    return validateCodeBlock([parsed.raw], parsed.lineNumber);
+}
+
+// Export everything
+export { 
+    z80Cmds,
+    Z80Error,
+    Z80ParsedLine,
+    CodeBlock,
+    LabelInfo,
+    parseZ80Line,
+    splitOperands,
+    detectCodeBlocks,
+    collectLabels,
+    normalizeInstruction,
+    findZ80Command,
+    validateZ80Instruction,
+    validateZ80InstructionWithLabels,
+    validateCodeBlock,
+    validateCodeBlocks,
+    getZ80InstructionInfo
+};

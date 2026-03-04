@@ -1,0 +1,140 @@
+Saving a MTX datafile in VS code
+
+Persistence: output is a local array created inside convertTextToHex() and returned by it. It is not kept across sessions unless some code stores it somewhere (file, global state, or extension context). You must call convertTextToHex() each time you want to (re)generate the array.
+
+Restarting VS Code: Pressing Developer: Reload Window / restarting the extension host will not automatically run convertTextToHex() or write any file — it only reloads the extension. You only need to restart if you changed extension code and want those changes loaded.
+
+How to save the generated output to a file (quick, runnable method):
+
+Create a small Node script (e.g. scripts/gen.js) in the extension root:
+
+// scripts/gen.js
+const fs = require('fs');
+const { convertTextToHex } = require('../out/extension.js'); // adjust path if needed
+
+const inPath = process.argv[2];
+const outPath = process.argv[3] || 'output.bin';
+if (!inPath) { console.error('Usage: node scripts/gen.js <input.bas> [out.bin]'); process.exit(1); }
+
+const src = fs.readFileSync(inPath, 'utf8');
+const bytes = convertTextToHex(src);          // number[] returned
+const buf = Buffer.from(bytes);               // binary buffer
+fs.writeFileSync(outPath, buf);
+console.log(`Wrote ${bytes.length} bytes to ${outPath}`);
+
+Run it in the workspace terminal:
+
+node scripts/gen.js path/to/yourSource.bas panelcod.bin
+
+This writes the raw bytes as a binary file. If you prefer a human-readable hex/text file, replace Buffer.from(bytes) with Buffer.from(bytes.join(',')+'\n','utf8') or similar.
+If you want this integrated into the extension (a command from the Command Palette that saves the file), I can:
+
+add a command in package.json and an implementation in extension.ts that calls convertTextToHex() for the active editor text and uses vscode.workspace.fs.writeFile() to save the result; or
+provide the standalone Node script above (simpler, immediate).
+
+command palette option
+changes to package.json
+ ]
+  ,
+    "commands": [
+      {
+        "command": "mtxbasic.saveHex",
+        "title": "MTX: Save HEX from active editor"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "mtxbasic.saveHex",
+          "when": "editorLangId == mtxbasic"
+        }
+      ]
+    }
+   },
+   
+   additions to extension.ts
+          // Command: save converted HEX bytes from active editor to a file
+        const saveHexCmd = vscode.commands.registerCommand('mtxbasic.saveHex', async () => {
+                const editor = vscode.window.activeTextEditor;
+                if (!editor) {
+                        vscode.window.showErrorMessage('No active MTX BASIC editor');
+                        return;
+                }
+                const doc = editor.document;
+                const text = doc.getText();
+                try {
+                        const bytes = convertTextToHex(text);
+                        const defaultFileName = doc.uri && doc.uri.fsPath ? doc.uri.fsPath.replace(/\.[^.]*$/, '') + '.bin' : 'output.bin';
+                        const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(defaultFileName), saveLabel: 'Save HEX' });
+                        if (!uri) return;
+                        const data = Uint8Array.from(bytes);
+                        await vscode.workspace.fs.writeFile(uri, data);
+                        vscode.window.showInformationMessage(`Wrote ${bytes.length} bytes to ${uri.fsPath}`);
+                } catch (e) {
+                        vscode.window.showErrorMessage('Failed to generate or write HEX: ' + String(e));
+                }
+        });
+        ctx.subscriptions.push(saveHexCmd);
+ 
+         // #############################  START of REUSABLE COMMON FUNCTIONS #############################
+         
+ ctx.subscriptions.push(diagCollection);
+    // Command: save converted HEX bytes from active editor to a file
+    var saveHexCmd = vscode.commands.registerCommand('mtxbasic.saveHex', function () { return __awaiter(void 0, void 0, void 0, function () {
+        var editor, doc, text, bytes, defaultFileName, uri, data, e_1;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    editor = vscode.window.activeTextEditor;
+                    if (!editor) {
+                        vscode.window.showErrorMessage('No active MTX BASIC editor');
+                        return [2 /*return*/];
+                    }
+                    doc = editor.document;
+                    text = doc.getText();
+                    _a.label = 1;
+                case 1:
+                    _a.trys.push([1, 4, , 5]);
+                    bytes = convertTextToHex(text);
+                    defaultFileName = doc.uri && doc.uri.fsPath ? doc.uri.fsPath.replace(/\.[^.]*$/, '') + '.bin' : 'output.bin';
+                    return [4 /*yield*/, vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(defaultFileName), saveLabel: 'Save HEX' })];
+                case 2:
+                    uri = _a.sent();
+                    if (!uri) return [2 /*return*/];
+                    data = Uint8Array.from(bytes);
+                    return [4 /*yield*/, vscode.workspace.fs.writeFile(uri, data)];
+                case 3:
+                    _a.sent();
+                    vscode.window.showInformationMessage("Wrote " + bytes.length + " bytes to " + uri.fsPath);
+                    return [3 /*break*/, 5];
+                case 4:
+                    e_1 = _a.sent();
+                    vscode.window.showErrorMessage('Failed to generate or write HEX: ' + String(e_1));
+                    return [3 /*break*/, 5];
+                case 5: return [2 /*return*/];
+            }
+        });
+    });
+    ctx.subscriptions.push(saveHexCmd);
+     // #############################  START of REUSABLE COMMON FUNCTIONS #############################
+     
+     Progress update: I added a Command Palette command mtxbasic.saveHex and implemented it in the extension so you can save convertTextToHex() output.
+
+What I changed:
+
+File: package.json — registered mtxbasic.saveHex and added it to the Command Palette.
+File: extension.ts — added a command handler that converts the active editor text and saves bytes with vscode.workspace.fs.writeFile().
+File: extension.js — added the equivalent runtime JS so the command works without rebuilding.
+How to use the new command:
+
+Open an .bas file (language id mtxbasic) in the editor.
+Run the Command Palette (Ctrl+Shift+P) → choose "MTX: Save HEX from active editor".
+Pick a file path in the save dialog; the extension writes the raw bytes (binary) of convertTextToHex().
+Notes and alternatives:
+
+The implementation writes raw binary bytes (Uint8Array). If you prefer a human-readable hex/text file, tell me and I’ll change the format.
+If you edit TypeScript sources and recompile, keep extension.js in sync or rebuild so the runtime matches the source.
+Want me to:
+
+Change output to a hex/text representation instead of binary, or
+Add an option to choose binary vs hex in the save dialog?

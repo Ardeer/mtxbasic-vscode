@@ -1,0 +1,135 @@
+first example
+
+10 CODE
+4007 LD A,(START); Test of comments
+400A LD A,(START)
+400D START: DB 27,"K",0,1
+4011  RET
+
+4000 <length of code block> = 0x43 0x00
+     <line number> = 0x0A 0x00
+     <MTX BASIC token for CODE> = 0xC2
+     <length of assembly code> = 0x0B 0x00
+     <actual assembly code> =
+4007 0x3A 0x0D 0x40
+400A 0x3A 0x0D 0x40
+400D 0x1B 0x4B 0x00 0x01
+4011 0xC9
+
+MTX assembler directive information directly after the code above.
+
+<label> = 0x02
+<offset from start of code block> = 0x06 0x00 
+<label ascii chars> = 0x53 0x54 0x41 0x52 0xD4 (START)
+<type = word> = 0x00 & <number of times label used> = 0x02 
+<offset from start of code block to the reference> =  0x04 0x00 
+<offset from start of code block to the reference> = 0x01 0x00 
+<pad byte> = 0x00
+
+<DB> = 0x03 
+<offset from start of code block> = 0x06 0x00 
+<number of bytes> = 0x04 
+<number of ascii chars> = 0x07 
+<ascii chars> = 0x32 0xB7 0x22 0x4B 0xA2 0xB0 0xB1  (27"K"01)
+(NOTE: bit 7 set at end of each character, so 27 = 32 B7, if a single char, bit 7 is set,  1 = B1. no commas explicitly specified to save byte count).
+
+<comment> = 0x08 
+<offset from start of code block> = 0x00 0x00 
+<length of comment> = 0x11 
+<comment> = 0x54 0x65 0x73 0x74 0x81 0x6F 0x66 0x81 0x63 0x6F 0x6D 0x6D 0x65 0x6E 0x74 0x73 (Test of comments)
+(NOTE: if a space is present then bit 7 is set and for every consecutive space add 1, so 1 space = 0x81 and 4 spaces would be 0x84)
+<end of comment> = 0xFF 
+
+<end of code block> = 0xFF
+
+second example
+
+10 CODE
+4007 LD A,254
+4009 LD A,#1F
+400B LD HL,16391
+400E LD HL,#0CE3
+4011 LD HL,(DATA)
+4014 JR TEST
+4016 JR #4018
+4018 TEST: RET
+4019 DATA: DB "YES"
+401C RET
+
+4000 <length of code block> = 0x7C 0x00
+     <line number> = 0x0A 0x00
+     <MTX BASIC token for CODE> = 0xC2
+     <length of assembly code> = 0x16 0x00
+     <actual assembly code> =
+4007 0x3E 0xFE
+4009 0x3E 0x1F
+400B 0x21 0x07 0x40
+400E 0x21 0xE3 0x0C 
+4011 0x2A 0x19 0x40
+4014 0x18 0x02
+4016 0x18 0x00
+4018 0xC9
+4019 59 45 53
+401C C9
+
+MTX assembler directive information directly after the code above.
+Note: JR #4018 originally used a label JR TEST2. You will see below
+that TEST2 is defined as a label but is followed by 3 0x00 which means skip
+Normally a MTX directive is followed by 5 bytes or 0xFF
+
+<number> = 0x00
+<number ascii chars> 0x32 0x35 0xB4  (254)
+(type = byte) = 0x01
+<offset from start of code block> = 0x01 0x00 
+<pad bytes> = 0x00 0x00
+
+<number> = 0x00 
+<number ascii chars> = 0x23 0x31 0xC6  (#1F)
+(type = byte) = 0x01 
+<offset from start of code block> = 0x03 0x00 
+<pad bytes> = 0x00 0x00
+
+<number> = 0x00 
+<number ascii chars> = 0x31 0x36 0x33 0x39 0xB1  (16391)
+(type = word) = 0x00 & <number of times number referenced/used> = 0x01
+<offset from start of code block> =  0x05 0x00
+<pad byte> = 0x00
+
+<number> = 0x00 
+<ascii chars> = 0x23 0x30 0x43 0x45 0xB3  (#0CE3)
+(type = word) = 0x00 & <number of times number referenced/used> = 0x01
+<offset from start of code block> = 0x08 0x00
+<pad byte> = 0x00
+
+<label> = 0x02 
+<offset from start of code block> = 0x12 0x00
+<label ascii chars> = 0x44 0x41 0x54 0xC1   (DATA)
+<type = word> = 0x00 & <number of times label referenced/used> = 0x01
+<offset from start of code block to the reference> = 0x0B 0x00 
+<pad byte> = 0x00
+
+<label> = 0x02 
+<offset from start of code block> = 0x11 0x00 
+<label ascii chars> = 0x54 0x45 0x53 0xD4   (TEST)
+<type = relative jump> 0x00 0x00 & <number of times label referenced/used> = 0x01 
+<offset from start of code block to the reference> = 0x0E 0x00
+
+<number> = 0x00 
+<number ascii chars> = 0x54 0x45 0x53 0x54 0xB2 (TEST2)  NOTE: this label was deleted and replaced by the number below #4018
+<type = relative jump> 0x00 0x00 & <number of times label referenced/used> = 0x00   (3 zeroes in a row indicate, skip as not referenced any more)
+
+<number> = 0x00 
+<number ascii chars> = 0x23 0x34 0x30 0x31 0xB8 (#4018)
+(type = relative jump) = 0x00 0x00 & <number of times label referenced/used> = 0x01
+<offset from start of code block to the reference> = 0x10 0x00
+
+<DB> 0x03 
+<offset from start of code block> = 0x12 0x00 
+<number of bytes> =0x03 
+<number of ascii chars (length)> =0x05 
+<DB ascii chars> = 0x22 0x59 0x45 0x53 0xA2 ("YES")
+
+<end of code block> =0xFF
+
+
+
