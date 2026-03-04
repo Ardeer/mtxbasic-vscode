@@ -1785,8 +1785,8 @@ def convert_mtx_to_txt():
         #additional global
         global len_BASIC, hdr_cnt,fn_r,fn_w,LineLen,LineNum,noddy_flag,i,mtxlist_str
         global MemPos,CodeLen,CodeInc,CodeEnd,WIP_code,RES_code,GV_extra_info,VSC_flag,MTX_prog_flag,PlodNameList
-        #i=hdr_cnt
-        #print("TEST: hdr_cnt+len_BASIC at start ",hdr_cnt,len_BASIC, hdr_cnt+len_BASIC)
+        #i=hdr_cnt needed for ASSEM_loop(), see line 1880
+
         #while i<hdr_cnt+len_BASIC:
         plodToken=168 #need to find this and add name (e.g. PLOD "PROG1") to plodNameList (e.g. plodNameList.append("PROG1"))
         i=0
@@ -1877,7 +1877,8 @@ def convert_mtx_to_txt():
                     CodeLen=(GV_results[6]*256)+GV_results[5]
                     MemPos=tmp_MemPos+CodeInc #adjusts for the bytes so far in specifying line and code lengths
                     #get the assembler specific info into a new list
-                    GV_extra_info=get_mtx_directives_info(GV_fname_r,i+CodeLen+7,LineLen-CodeLen-7).info_dbf
+                    #header cont is required or will lose mtx directive information.
+                    GV_extra_info=get_mtx_directives_info(GV_fname_r,hdr_cnt+i+CodeLen+7,LineLen-CodeLen-7).info_dbf
                     #print("TEST: Code Length= ",CodeLen," Start Memory position= ", MemPos," End Memory position= ",MemPos+CodeLen-1)
                     ASSEM_loop()
                     #ASSEM_skip(LineLen-(CodeInc+1))

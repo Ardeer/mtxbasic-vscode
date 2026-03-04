@@ -706,6 +706,7 @@ function activate(ctx) {
             //{ id: 'DIM', pattern: 'DIM',  cmdname:'stdcmd'  ,args: [{ kind: 'expr', min: 1}], expectEnd: true }, // size ofthe array is dependent on RAM available. So DIM A(1000) is OK and DIM A(100,100) is OK but difficult to be specific.
             { id: 'DRAW', pattern: 'DRAW', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
             { id: 'DSI', pattern: 'DSI', cmdname: 'strcmd', args: [], expectEnd: true },
+            { id: 'EDITOR', pattern: 'EDITOR', cmdname: 'strcmd', args: [{ kind: 'strexpr' }], expectEnd: true }, //typically A$ format
             //{ id: 'ELSE', pattern: 'ELSE', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE e.g. ELSE LET B=20
             { id: 'EXP', pattern: 'EXP', cmdname: 'numfn', args: [{ kind: 'numeric', min: -88.0, max: 88.0, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
             //{ id: 'FOR', pattern: 'FOR', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE SPECIAL
@@ -2912,7 +2913,7 @@ function activate(ctx) {
                 }
                 if (word === 'EDITOR') {
                     return new vscode.Hover("**EDITOR**:  Provides the programmer the facility to accept input from a defined area of the screen.\n\n" +
-                        "Usage: EDITOR \\<variable list\\> \n\n" +
+                        "Usage: EDITOR \\<string or string variable list\\> \n\n" +
                         "The area is defined by virtual screen 0 which may be set using the CRVS command\n\n" +
                         "Example: \n\n" +
                         "10 CRVS 0 ,0,20 , 10, 10,1,40 \n\n" +

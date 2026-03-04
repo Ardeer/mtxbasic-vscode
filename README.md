@@ -55,6 +55,8 @@ One known issue is that MTX BASIC is a bit more forgiving than how I have coded 
 
 The use of colon (:) within REM statements that are not enclosed within double quotes will lead to ironically the following error "Unrecognised or stray text: 'function'. Did you mean to add 'REM'?". Avoid using : in free form REM statements.
 
+The mtxbasic-extension uses regular expressions (regex) to parse the command syntax (e.g. const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);). Unfortunately, this is not without its challenges, too many to discuss here, but one area where it struggles is with nested (or depth) parentheses, for example, ON MOD(Z(1),2) GOSUB 700,800 , I had to apply an additional a strip parentheses to this syntax parser to allow it to detect the second argument in the MOD() function due to Z(1) conflict. I am sure there will be other instances as detecting every eventuality is out with this scope of this hobbyist project. Please let me know of any specific issues and I will endeavour to update. 
+
 MTX BASIC inline z80 assembler is handled slightly different. Inline z80 assembler (ASSEM <linenumber>) command would normally generate a <linenumber> CODE in MTX BASIC. ASSEM option is not required in VS Code as we can type <linenumber> CODE directly into the BASIC listing as a placeholder followed by return, you can then enter Z80 assembly language instructions. 
 
 <linenumber><sp><CODE>
