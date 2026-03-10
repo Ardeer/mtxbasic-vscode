@@ -1332,7 +1332,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 }
 
                 // ============================================
-                // Z80 CODE BLOCK VALIDATION
+                // Z80 CODE BLOCK VALIDATION - PART 1
                 // Validate assembly lines BEFORE the main BASIC loop
                 // ============================================
                 
@@ -2825,7 +2825,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         } // END of NODDY validation section
 
         // ============================================
-        // Z80 CODE BLOCK VALIDATION SECTION
+        // Z80 CODE BLOCK VALIDATION SECTION - PART 2
         // ============================================
 
 /**
@@ -4007,34 +4007,23 @@ ctx.subscriptions.push(
                     // Check if we hit a CODE statement
                     if (/^\d{1,5}\s+CODE\s*$/.test(line.trim())) {
                         inCodeBlock = true;
-                        
-                        // Calculate bytes used by all previous BASIC lines (including CODE line)
-                        let totalBytes = 0;
-                        for (let j = 0; j <= i; j++) {
-                            const basicLine = document.lineAt(j).text;
-                            if (/^\d{1,5}\s/.test(basicLine)) {
-                                // Convert this line to bytes to get its length
-                                try {
-                                    const lineBytes = basicTokeniseLine(basicLine, hexBaseAddress + totalBytes);
-                                    const isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                                    if (isCodeLine) {
-                                        // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
-                                        // (8-byte placeholder includes EOF that gets replaced by Z80 code)
-                                        totalBytes += lineBytes.length - 1;
-                                    } else {
-                                        totalBytes += lineBytes.length;
-                                    }
-                                } catch (e) {
-                                    // Skip lines that can't be tokenized
-                                }
-                            }
-                        }
-                        
-                        // Start Z80 code at the address after all BASIC lines
-                        // Note: Z80 code is embedded WITHIN the CODE line structure at offset 7
-                        // (after 2-byte length + 2-byte line# + 1-byte CODE token + 2-byte opcode length)
-                        // basicTokeniseLine returns 8 bytes for CODE placeholder, but Z80 starts at byte 7
-                        lastAddress = hexBaseAddress + totalBytes;
+
+                                                // Derive CODE start from fully converted program bytes so directives/blocks
+                                                // in earlier CODE lines are accounted for exactly.
+                                                const codeMatch = /^\s*(\d{1,5})\s+CODE\s*$/.exec(line);
+                                                const codeLineNumber = codeMatch ? parseInt(codeMatch[1], 10) : NaN;
+                                                if (!Number.isNaN(codeLineNumber)) {
+                                                        try {
+                                                                const docBytes = convertTextToHex(document.getText(), hexBaseAddress);
+                                                                const codeLineAddress = findAddressForLineNumber(codeLineNumber, docBytes, hexBaseAddress);
+                                                                if (codeLineAddress !== null) {
+                                                                        // Z80 starts 7 bytes into the CODE line record.
+                                                                        lastAddress = codeLineAddress + 7;
+                                                                }
+                                                        } catch (e) {
+                                                                // Keep existing fallback address if conversion fails.
+                                                        }
+                                                }
                         
                         // Now calculate bytes in current CODE block from scratch
                         for (let j = i + 1; j < position.line; j++) {
@@ -4144,30 +4133,24 @@ const renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', a
                 }
         }
         
-        // Calculate starting address for this CODE block
-        let totalBytes = 0;
-        for (let j = 0; j <= codeStartLine; j++) {
-                const basicLine = doc.lineAt(j).text;
-                if (/^\d{1,5}\s/.test(basicLine)) {
-                        try {
-                                const lineBytes = basicTokeniseLine(basicLine, hexBaseAddress + totalBytes);
-                                const isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                                if (isCodeLine) {
-                                        // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
-                                        // (8-byte placeholder includes EOF that gets replaced by Z80 code)
-                                        totalBytes += lineBytes.length - 1;
-                                } else {
-                                        totalBytes += lineBytes.length;
-                                }
-                        } catch (e) {
-                                // Skip lines that can't be tokenized
+        // Calculate starting address for this CODE block from the full converted byte stream.
+        const codeStartText = doc.lineAt(codeStartLine).text;
+        const codeLineMatch = /^\s*(\d{1,5})\s+CODE\s*$/.exec(codeStartText);
+        const codeLineNumber = codeLineMatch ? parseInt(codeLineMatch[1], 10) : NaN;
+
+        let currentAddress = hexBaseAddress;
+        if (!Number.isNaN(codeLineNumber)) {
+                try {
+                        const docBytes = convertTextToHex(doc.getText(), hexBaseAddress);
+                        const codeLineAddress = findAddressForLineNumber(codeLineNumber, docBytes, hexBaseAddress);
+                        if (codeLineAddress !== null) {
+                                // Z80 bytes begin 7 bytes into the CODE line record.
+                                currentAddress = codeLineAddress + 7;
                         }
+                } catch (e) {
+                        // Keep fallback base if conversion fails.
                 }
         }
-        
-        // Z80 code is embedded WITHIN the CODE line structure at offset 7
-        // basicTokeniseLine returns 8 bytes for CODE placeholder, but Z80 starts at byte 7
-        let currentAddress = hexBaseAddress + totalBytes;
         
         // Build new lines with updated addresses
         const edits: { line: number; newText: string }[] = [];

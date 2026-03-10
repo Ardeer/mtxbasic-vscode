@@ -1281,8 +1281,8 @@ class get_mtx_directives_info():
         info_dbf=[[]]
         [0] = "" Numbers as ASCII text. This is where the disassembler tracks if the user used hex or decimal for numbers or addresses
                  The coding here will skip this and either use all hex (default) or decimal (option to code into Z80_disassem class) and not a hybrid which this allows.
-        [1] = "" JR,DJNZ, JP jump label?
-        [2] = "" label includes ":" at end of text
+        [1] = "" 
+        [2] = "" label includes ":" at end of label text
         [3] = "" DB text includes "DB " at start of text 
         [4] = "" DW text includes "DW " at start of text 
         [5] = "" DS text includes "DS " at start of text 
@@ -1290,66 +1290,75 @@ class get_mtx_directives_info():
         [7] = ""
         [8] = comment includes ";" at start of text
         [9] = ""
-        [10] offset addr
+        [10] = ""
         '''
 
         #test code - had to move this up as didn't run if after the other functions below
         if fname_in is None:
             return
         
-        self.fn_in = open(fname_in, 'rb')       
+        self.fn_in = open(fname_in, 'rb')
         for vv in range(self.fn_in_pos):
             skip_read=int.from_bytes(self.fn_in.read(1),"little") #skip
-            #if vv==0 or vv==1 or vv==2 or vv==3 or vv==4:
-                #print("TEST: skip_read start integer byte = ",skip_read)
-            #end if
-        #end for
-        #print("TEST: last skip_read integer byte",skip_read)
 
         vv=0
+        prev_token_id=-1
         while vv<self.extra_cnt:
         #for vv in range(self.extra_cnt):
-            self.extra_bytes[vv]=int.from_bytes(self.fn_in.read(1),"little") #copy
-            if self.extra_bytes[vv]==0:
+            token_start_pos=self.fn_in.tell()
+            token_id=int.from_bytes(self.fn_in.read(1),"little")
+            parse_num_token=True
+            if vv<len(self.extra_bytes):
+                self.extra_bytes[vv]=token_id #copy (best-effort debug mirror)
+            if token_id==0:
+                peek_pos=self.fn_in.tell()
+                peek_bytes=self.fn_in.read(2)
+                self.fn_in.seek(peek_pos)
+                next_byte=peek_bytes[0] if len(peek_bytes)>=1 else 0
+                next2_byte=peek_bytes[1] if len(peek_bytes)>=2 else 0
+                # Num_00 can start with #/digits or label-like text (unresolved symbol names).
+                num_sig_ok=(next_byte==35) or \
+                           (48<=next_byte<=57) or (176<=next_byte<=185) or \
+                           (65<=next_byte<=90) or (97<=next_byte<=122) or \
+                           (193<=next_byte<=218) or (225<=next_byte<=250) 
+                expected_pad=(next_byte in (0,1)) and (next2_byte in (2,3,4,5,8))
+                if num_sig_ok==False:
+                    if expected_pad==False:
+                        pass
+                    parse_num_token=False
                 #print("Num_00")
-                self.Num_00()
-            elif self.extra_bytes[vv]==1:
+            if token_id==0:
+                if parse_num_token:
+                    self.Num_00()
+            elif token_id==1:
                 #print("Ptr_01")
-                self.U_01()                    
-            elif self.extra_bytes[vv]==2:
+                self.U_01()
+            elif token_id==2:
                 #print("Label_02")
                 self.Label_02()
-            elif self.extra_bytes[vv]==3:
+            elif token_id==3:
                 #print("DB_03")
                 self.DB_03()
-            elif self.extra_bytes[vv]==4:
+            elif token_id==4:
                 #print("DW_04")
                 self.DW_04()
-            elif self.extra_bytes[vv]==5:
+            elif token_id==5:
                 #print("DS_05")
                 self.DS_05()
-            elif self.extra_bytes[vv]==8:
+            elif token_id==8:
                 #print("Comment_08")
                 self.Comment_08()
             else:
                 #print("Not defined")
                 pass #skip
             #end if-elif-else
-            vv=vv+1+self.byte_read_cnt
+            token_end_pos=self.fn_in.tell()
+            consumed=(token_end_pos-token_start_pos)
+            if consumed<=0:
+                consumed=1
+            vv=vv+consumed
+            prev_token_id=token_id
             self.byte_read_cnt=0 #reset for next loop
-            #if vv==0 or vv==1 or vv==2 or vv==3 or vv==4:
-                #print("TEST: start integer byte = ",self.extra_bytes[vv])
-            #end if
-
-        #end while
-        #for vvv in range(self.row_cnt):
-            #print("updated self.info_dbf = ",self.info_dbf[vvv])
-        #end for
-        #print("TEST: last integer byte = ",self.extra_bytes)
-        #print("TEST: disassembled extra information = ")
-        #for vvv in range(self.row_cnt):
-            #print(self.info_dbf[vvv])
-        #end for
         self.fn_in.close()
         
 
@@ -1359,7 +1368,21 @@ class get_mtx_directives_info():
         in assembler section the 2nd byte of any relative jump (e.g. JR n or DJNZ n) is either 0-127 if the jump is forward (down) in the code
         or 255 to 128 if backward (up) in the code (i.e bit 7 is set). The count is from the 2nd byte of the relative jump instruction
         either forward or backward. The text label (if one assigned) will replace the number in the disassembled code
-        A normal JP instruction is followed by an address. The text label (if one assigned) will replace the address in the disassembled code
+        <0x00>
+        <decimal or hexadecimal number represented as ASCII characters> The hexadecimal number in MTX BASIC is prefixed with a # (hash) symbol
+        Example, LD A,#0D would be represented in the main code block as 3E 0D and at the end of the by code block by 00 23 30 C4, where 00 is the token for number definition, 23 is ASCII for #, 30 is ASCII for 0 and C4 is ASCII for D with bit 7 set (#80+#44=#C4) to indicate end of number
+                after the number definition, there will be either 3 or 5 or 7 or etc bytes depending on how many times the number is referenced in the code block. If only 3 bytes (see below) then the number has been discarded/not referenced.
+        <type> & <number of bytes afterwards to track number of times the number is referenced> 
+                3 types:
+                a) byte (0x01) Note: pad bytes = 0x00 and 0x00 when type is byte 
+                <01 (for 1st instance and increases if more instances> <offset (LSB/MSB)> <2 pad bytes>
+                so if only 1 instance of number #C3, you should get 0x01+count = 0x01 not 0x02
+                b) word (0x00) &  n where n = 0x01 if one instance, 0x02 if two etc. Note: pad bytes = 0x00 when type is word
+                <00> <number of instances of this word)> <offset of 1st instance (LSB/MSB)> <offset of 2nd instance (LSB/MSB)> <etc..><1 pad bytes>
+                c) relative jump must be a label. The mtx inline editor throws an out of range error otherwise
+        followed by:
+        <ref offset, 2 bytes LSB/MSB> for each reference to the label in the code block, if only 0x00 and therefore three 0x00 bytes after the label ascii chars then label not referenced and can be discarded.
+        {optional, pad 0x00 or 0x00 0x00 byte(s)  as types a) and c) use odd number of bytes for references}A normal JP instruction is followed by an address. The text label (if one assigned) will replace the address in the disassembled code
         '''
 
         if self.fn_in==None:
@@ -1375,18 +1398,17 @@ class get_mtx_directives_info():
                 tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)      
             elif tmp_read>127: # bit 7 set, so end of label
                 tmp_dbf[2]=str(tmp_dbf[2])+chr((tmp_read-128))
-                #next 5 ,7 , 9, ext bytes or specify if a byte or a word or multiples of (ie number repeats throughout the code) and the memory offset
+                #next 3, 5 ,7 , 9, ext bytes or specify if a byte or a word or multiples of (ie number repeats throughout the code) and the memory offset
                 #note if 3 zeroes after then reminent of a previous error and should be skipped.
                 tmp_read=int.from_bytes(self.fn_in.read(1),"little")
-                self.byte_read_cnt=self.byte_read_cnt+1
+                tmp_read1=int.from_bytes(self.fn_in.read(1),"little")
+                tmp_read2=int.from_bytes(self.fn_in.read(1),"little")
+                self.byte_read_cnt=self.byte_read_cnt+3
                 if tmp_read==0: #potential word type
-                    tmp_read1=int.from_bytes(self.fn_in.read(1),"little") #read next byte
-                    tmp_read2=int.from_bytes(self.fn_in.read(1),"little")
-                    self.byte_read_cnt=self.byte_read_cnt+2
-                    if tmp_read1==0 and tmp_read2==0: #potential reminent error
-                        #print("TEST: reminent error")
-                        pass
-                    elif tmp_read1>=1: # word type &/or potential multiple entries
+                    if tmp_read1==tmp_read2==0: #potential reminent error - IS THIS STILL VALID - YES
+                        pass #if a reminent error, the number is skipped (i.e. not outputed)
+                        break #end while loop
+                    elif tmp_read1>0: # word type &/or potential multiple entries
                         #print("TEST: WORD type")
                         tmp_lsb=tmp_read2 #read memory displacement from start
                         tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
@@ -1394,38 +1416,128 @@ class get_mtx_directives_info():
                         self.byte_read_cnt=self.byte_read_cnt+1
                         self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
                         self.row_cnt=self.row_cnt+1
-                        for vv in range(tmp_read1-1): #already have the first addr (see above)
+                        if (tmp_read1-1)!=0: #guard
+                            for vv in range(tmp_read1-1): #already have the first addr (see above)
+                                tmp_lsb=int.from_bytes(self.fn_in.read(1),"little") #read memory displacement from start
+                                tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
+                                tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
+                                self.byte_read_cnt=self.byte_read_cnt+2
+                                self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
+                                #print("TEST: Labe1_00 decoded - word type, 1 or more reference(s)")
+                                #print("TEST: decode = ",self.info_dbf[self.row_cnt])
+                                self.row_cnt=self.row_cnt+1
+                            #end for
+                        #end if
+                        #hybrid number metadata support:
+                        #word references can be followed by relative-jump references.
+                        probe_pos=self.fn_in.tell()
+                        probe_rel_cnt=int.from_bytes(self.fn_in.read(1),"little")
+                        self.byte_read_cnt=self.byte_read_cnt+1
+                        bytes_left=(self.fn_in_pos+self.extra_cnt)-self.fn_in.tell()
+                        if probe_rel_cnt>0 and probe_rel_cnt<=32 and bytes_left>=probe_rel_cnt*2:
+                            for rr in range(probe_rel_cnt):
+                                tmp_lsb=int.from_bytes(self.fn_in.read(1),"little")
+                                tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
+                                tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
+                                self.byte_read_cnt=self.byte_read_cnt+2
+                                self.info_dbf.append(tmp_dbf[:])
+                                self.row_cnt=self.row_cnt+1
+                        else:
+                            self.fn_in.seek(probe_pos)
+                            self.byte_read_cnt=self.byte_read_cnt-1
+                        #optional pad byte (0x00) for word type only
+                        pad_pos=self.fn_in.tell()
+                        tmp_read=int.from_bytes(self.fn_in.read(1),"little")
+                        self.byte_read_cnt=self.byte_read_cnt+1
+                        if tmp_read==0:
+                            pass
+                        else:
+                            self.fn_in.seek(pad_pos)
+                            self.byte_read_cnt=self.byte_read_cnt-1
+                        break #end while loop
+                    elif tmp_read2>0:
+                        #guard for 00 00 nn layout: consume nn reference offsets then optional pad
+                        for vv in range(tmp_read2):
+                            tmp_lsb=int.from_bytes(self.fn_in.read(1),"little")
+                            tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
+                            tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
+                            self.byte_read_cnt=self.byte_read_cnt+2
+                            self.info_dbf.append(tmp_dbf[:])
+                            self.row_cnt=self.row_cnt+1
+                        pad_pos=self.fn_in.tell()
+                        tmp_pad=int.from_bytes(self.fn_in.read(1),"little")
+                        self.byte_read_cnt=self.byte_read_cnt+1
+                        if tmp_pad==0:
+                            pass
+                        else:
+                            self.fn_in.seek(pad_pos)
+                            self.byte_read_cnt=self.byte_read_cnt-1
+                        break #end while loop
+                    else:
+                        #unknown 00 xx yy layout; stop this record to avoid stream desync
+                        break #end while loop
+                    #end if-elif
+                elif tmp_read>0: #byte type single entry 
+                    pass
+                    #already read the next 2 bytes
+                    tmp_dbf[1]=(tmp_read2*256)+tmp_read1
+                    self.info_dbf.append(tmp_dbf[:])
+                    self.row_cnt=self.row_cnt+1
+                    if (tmp_read-1)!=0:
+                        for vv in range(tmp_read-1):
                             tmp_lsb=int.from_bytes(self.fn_in.read(1),"little") #read memory displacement from start
                             tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
                             tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
                             self.byte_read_cnt=self.byte_read_cnt+2
                             self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
-                            #print("TEST: Labe1_00 decoded - word type, 1 or more reference(s)")
+                            #print("TEST: Labe1_00 decoded - byte type 1 or more reference(s)")
                             #print("TEST: decode = ",self.info_dbf[self.row_cnt])
                             self.row_cnt=self.row_cnt+1
-                        #end for                            
-                        tmp_read=int.from_bytes(self.fn_in.read(1),"little") #skip
+                        #end for
+                    #end if
+                    #mixed number metadata support:
+                    #a byte-reference block can be followed by word-reference count + offsets.
+                    mixed_tail=False
+                    probe_pos=self.fn_in.tell()
+                    probe_word_cnt=int.from_bytes(self.fn_in.read(1),"little")
+                    self.byte_read_cnt=self.byte_read_cnt+1
+                    if probe_word_cnt>0:
+                        mixed_tail=True
+                        for ww in range(probe_word_cnt):
+                            tmp_lsb=int.from_bytes(self.fn_in.read(1),"little")
+                            tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
+                            tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
+                            self.byte_read_cnt=self.byte_read_cnt+2
+                            self.info_dbf.append(tmp_dbf[:])
+                            self.row_cnt=self.row_cnt+1
+                        #optional single pad byte after mixed byte+word references
+                        pad_pos=self.fn_in.tell()
+                        tmp_pad=int.from_bytes(self.fn_in.read(1),"little")
                         self.byte_read_cnt=self.byte_read_cnt+1
-                    #end if-elif
-                elif tmp_read>=1: #byte type single entry
-                    #print("TEST: BYTE type and number of bytes",tmp_read)
-                    for vv in range(tmp_read):
-                        tmp_lsb=int.from_bytes(self.fn_in.read(1),"little") #read memory displacement from start
-                        tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
-                        tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
+                        if tmp_pad!=0:
+                            self.fn_in.seek(pad_pos)
+                            self.byte_read_cnt=self.byte_read_cnt-1
+                    else:
+                        self.fn_in.seek(probe_pos)
+                        self.byte_read_cnt=self.byte_read_cnt-1
+                    #optional pad bytes (0x00,0x00) for byte type only
+                    if mixed_tail==False:
+                        pad_pos=self.fn_in.tell()
+                        tmp_pad0=int.from_bytes(self.fn_in.read(1),"little")
+                        tmp_pad1=int.from_bytes(self.fn_in.read(1),"little")
                         self.byte_read_cnt=self.byte_read_cnt+2
-                        self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
-                        #print("TEST: Labe1_00 decoded - byte type 1 or more reference(s)")
-                        #print("TEST: decode = ",self.info_dbf[self.row_cnt])
-                        self.row_cnt=self.row_cnt+1               
-                    #end for
-                    
-                    tmp_read=int.from_bytes(self.fn_in.read(1),"little") #skip
-                    tmp_read=int.from_bytes(self.fn_in.read(1),"little") #skip
-                    self.byte_read_cnt=self.byte_read_cnt+2
+                        if tmp_pad0==0 and tmp_pad1==0:
+                            pass
+                        else:
+                            self.fn_in.seek(pad_pos)
+                            self.byte_read_cnt=self.byte_read_cnt-2
+                    break #end while loop
+                else:
+                    #unknown type byte after number; stop this record to avoid stream desync
+                    break #end while loop
                 #end if-elif
+                break #safety: never continue scanning chars after terminator-byte metadata processing
             #end if-elif
-                break #end while loop           
         #end while
         
         return
@@ -1440,19 +1552,45 @@ class get_mtx_directives_info():
     def Label_02(self):
         '''02 LABEL
         The disassembled text label ends with a colon (:)
-        <offset from code start (2 bytes)><label string (variable length)>,5,7,9,etc bytes afterwards track how many instances the label has been referred to in the code>
-        3 types:
-        a) byte (01)
-        b) word (00 n where n =01 if one instance, 02 if tow etc)
-        c) relative jump, JR or DJ (00 00 n where n =01 if one instance, 02 if tow etc)
+        <02>
+        <offset from code start (2 bytes)>
+        <label ascii string (variable length), last character has bit 7 set> Note: for disassembly bit 7 is off and a colon is added after the label
+        3,5,7,9,etc bytes afterwards track how many instances the label has been referred to in the code>
+        <type> & <number of bytes afterwards to track number of times the label is referenced> 
+                3 types of label usage:
+                a) byte (0x01) Note: pad bytes = 0x00 and 0x00 when type is byte - unlikely as a label is always an address.
+                b) word (0x00) &  n where n = 0x01 if one instance (excludes the actual label offset above), 0x02 if two etc. Note: pad bytes = 0x00 when type is word
+                c) relative jump, JR or DJ (0x00 0x00)  &  n = 0x01 if one instance (excludes the actual label offset above), 0x02 if two etc. Note: no pad bytes when type is relative jump or for discards
+        followed by:
+        <ref offset, 2 bytes LSB/MSB> for each reference (CALL/USED) of the label in the code block, if not used elsewhere, then none of these reference offsets will be present.
+        {optional, pad 0x00 or 0x00 0x00 byte(s)  as types a) and c) use odd number of bytes for references}
         self.info_dbf=[[id type,addr,string,number of bytes affected for DB,DS and DW]] where the "" are accumulated string information
+        
+        examples:
+        MOVECODE: represented as the following mtx directive (hex dump)
+        [0x02 0x00 0x00 0x4d 0x4f 0x56 0x45 0x43 0x4f 0x44 0xc5 0x00 0x00 0x00] => Label MOVECODE, it is 0 bytes offset. It is not referenced anywhere else.
+
+        A more detailed example of a code block below as a hex dump  
+        [0x1F 0x 00 0x0A 0x00 0xC2 0x05 0x00 0x3A 0x0A 0x40 0x0F 0xC9 0x02 0x03 0x00 0x56 0x41 0xCC 0x00 0x01 0x01 0x00 0x00]
+
+        represents the following code block in MTX BASIC inline assembler:
+        10 CODE   [0x1F 0x 00 0x0A 0x00 0xC2 0x05 0x00]
+         4007 LD A,(VAL)  [0x3A 0x0A 0x40 ]
+         400A VAL: DB 15 [0x0F]
+         400B C9  [0xC9]
+        <label ID> [0x02] 
+        <LABEL offset from start of the opcode, LSB/MSB> [0x03 0x00]
+        <ascii chars> [0x56 0x41 0xcc  (last char bit 7 set and colon not required)
+        <type/number of calling offsets> [0x00 0x01] (VAL points to an address which is a word and 1 use of the label)
+        <label referenced (used/called), relative offset to where the label is defined,  LSB/MSB> [0x01 0x00] 
+        <pad> [0x00]
+
         '''
 
         if self.fn_in==None:
             return
         #tmp_dbf=[dis_code_byte,offset,"text"]
-        tmp_dbf=[2,0,"",0]
-        tmp_lab=[0,0]
+        tmp_dbf=[2,0,"",0] #investigate reason why didn't extend columns rather than add rows!
         #tmp_dbf=self.default_dbf #this doesn't work!!!
         tmp_lsb=int.from_bytes(self.fn_in.read(1),"little") #read memory displacement from start
         tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
@@ -1463,31 +1601,31 @@ class get_mtx_directives_info():
             tmp_read=int.from_bytes(self.fn_in.read(1),"little")
             self.byte_read_cnt=self.byte_read_cnt+1
             if tmp_read>31 and tmp_read<128: #labels must be ascii - might need to fine tune ao that only 0-9,a-z and A-Z
-                tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)               
+                tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)
             elif tmp_read>127: # bit 7 set, so end of label
                 tmp_dbf[2]=str(tmp_dbf[2])+chr((tmp_read-128))+":" #add colon to indicate label.
                 self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
-                #print("TEST: Labe1_02 decoded - actual label")
+                pass
                 #print("TEST: decode = ",self.info_dbf[self.row_cnt])
                 self.row_cnt=self.row_cnt+1
                 #get references to this label
-                #depending on many references to this label, the next 5,7,9 or .. bytes will provide the necessary information
-                for vv in range(2): #store next 2 bytes
-                    tmp_lab[vv]=int.from_bytes(self.fn_in.read(1),"little")
-                #end for
-                self.byte_read_cnt=self.byte_read_cnt+2
+                #depending on many references to this label, the next 3,5,7,9 or .. bytes will provide the necessary information
+                tmp_read=int.from_bytes(self.fn_in.read(1),"little")
+                tmp_read1=int.from_bytes(self.fn_in.read(1),"little")
+                tmp_read2=int.from_bytes(self.fn_in.read(1),"little")
+                self.byte_read_cnt=self.byte_read_cnt+3
                 #process the label references
                 #strip colon out as not required for reference labels. swap out bytes, word (16-bit) and relative jumps
                 a_str=tmp_dbf[2]
-                tmp_dbf[2]=a_str[:-1] #strip out the colon from the label                
-                if tmp_lab[0]==0 and tmp_lab[1]==0: #relative jump reference only. Note this will finish on an odd number count meaning end of label list.
-                    tmp_read=int.from_bytes(self.fn_in.read(1),"little") #assume this is >0
-                    self.byte_read_cnt=self.byte_read_cnt+1
-                    if tmp_read==0: #could be another erroneous error
-                        #print("TEST: reminent error")
-                        pass
-                    else: #>1
-                        for vv in range(tmp_read):
+                tmp_dbf[2]=a_str[:-1] #strip out the colon from the label
+                if tmp_read==tmp_read1==tmp_read2==0: #label defined but not referenced elsewhere
+                    pass
+                    #bytecount already covered above and no need to read and skip the pad byte as already done
+                    break #end while loop
+                elif tmp_read==tmp_read1==0 and tmp_read2>0: #relative jump reference only. Note this will finish on an odd number count meaning end of label list.
+                    if tmp_read2>0: #guard
+                        for vv in range(tmp_read2): #number of instances of references to relative jump references
+                            pass
                             tmp_lsb=int.from_bytes(self.fn_in.read(1),"little") #read memory displacement from start
                             tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
                             tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
@@ -1497,45 +1635,80 @@ class get_mtx_directives_info():
                             #print("TEST: decode = ",self.info_dbf[self.row_cnt])
                             self.row_cnt=self.row_cnt+1
                         #end for
-                    #end if-else
-                elif tmp_lab[0]==0 and tmp_lab[1]>0: #word address reference. Note this will finish on an even number. If the next odd number is not 00 then some relative adresses to deal with
-                    for vv in range(tmp_lab[1]):
-                        tmp_lsb=int.from_bytes(self.fn_in.read(1),"little") #read memory displacement from start
-                        tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
-                        tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
-                        self.byte_read_cnt=self.byte_read_cnt+2
-                        self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
-                        #print("TEST: Labe1_02 decoded - word address reference")
-                        #print("TEST: decode = ",self.info_dbf[self.row_cnt])
-                        self.row_cnt=self.row_cnt+1
-                    #end for
-                    tmp_read=int.from_bytes(self.fn_in.read(1),"little")
+                    #no pad byte required for relative jumps
+                    break #end while loop
+                elif tmp_read==0 and tmp_read1>0: #word address reference. Note this will finish on an even number. If the next odd number is not 00 then some relative adresses to deal with
+                    pass
+                    #already have the 1st byte
+                    tmp_lsb=tmp_read2
+                    tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
+                    tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
                     self.byte_read_cnt=self.byte_read_cnt+1
-                    if tmp_read!=0: #additional relative jump references to deal with
-                        for vv in range(tmp_read):
+                    self.info_dbf.append(tmp_dbf[:])
+                    self.row_cnt=self.row_cnt+1
+                    #any for word address references
+                    if (tmp_read1-1)!=0:
+                        for vv in range(tmp_read1-1):
+                            pass
                             tmp_lsb=int.from_bytes(self.fn_in.read(1),"little") #read memory displacement from start
                             tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
                             tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
                             self.byte_read_cnt=self.byte_read_cnt+2
                             self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
-                            #print("TEST: Labe1_02 decoded - relative jump reference 2nd")
+                            #print("TEST: Labe1_02 decoded - word address reference")
                             #print("TEST: decode = ",self.info_dbf[self.row_cnt])
                             self.row_cnt=self.row_cnt+1
-                        #end for                        
+                        #end for
                     #end if
-                #end if-elif
-                break #end while loop
+                    #optional pad byte (0x00) for word type only
+                    pad_pos=self.fn_in.tell()
+                    tmp_read=int.from_bytes(self.fn_in.read(1),"little")
+                    self.byte_read_cnt=self.byte_read_cnt+1
+                    if tmp_read==0:
+                        pass
+                    else:
+                        self.fn_in.seek(pad_pos)
+                        self.byte_read_cnt=self.byte_read_cnt-1
+                    break #end while loop
+                elif tmp_read>0: #byte type single entry 
+                    pass
+                    #already read the next 2 bytes after this
+                    tmp_dbf[1]=(tmp_read2*256)+tmp_read1
+                    self.info_dbf.append(tmp_dbf[:])
+                    self.row_cnt=self.row_cnt+1
+                    if (tmp_read-1)!=0:
+                        for vv in range(tmp_read-1):
+                            tmp_lsb=int.from_bytes(self.fn_in.read(1),"little") #read memory displacement from start
+                            tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
+                            tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
+                            self.byte_read_cnt=self.byte_read_cnt+2
+                            self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
+                            #print("TEST: Labe1_00 decoded - byte type 1 or more reference(s)")
+                            #print("TEST: decode = ",self.info_dbf[self.row_cnt])
+                            self.row_cnt=self.row_cnt+1
+                        #end for
+                    #end if
+                    #optional pad bytes (0x00,0x00) for byte type only
+                    pad_pos=self.fn_in.tell()
+                    tmp_pad0=int.from_bytes(self.fn_in.read(1),"little")
+                    tmp_pad1=int.from_bytes(self.fn_in.read(1),"little")
+                    self.byte_read_cnt=self.byte_read_cnt+2
+                    if tmp_pad0==0 and tmp_pad1==0:
+                        pass
+                    else:
+                        self.fn_in.seek(pad_pos)
+                        self.byte_read_cnt=self.byte_read_cnt-2
+                    break #end while loop
+                break #safety: never continue scanning chars after terminator-byte metadata processing
             #end if-elif
         #end while
-
-
         
         return
         
     def DB_03(self):
         '''byte, separate with commas. Use quotations for text
         03 DB
-        <offset (2bytes)><byte count><length><string>
+        <03><offset (2bytes)><byte count><length><string>
         Note: if the number after DB is decimal it will be shown as ASCII decimal and likewise for hexadecimal
         '''
         if self.fn_in==None:
@@ -1556,18 +1729,16 @@ class get_mtx_directives_info():
                 tmp_dbf[2]=str(tmp_dbf[2])+"DB " #starts with DB
             #end if
             if tmp_read>31 and tmp_read<128: #std ascii
-                tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)     
-            elif tmp_read>127: # bit 7 set, punctuation or end              
+                tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)
+            elif tmp_read>127: # bit 7 set, punctuation or end
                 if (self.byte_read_cnt-4)==char_cnt:
                     tmp_dbf[2]=str(tmp_dbf[2])+chr((tmp_read-128))
                     break #end while loop - don't add a comma at end
                 else:
                     tmp_dbf[2]=str(tmp_dbf[2])+chr((tmp_read-128))+","
-                #end if-else                   
+                #end if-else
             #end if-elif
         #end while
-
-
         self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
         #print("TEST: Labe1_03 decoded")
         #print("TEST: decode = ",self.info_dbf[self.row_cnt])
@@ -1598,7 +1769,7 @@ class get_mtx_directives_info():
                 tmp_dbf[2]=str(tmp_dbf[2])+"DW " #starts with DW
             #end if
             if tmp_read>31 and tmp_read<128: #std ascii - might need to fine tune ao that only 0-9,a-z and A-Z
-                tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)      
+                tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)
             elif tmp_read>127: # bit 7 set, so end
                 tmp_dbf[2]=str(tmp_dbf[2])+chr((tmp_read-128)) 
                 break #end while loop
@@ -1617,6 +1788,7 @@ class get_mtx_directives_info():
         05 DS
         <offset (2bytes)><byte count><length><string>
         Note: if the number after DS is decimal it will be shown as ASCII decimal and likewise for hexadecimal
+        Note: max space reserve is 254 bytes as 255 (0xFf) is reserved for EOL
         '''
         if self.fn_in==None:
             return
@@ -1636,13 +1808,12 @@ class get_mtx_directives_info():
                 tmp_dbf[2]=str(tmp_dbf[2])+"DS " #starts with DS
             #end if
             if tmp_read>31 and tmp_read<128: #labels must be ascii - might need to fine tune ao that only 0-9,a-z and A-
-                tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)                    
+                tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)
             elif tmp_read>127: # bit 7 set, so end
                 tmp_dbf[2]=str(tmp_dbf[2])+chr((tmp_read-128))
                 break #end while loop
             #end if-elif
         #end while
-
         self.info_dbf.append(tmp_dbf[:]) #the [:] is to prevent the last item in the list overwriting all previous additions!
         #print("TEST: Labe1_05 decoded")
         #print("TEST: decode = ",self.info_dbf[self.row_cnt])
@@ -1818,7 +1989,7 @@ def convert_mtx_to_txt():
             while j<LineLen: #changed to a while loop to address the extra read counts t PLOD handling
                 GV_results[j]=int.from_bytes(fn_r.read(1),"little") #read BASIC line
 
-                if GV_results[j]==255: #end of basic line                  
+                if GV_results[j]==255: #end of basic line
                     RES_code=RES_code+mtxlist_str+"\n"
                     fn_w.write(mtxlist_str)
                     fn_w.write('\n') #skip 255 as this will be replaced by a text EOL
@@ -1874,11 +2045,16 @@ def convert_mtx_to_txt():
                     #print("TEST: Assembly code")
                     GV_results[j+1]=int.from_bytes(fn_r.read(1),"little") #read codelength
                     GV_results[j+2]=int.from_bytes(fn_r.read(1),"little")
-                    CodeLen=(GV_results[6]*256)+GV_results[5]
+                    CodeLen=(GV_results[j+2]*256)+GV_results[j+1]
+                    CodeInc=j+3 #CODE token + 2-byte code length
                     MemPos=tmp_MemPos+CodeInc #adjusts for the bytes so far in specifying line and code lengths
                     #get the assembler specific info into a new list
-                    #header cont is required or will lose mtx directive information.
-                    GV_extra_info=get_mtx_directives_info(GV_fname_r,hdr_cnt+i+CodeLen+7,LineLen-CodeLen-7).info_dbf
+                    #anchor directive parsing from current stream position to avoid
+                    #index arithmetic drift on CODE lines.
+                    code_data_pos=fn_r.tell() #first opcode byte position in file
+                    directive_start_pos=code_data_pos+CodeLen
+                    extra_len=max(0,LineLen-CodeLen-CodeInc)
+                    GV_extra_info=get_mtx_directives_info(GV_fname_r,directive_start_pos,extra_len).info_dbf
                     #print("TEST: Code Length= ",CodeLen," Start Memory position= ", MemPos," End Memory position= ",MemPos+CodeLen-1)
                     ASSEM_loop()
                     #ASSEM_skip(LineLen-(CodeInc+1))
@@ -2000,19 +2176,12 @@ def convert_mtx_to_txt():
                     if GV_extra_info[gg][0]==0: #number but will not be at MemPos but between MemPos+dis_size
                         pass #skip
 
-                    if GV_extra_info[gg][0]==2:
-                        if ":" in GV_extra_info[gg][2]: #label
-                            #print("TEST: label")
-                            label_st=GV_extra_info[gg][2]
-                            #still to build up symbols table - add here
-                            tmp_sym[0]=label_st
-                            tmp_sym[1]=decval_to_hexstr(MemPos) #convert to hexadecimal address
-                            symbols.append(tmp_sym[:])
-                            #print("TEST: symbols = ")
-                        else: #reference label instead of an address but will not be at MemPos but between MemPos+dis_size
-                            pass
-                            #lab_ref=GV_extra_info[gg][2]
-                        #end if-else   
+                    if GV_extra_info[gg][0]==2 and GV_extra_info[gg][2]!="" and GV_extra_info[gg][2].endswith(":"):
+                        #type-2 at current MemPos is the definition label
+                        label_st=GV_extra_info[gg][2]
+                        tmp_sym[0]=label_st
+                        tmp_sym[1]=decval_to_hexstr(MemPos) #convert to hexadecimal address
+                        symbols.append(tmp_sym[:])
 
                     if GV_extra_info[gg][0]==3: #DB
                         #print("TEST: DB")
@@ -2043,7 +2212,7 @@ def convert_mtx_to_txt():
             if skip_bytes>0:
                 #print("TEST: skip bytes>0 section , = ",skip_bytes)
                 RES_code=RES_code+decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st+"\n"
-                fn_w.write("     "+decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st) #add an indent (tab + 1 space)
+                fn_w.write("\t "+decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st) #add an indent (tab + 1 space)
                 fn_w.write('\n')
                 if skip_bytes<4:
                     dis_size=skip_bytes
@@ -2063,42 +2232,87 @@ def convert_mtx_to_txt():
                 tmp_disassem_list=Z80_Disassemble(z80_mnemomic_db,WIP_code,MemPos).Z80Assem_res
                 tmp_disassem_str=tmp_disassem_list[1]
                 dis_size=tmp_disassem_list[2]
-                new_MemPos=MemPos+dis_size                
+                new_MemPos=MemPos+dis_size
                 assem_cnt=assem_cnt+dis_size
                 #now swap any number to a reference label - code to be inserted here
                 if tmp_disassem_list[3]!="": #a Z80 instruction with data (xx, yy, zz, XXXX)
                     for gg in range(len(GV_extra_info)): #scan through finding reference labels
                         tmp_MemPos=GV_extra_info[gg][1]+offset_st_addr
-                        if tmp_MemPos>MemPos and tmp_MemPos<new_MemPos: #skips MemPos as this will be a std label
-                            if GV_extra_info[gg][0]==2:
-                                if ":" in GV_extra_info[gg][2]: #label
-                                    pass
-                                else: #reference label instead of an address but will not be at MemPos but between MemPos+dis_size
-                                    lab_ref=GV_extra_info[gg][2]
-                                    cnt=tmp_disassem_str.find("#")
-                                    if "xx" in tmp_disassem_list[3]: #"xx" or "zz xx" the latter might not be valid in MTX assembler
-                                        #print("TEST: Reference label - #xx replaced")
-                                        tmp_disassem_str=tmp_disassem_str[:cnt]+lab_ref+tmp_disassem_str[cnt+3:]
-                                    elif "zz" in tmp_disassem_list[3]: #"zz" or "zz xx" the latter might not be valid in MTX assembler
-                                        #print("TEST: Reference label - #zz replaced")
-                                        tmp_disassem_str=tmp_disassem_str[:cnt]+lab_ref+tmp_disassem_str[cnt+3:]
+                        #Most operands are tracked at the operand byte, but MTX can store JR/DJNZ
+                        #label references at instruction start; include MemPos for yy only.
+                        in_operand_window=(tmp_MemPos>MemPos and tmp_MemPos<new_MemPos)
+                        if tmp_disassem_list[3]=="yy" and tmp_MemPos==MemPos:
+                            in_operand_window=True
+                        if in_operand_window:
+                            if GV_extra_info[gg][0]==0: #number reference
+                                num_ref=GV_extra_info[gg][2]
+                                cnt=tmp_disassem_str.find("#")
+                                #only override if decoded number text is printable; otherwise keep opcode-derived value
+                                if cnt!=-1 and isinstance(num_ref,str) and num_ref!="" and all(31<ord(ch)<127 for ch in num_ref):
+                                    if "xx" in tmp_disassem_list[3]: #"xx" or "zz xx"
+                                        tmp_disassem_str=tmp_disassem_str[:cnt]+num_ref+tmp_disassem_str[cnt+3:]
+                                    elif "zz" in tmp_disassem_list[3]: #"zz" or "zz xx"
+                                        tmp_disassem_str=tmp_disassem_str[:cnt]+num_ref+tmp_disassem_str[cnt+3:]
                                     elif tmp_disassem_list[3]=="yy":
-                                        #print("TEST: Reference label - #yy replaced")
-                                        tmp_disassem_str=tmp_disassem_str[:cnt]+lab_ref+tmp_disassem_str[cnt+3:]                                    
+                                        tmp_disassem_str=tmp_disassem_str[:cnt]+num_ref+tmp_disassem_str[cnt+3:]
                                     elif tmp_disassem_list[3]=="XXXX":
-                                        #print("TEST: Reference label - #XXXX replaced")
-                                        tmp_disassem_str=tmp_disassem_str[:cnt]+lab_ref+tmp_disassem_str[cnt+5:]
-                                    else:
-                                        #print("TEST: No reference label")
-                                        pass
-                                    #end if-elif-else                                
-                                #end if-else
+                                        tmp_disassem_str=tmp_disassem_str[:cnt]+num_ref+tmp_disassem_str[cnt+5:]
+                                    #end if-elif
+                                #end if
+                            elif GV_extra_info[gg][0]==2 and GV_extra_info[gg][2]!="":
+                                if str(GV_extra_info[gg][2]).endswith(":"):
+                                    continue
+                                #type-2 between MemPos and new_MemPos is a reference label
+                                lab_ref=GV_extra_info[gg][2].rstrip(":")
+                                cnt=tmp_disassem_str.find("#")
+                                if "xx" in tmp_disassem_list[3]: #"xx" or "zz xx" the latter might not be valid in MTX assembler
+                                    #print("TEST: Reference label - #xx replaced")
+                                    tmp_disassem_str=tmp_disassem_str[:cnt]+lab_ref+tmp_disassem_str[cnt+3:]
+                                elif "zz" in tmp_disassem_list[3]: #"zz" or "zz xx" the latter might not be valid in MTX assembler
+                                    #print("TEST: Reference label - #zz replaced")
+                                    tmp_disassem_str=tmp_disassem_str[:cnt]+lab_ref+tmp_disassem_str[cnt+3:]
+                                elif tmp_disassem_list[3]=="yy":
+                                    #print("TEST: Reference label - #yy replaced")
+                                    tmp_disassem_str=tmp_disassem_str[:cnt]+lab_ref+tmp_disassem_str[cnt+3:]
+                                elif tmp_disassem_list[3]=="XXXX":
+                                    #print("TEST: Reference label - #XXXX replaced")
+                                    tmp_disassem_str=tmp_disassem_str[:cnt]+lab_ref+tmp_disassem_str[cnt+5:]
+                                else:
+                                    #print("TEST: No reference label")
+                                    pass
+                                #end if-elif-else
                             #end if
                         #end if
                     #end for
+                    #For relative jumps, MTX inline assembler expects label or absolute address form.
+                    #If still unresolved as displacement (#yy), prefer a known target label,
+                    #otherwise convert to absolute target address.
+                    if tmp_disassem_list[3]=="yy":
+                        cnt=tmp_disassem_str.find("#")
+                        if cnt!=-1 and len(tmp_disassem_str)>=cnt+3:
+                            try:
+                                disp_txt=tmp_disassem_str[cnt+1:cnt+3]
+                                if len(disp_txt)==2 and all(ch in "0123456789ABCDEFabcdef" for ch in disp_txt):
+                                    disp=int(disp_txt,16)
+                                    if disp>127:
+                                        disp=disp-256
+                                    tgt_addr=new_MemPos+disp
+                                    tgt_label=""
+                                    for rr in range(len(GV_extra_info)):
+                                        if GV_extra_info[rr][0]==2 and str(GV_extra_info[rr][2]).endswith(":"):
+                                            lbl_addr=GV_extra_info[rr][1]+offset_st_addr
+                                            if lbl_addr==tgt_addr:
+                                                tgt_label=GV_extra_info[rr][2].rstrip(":")
+                                                break
+                                    if tgt_label!="":
+                                        tmp_disassem_str=tmp_disassem_str[:cnt]+tgt_label+tmp_disassem_str[cnt+3:]
+                                    else:
+                                        tmp_disassem_str=tmp_disassem_str[:cnt+1]+decval_to_hexstr(tgt_addr)+tmp_disassem_str[cnt+3:]
+                            except ValueError:
+                                pass
                 #end if
                 RES_code=RES_code+decval_to_hexstr(MemPos)+label_st+tmp_disassem_str+comment_st+"\n"
-                fn_w.write("     "+decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st) #add an indent (tab + 1 space)
+                fn_w.write("\t "+decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st) #add an indent (tab + 1 space)
                 fn_w.write('\n') 
                 #print("TEST: Z80 disaasembled as = ",decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st)
             #end if-else
@@ -2127,7 +2341,7 @@ def convert_mtx_to_txt():
                         #print("TEST: shift, WIP_code = ",WIP_code)
                     #end for
                     #fill the remaining 4 byte block with new read values
-                    if dis_size==3:                            
+                    if dis_size==3: 
                         WIP_code[2]=hexval_to_hexstr(int.from_bytes(fn_r.read(1),"little"))
                         WIP_code[3]=hexval_to_hexstr(int.from_bytes(fn_r.read(1),"little"))
                         WIP_code[4]=hexval_to_hexstr(int.from_bytes(fn_r.read(1),"little"))
@@ -2158,7 +2372,7 @@ def convert_mtx_to_txt():
                 WIP_code[0]=Blocks[1]
                 #print("Blocks[0]<=0 SECTION - shift count =",shift_cnt, " Blocks1= ",Blocks[1], " and shifted code= ",WIP_code)
                 a=WIP_code[0]
-                if WIP_code[0]!=shift_cnt: #only read additional bytes if condition met                  
+                if WIP_code[0]!=shift_cnt: #only read additional bytes if condition met 
                     for st in range(shift_cnt+1,a+1):
                         WIP_code[st]=hexval_to_hexstr(int.from_bytes(fn_r.read(1),"little"))
                         #print("TEST: dis_size=4, WIP_code = ",WIP_code)
@@ -2182,13 +2396,14 @@ def convert_mtx_to_txt():
             fn_w.write('\n')
             for vv in range(len(symbols)):
                 RES_code=RES_code+symbols[vv][0]+str(symbols[vv][1])
-                fn_w.write("     "+symbols[vv][0]+str(symbols[vv][1])) #indent symbols as per other CODE indents
+                fn_w.write("\t "+symbols[vv][0]+str(symbols[vv][1])) #indent symbols as per other CODE indents
                 fn_w.write('\n')
             fn_w.write('\n')
             #end for
-     #part 2 to resolve the assembly extras like DS, DB, jup and call names etc
+
+        #part 2 to resolve the assembly extras like DS, DB, jup and call names etc
         #initially will skip the MTX assembly extra information
-        ASSEM_skip(LineLen-(CodeLen+1)-7) #to be updated once part#1 is coded. currently based on codelen&extralen
+        ASSEM_skip(LineLen-(CodeLen+1)-CodeInc) #to be updated once part#1 is coded. currently based on codelen&extralen
 
         return RES_code #from ASSEM_loop
 

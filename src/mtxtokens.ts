@@ -322,22 +322,23 @@ const mtxTokens: {tokenDec: number, tokenHex: number, token: string}[] = [
 
         9b) NOT USED <0x01>
         
-        9c)Label definition (ends with a colon :, however, to save a byte the colon is not stored but the last ASCII character has bit 7 set to indicate end of label)
+        9c)Label definition (ends with a colon : , however, to save a byte the colon is not stored but the last ASCII character has bit 7 set to indicate end of label)
+           A label will always point to an address, so will of WORD only type 0x00 0x00
         <0x02>
         <LABEL offset from start of the opcode start and not the code block starting hex address (2 bytes LSB/MSB)>
         <Label characters in ASCII, ends with the last character with bit 7 set to indicate end of label (variable length, 1 byte per character)>
         after the label definition, there will be either 3 or 5 or 7 or etc bytes depending on how many times the label is referenced in the code block. If only 3 bytes (see below) then the label has been discarded/not referenced.
         <type> & <number of bytes afterwards to track number of times the label is referenced> 
-                3 types of label usage:
-                a) byte (0x01) Note: pad bytes = 0x00 and 0x00 when type is byte
-                b) word (0x00) &  n where n = 0x01 if one instance (excludes the actual label offset above), 0x02 if two etc. Note: pad bytes = 0x00 when type is word
-                c) relative jump, JR or DJ (0x00 0x00)  &  n = 0x01 if one instance (excludes the actual label offset above), 0x02 if two etc. Note: no pad bytes when type is relative jump or for discards
-        followed by:
-        <ref offset, 2 bytes LSB/MSB> for each reference (CALL/USED) of the label in the code block, if not used elsewhere, then none of these reference offsets will be present.
-        {optional, pad 0x00 or 0x00 0x00 byte(s)  as types a) and c) use odd number of bytes for references}
-        example:
+                a) byte (0x01) Note: pad bytes = 0x00 and 0x00 when type is byte - unlikely as a label is always an address.
+                b) WORD (0x00) &  n where n = 0x00 if one instance defined by Label offset. Each additional instance or reference to the label will increase n by 1
+                c) relative jump, JR or DJ (0x00 0x00)  &  n = 0x01 if one instance/ref, 0x02 if two etc. Note: no pad bytes when type is relative jump or for discards
+                <00> <00> <number of instances of this word)> <offset of 1st instance (LSB/MSB)> <offset of 2nd instance (LSB/MSB)> <etc..><0 pad bytes>
+                <ref offset, 2 bytes LSB/MSB> for each reference (CALL/USED) of the label in the code block, if not used elsewhere, then none of these reference offsets will be present.
+        {optional, pad byte> 0x00 for Word only). 
+        examples:
+        MOVECODE: 0x02 0x00 0x00 0x4d 0x4f 0x56 0x45 0x43 0x4f 0x44 0xc5 0x00 0x00 0x00 => Label MOVECODE, it is 0 bytes offset. It is not referenced anywhere else.
 
-        code block   [0x1F 0x 00 0x0A 0x00 0xC2 0x05 0x00 0x3A 0x0A 0x40 0x0F 0xC9 0x02 0x03 0x00 0x56 0x41 0xCC 0x00 0x01 0x01 0x00 0x00]
+        code block below as a hex dump  [0x1F 0x 00 0x0A 0x00 0xC2 0x05 0x00 0x3A 0x0A 0x40 0x0F 0xC9 0x02 0x03 0x00 0x56 0x41 0xCC 0x00 0x01 0x01 0x00 0x00]
 
         represents the following code block in MTX BASIC inline assembler:
         10 CODE   [0x1F 0x 00 0x0A 0x00 0xC2 0x05 0x00]
@@ -358,12 +359,13 @@ const mtxTokens: {tokenDec: number, tokenHex: number, token: string}[] = [
         <ascii character length, excluding commas>
         <number (decimal or hexadecimal) represented as ASCII characters, excludes the commas, the character before each comma in the list has bit  7 set to indicate end of number/ASCII character>
         
-      for example DB: 27,"A",10 would be represented as
-      <DB ID> [0x03]
-      <offset from opcode start> [0x88 0x05]
-      <byte count> [0x03] 
-      <ascii character length, excludes the commas> [0x07]
-      <number (decimal or hexadecimal) represented as ASCII characters, excludes the commas, the character before each comma in the list has bit  7 set> [0x32 0xB7 0x22 0x41 0xA2 0x31 0xB6]
+        for example DB: 27,"A",10 would be represented as
+        <DB ID> [0x03]
+        <offset from opcode start> [0x88 0x05]
+        <byte count> [0x03] 
+        <ascii character length, excludes the commas> [0x07]
+        <number (decimal or hexadecimal) represented as ASCII characters, excludes the commas, the character before each comma in the list has bit 7 set> 
+        [0x32 0xB7 0x22 0x41 0xA2 0x31 0xB6]
 
         9e) Define Word (DW) syntax <label:>DW <hex/dec> an/or <label>
         <0x04>
@@ -476,6 +478,33 @@ type codeType = { // or setup as a interface?
   dbs?: string; // DB directives found in code block, e.g DB #0A, "HELLO", LABEL1
   dws?: string; // DW directives found in code block e.g. DW #1234, LABEL2
   dss?: string; // DS directives found in code block  e.g. DS 10 (reserve 10 bytes), range 0 to 254 only as 255 is reserved for EOL
+}
+
+type RefBuckets = {
+  byteOffsets: number[];
+  wordOffsets: number[];
+  relativeOffsets: number[];
+};
+
+function createRefBuckets(): RefBuckets {
+  return { byteOffsets: [], wordOffsets: [], relativeOffsets: [] };
+}
+
+function ensureRefBuckets(map: Map<string, RefBuckets>, key: string): RefBuckets {
+  const k = key.toUpperCase();
+  let b = map.get(k);
+  if (!b) {
+    b = createRefBuckets();
+    map.set(k, b);
+  }
+  return b;
+}
+
+function addRefOffset(map: Map<string, RefBuckets>, key: string, kind: 'byte' | 'word' | 'relative', offset: number): void {
+  const buckets = ensureRefBuckets(map, key);
+  if (kind === 'byte') buckets.byteOffsets.push(offset);
+  else if (kind === 'word') buckets.wordOffsets.push(offset);
+  else buckets.relativeOffsets.push(offset);
 }
 
 // --- token helpers (keep existing mtxTokens above) ---
@@ -970,8 +999,8 @@ function parseDwValues(raw: string): number[] {
 function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
   parsedLines: any[];
   labelMap: Record<string, number>;
-  labelReferences: Map<string, {type: string, offsets: number[]}>;
-  numberReferences: Map<string, {type: string, offsets: number[]}>;
+  labelReferences: Map<string, RefBuckets>;
+  numberReferences: Map<string, RefBuckets>;
   directiveLines: any[];
   commentLines: any[];
 } {
@@ -979,8 +1008,8 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
   
   const parsedLines: any[] = [];
   const labelMap: Record<string, number> = {};
-  const labelReferences: Map<string, {type: string, offsets: number[]}> = new Map();
-  const numberReferences: Map<string, {type: string, offsets: number[]}> = new Map();
+  const labelReferences: Map<string, RefBuckets> = new Map();
+  const numberReferences: Map<string, RefBuckets> = new Map();
   const directiveLines: any[] = [];
   const commentLines: any[] = [];
 
@@ -1122,8 +1151,8 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
 function parseCodeBlockPhase2(
   parsedLines: any[],
   labelMap: Record<string, number>,
-  labelReferences: Map<string, {type: string, offsets: number[]}> ,
-  numberReferences: Map<string, {type: string, offsets: number[]}>,
+  labelReferences: Map<string, RefBuckets> ,
+  numberReferences: Map<string, RefBuckets>,
   baseAddr: number,
   offsetBase: number
 ): {
@@ -1207,8 +1236,8 @@ function parseCodeBlockPhase2(
 // =================== PHASE 3: BUILD MTX DIRECTIVES ===================
 function parseCodeBlockPhase3(
   labelMap: Record<string, number>,
-  labelReferences: Map<string, {type: string, offsets: number[]}>,
-  numberReferences: Map<string, {type: string, offsets: number[]}>,
+  labelReferences: Map<string, RefBuckets>,
+  numberReferences: Map<string, RefBuckets>,
   directiveLines: any[],
   commentLines: any[],
   offsetBase: number,
@@ -1219,8 +1248,25 @@ function parseCodeBlockPhase3(
 } {
   const mtxDirectiveBytes: number[] = [];
 
+  // Undefined label references are encoded as Number-definition records (historic MTX behaviour).
+  const mergedNumberRefs: Map<string, RefBuckets> = new Map();
+  for (const [name, refs] of Array.from(numberReferences.entries())) {
+    mergedNumberRefs.set(name, {
+      byteOffsets: [...refs.byteOffsets],
+      wordOffsets: [...refs.wordOffsets],
+      relativeOffsets: [...refs.relativeOffsets]
+    });
+  }
+  for (const [labelName, refs] of Array.from(labelReferences.entries())) {
+    if (typeof labelMap[labelName] === 'number') continue;
+    const dst = ensureRefBuckets(mergedNumberRefs, labelName);
+    dst.byteOffsets.push(...refs.byteOffsets);
+    dst.wordOffsets.push(...refs.wordOffsets);
+    dst.relativeOffsets.push(...refs.relativeOffsets);
+  }
+
   // 9a) Number definition blocks (0x00)
-  for (const [numberStr, info] of Array.from(numberReferences.entries())) {
+  for (const [numberStr, info] of Array.from(mergedNumberRefs.entries())) {
     mtxDirectiveBytes.push(0x00); // Number definition marker
     const numAscii = compressSpacesAndAscii(numberStr);
     mtxDirectiveBytes.push(...numAscii);
@@ -1229,8 +1275,7 @@ function parseCodeBlockPhase3(
       mtxDirectiveBytes[mtxDirectiveBytes.length - 1] |= 0x80;
     }
     // Build reference section
-    const relOffsets = info.offsets.map(o => o - codeStartAbsolute);
-    mtxDirectiveBytes.push(...buildReferenceSection(relOffsets, info.type));
+    mtxDirectiveBytes.push(...buildReferenceSections(info, codeStartAbsolute));
   }
 
   // 9c) Label definition blocks (0x02)
@@ -1247,8 +1292,7 @@ function parseCodeBlockPhase3(
     // Append label reference section (relative/word/byte) using newest-first order
     const refs = labelReferences.get(labelName.toUpperCase());
     if (refs) {
-      const relOffsets = refs.offsets.map(o => o - codeStartAbsolute);
-      mtxDirectiveBytes.push(...buildReferenceSection(relOffsets, refs.type));
+      mtxDirectiveBytes.push(...buildReferenceSections(refs, codeStartAbsolute));
     } else {
       mtxDirectiveBytes.push(0x00, 0x00, 0x00);
     }
@@ -1345,6 +1389,53 @@ function buildReferenceSection(offsets: number[], type: string): number[] {
     // No pad bytes for relative
   }
   
+  return bytes;
+}
+
+// Supports mixed reference kinds for a single symbol (byte + word + relative).
+function buildReferenceSections(refs: RefBuckets, codeStartAbsolute: number): number[] {
+  const toRelNewestFirst = (arr: number[]) => arr.map(o => o - codeStartAbsolute).reverse();
+
+  const byteRefs = toRelNewestFirst(refs.byteOffsets || []);
+  const wordRefs = toRelNewestFirst(refs.wordOffsets || []);
+  const relRefs = toRelNewestFirst(refs.relativeOffsets || []);
+
+  if (byteRefs.length === 0 && wordRefs.length === 0 && relRefs.length === 0) {
+    return [0x00, 0x00, 0x00];
+  }
+
+  const bytes: number[] = [];
+
+  if (byteRefs.length > 0) {
+    // Hybrid format for byte references: <count><offsets...>
+    bytes.push(byteRefs.length & 0xff);
+    for (const o of byteRefs) bytes.push(o & 0xff, (o >> 8) & 0xff);
+  }
+
+  if (wordRefs.length > 0) {
+    // Word references: <0x00><count><offsets...>
+    bytes.push(0x00, wordRefs.length & 0xff);
+    for (const o of wordRefs) bytes.push(o & 0xff, (o >> 8) & 0xff);
+    // Keep historical pad byte only when relative section does not follow.
+    if (relRefs.length === 0) bytes.push(0x00);
+  }
+
+  if (relRefs.length > 0) {
+    // If mixed with word refs, emit compact relative section: <count><offsets...>
+    // Otherwise keep the standalone format: <0x00><0x00><count><offsets...>
+    if (wordRefs.length > 0) {
+      bytes.push(relRefs.length & 0xff);
+    } else {
+      bytes.push(0x00, 0x00, relRefs.length & 0xff);
+    }
+    for (const o of relRefs) bytes.push(o & 0xff, (o >> 8) & 0xff);
+  }
+
+  // Legacy-only single-kind padding for byte refs remains via existing helper.
+  if (wordRefs.length === 0 && relRefs.length === 0 && byteRefs.length > 0) {
+    return buildReferenceSection(byteRefs, 'byte');
+  }
+
   return bytes;
 }
 
@@ -1854,9 +1945,9 @@ function opCodePatternToBytes(
   opCodePattern: string,
   parsed: any,
   labelMap?: Record<string, number>,
-  numberReferences?: Map<string, {type: string, offsets: number[]}>,
+  numberReferences?: Map<string, RefBuckets>,
   baseOffset: number = 0,
-  labelReferences?: Map<string, {type: string, offsets: number[]}>
+  labelReferences?: Map<string, RefBuckets>
 ): number[] {
   const parts = opCodePattern.split(/\s+/).filter(Boolean);
   const out: number[] = [];
@@ -1912,10 +2003,7 @@ function opCodePatternToBytes(
         out.push(displacement & 0xFF);
         // Track relative label reference
         if (labelReferences) {
-          if (!labelReferences.has(lab)) {
-            labelReferences.set(lab, { type: 'relative', offsets: [] });
-          }
-          labelReferences.get(lab)!.offsets.push(baseOffset + out.length - 1);
+          addRefOffset(labelReferences, lab, 'relative', baseOffset + out.length - 1);
         }
       } else {
         // Numeric literal: take the supplied 8-bit value directly
@@ -1935,11 +2023,8 @@ function opCodePatternToBytes(
         const isDec = /^[0-9]+$/.test(checkOp);
 
         if ((isHex || isDec) && numberReferences) {
-          if (!numberReferences.has(cleanOp)) {
-            numberReferences.set(cleanOp, { type: 'relative', offsets: [] });
-          }
           // Offset points to the displacement byte we just pushed (last element)
-          numberReferences.get(cleanOp)!.offsets.push(baseOffset + out.length - 1);
+          addRefOffset(numberReferences, cleanOp, 'relative', baseOffset + out.length - 1);
         }
       }
     } else if (p === 'XX' || p === 'N' || p === 'ZZ') {
@@ -1979,19 +2064,13 @@ function opCodePatternToBytes(
         const lab = cleanOp.toUpperCase();
         if (labelMap && typeof labelMap[lab] === 'number') v = labelMap[lab];
         if (labelReferences) {
-          if (!labelReferences.has(lab)) {
-            labelReferences.set(lab, { type: 'byte', offsets: [] });
-          }
-          labelReferences.get(lab)!.offsets.push(baseOffset + out.length);
+          addRefOffset(labelReferences, lab, 'byte', baseOffset + out.length);
         }
       } else if (isHex || isDec) { // >>> HIGHLIGHT 2: Added `|| isDec` to this condition <<<
         // Track number reference (byte type)
         // Previous code only had: else if (/^[#]/.test(cleanOp))
         if (numberReferences) {
-          if (!numberReferences.has(cleanOp)) {
-            numberReferences.set(cleanOp, { type: 'byte', offsets: [] });
-          }
-          numberReferences.get(cleanOp)!.offsets.push(baseOffset + out.length);
+          addRefOffset(numberReferences, cleanOp, 'byte', baseOffset + out.length);
         }
       }
       out.push(v & 0xff);
@@ -2015,19 +2094,13 @@ function opCodePatternToBytes(
         const lab2 = opStr2.toUpperCase();
         if (labelMap && typeof labelMap[lab2] === 'number') v2 = labelMap[lab2];
         if (labelReferences) {
-          if (!labelReferences.has(lab2)) {
-            labelReferences.set(lab2, { type: 'word', offsets: [] });
-          }
-          labelReferences.get(lab2)!.offsets.push(baseOffset + out.length);
+          addRefOffset(labelReferences, lab2, 'word', baseOffset + out.length);
         }
       } else if (isHex2 || isDec2) { // >>> HIGHLIGHT 4: Added `|| isDec2` to this condition <<<
         // Track number reference (word type)
         // Previous code only had: else if (/^#/.test(opStr2))
         if (numberReferences) {
-          if (!numberReferences.has(opStr2)) {
-            numberReferences.set(opStr2, { type: 'word', offsets: [] });
-          }
-          numberReferences.get(opStr2)!.offsets.push(baseOffset + out.length);
+          addRefOffset(numberReferences, opStr2, 'word', baseOffset + out.length);
         }
       }
       out.push(v2 & 0xff, (v2 >> 8) & 0xff); 

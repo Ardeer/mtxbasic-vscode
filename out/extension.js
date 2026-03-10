@@ -741,6 +741,7 @@ function activate(ctx) {
             { id: 'MOD', pattern: 'MOD', cmdname: 'numfn', args: [{ kind: 'numeric' }, { kind: 'numeric' }], expectEnd: true }, //range to be confirmed
             { id: 'MVSPR', pattern: 'MVSPR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 8 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true }, //3rd param needs for detail
             { id: 'NEXT', pattern: 'NEXT', cmdname: 'stdcmd', args: [{ kind: 'expr', required: false }], expectEnd: true }, //CONTROL STRUCTURE MUST BE Alphanumeric expr. No expr is also valid
+            { id: 'NEW', pattern: 'NEW', cmdname: 'stdcmd', args: [], expectEnd: true },
             { id: 'NODDY', pattern: 'NODDY', cmdname: 'stdcmd', args: [], expectEnd: true, description: 'Marks the start of NODDY text language section' }, //setup similar to CODE
             { id: 'NOT', pattern: 'NOT', cmdname: 'stdcmd', args: [] }, // removed , expectEnd: true so that A=NOT*5 is valid
             //{ id: 'ON', pattern: 'ON', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}] }, //CONTROL STRUCTURE and associated with GOTO or GOSUB
@@ -1182,7 +1183,7 @@ function activate(ctx) {
             return false;
         }
         // ============================================
-        // Z80 CODE BLOCK VALIDATION
+        // Z80 CODE BLOCK VALIDATION - PART 1
         // Validate assembly lines BEFORE the main BASIC loop
         // ============================================
         for (var _x = 0, codeBlockRanges_2 = codeBlockRanges; _x < codeBlockRanges_2.length; _x++) {
@@ -1347,6 +1348,15 @@ function activate(ctx) {
             }
             var segments = (0, mtxstdfns_js_1.splitLineSegments)(processedLineText); // Changed from line.text                
             var _loop_5 = function (seg) {
+                // lowercase REM is a syntax error; seg.text has already been
+                // upper‑cased by the segmentiser, so look at the original line.
+                var origLine = doc.lineAt(i).text;
+                // throw away an optional line number and following spaces
+                var stripped = origLine.replace(/^\s*\d+\s*/, '');
+                if (/^\s*rem\b/.test(stripped) && !/^\s*REM\b/.test(stripped)) {
+                    var idx = origLine.search(/\brem\b/i); // location of bad keyword
+                    diags.push(new vscode.Diagnostic(new vscode.Range(i, idx, i, idx + 3), 'keyword REM must be upper‑case', vscode.DiagnosticSeverity.Error));
+                }
                 // --- compute quoted-string ranges for this segment so diagnostics ignore text inside quotes ---
                 var stringRanges = [];
                 var inStr = false;
@@ -2029,7 +2039,11 @@ function activate(ctx) {
                 var onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);
                 if (onMatch) {
                     var selectorExprRaw = onMatch[1], branchKeyword_1 = onMatch[2], targetsRaw = onMatch[3];
+                    //parenthesis caused an issue with ON MOD(Z(1),2) not detecting the inner comma resulting insufficient arguments 
+                    //const selectorExpr = stripOuterParentheses(stripTrailingCommentUnquoted(selectorExprRaw.trim())); //didn't work
                     var selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
+                    // drop the function name and its parentheses, leaving just the contents
+                    selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/, '$1');
                     var selectorType = (0, mtxstdfns_js_1.classifyExpr)(selectorExpr);
                     if (!selectorType.hasNumeric) {
                         var idx = seg.text.indexOf(selectorExpr, (_q = onMatch.index) !== null && _q !== void 0 ? _q : 0);
@@ -2479,7 +2493,7 @@ function activate(ctx) {
             }
         } // END of NODDY validation section
         // ============================================
-        // Z80 CODE BLOCK VALIDATION SECTION
+        // Z80 CODE BLOCK VALIDATION SECTION - PART 2
         // ============================================
         /**
                 Need to convert the text prior to the code block into hexadecimal bytes as per MTX BASIC inline assembler rules
@@ -3200,11 +3214,13 @@ function activate(ctx) {
                         "Refer to MTX series Owners Manual, Technical Section, System Block Diagram");
                 }
                 if (word === 'PANEL') {
-                    return new vscode.Hover("**PANEL**:  Z80 disasembler.\n\n" +
+                    return new vscode.Hover("**PANEL**:  Z80 debugger and hex/ascii dump of memory .\n\n" +
                         "Usage: PANEL \n\n" +
-                        "Passes control to the PANEL dissassembler editor.\n\n" +
+                        "Passes control to the PANEL editor.\n\n" +
+                        "List programs, displays ROM, RAM, and z80 registers and allows users to step through code 1 line at a time.\n\n" +
                         "Refer to the MTX Series Owners Manual for details ON PANEL.\n\n" +
-                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like PANEL.");
+                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like PANEL.\n\n" +
+                        "NOTE: Use utility tools mtxdisassembly.py & mtxhexdump.py to provide some of the functionality of PANEL outwith a MTX or MEMU emulator.");
                 }
                 if (word === 'PAPER') {
                     return new vscode.Hover("**PAPER**:  Specifies the PAPER colour on the screen.\n\n" +
@@ -3614,34 +3630,23 @@ function activate(ctx) {
                 // Check if we hit a CODE statement
                 if (/^\d{1,5}\s+CODE\s*$/.test(line.trim())) {
                     inCodeBlock = true;
-                    // Calculate bytes used by all previous BASIC lines (including CODE line)
-                    var totalBytes = 0;
-                    for (var j = 0; j <= i; j++) {
-                        var basicLine = document.lineAt(j).text;
-                        if (/^\d{1,5}\s/.test(basicLine)) {
-                            // Convert this line to bytes to get its length
-                            try {
-                                var lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, hexBaseAddress + totalBytes);
-                                var isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                                if (isCodeLine) {
-                                    // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
-                                    // (8-byte placeholder includes EOF that gets replaced by Z80 code)
-                                    totalBytes += lineBytes.length - 1;
-                                }
-                                else {
-                                    totalBytes += lineBytes.length;
-                                }
-                            }
-                            catch (e) {
-                                // Skip lines that can't be tokenized
+                    // Derive CODE start from fully converted program bytes so directives/blocks
+                    // in earlier CODE lines are accounted for exactly.
+                    var codeMatch = /^\s*(\d{1,5})\s+CODE\s*$/.exec(line);
+                    var codeLineNumber = codeMatch ? parseInt(codeMatch[1], 10) : NaN;
+                    if (!Number.isNaN(codeLineNumber)) {
+                        try {
+                            var docBytes = (0, mtxtokens_js_1.convertTextToHex)(document.getText(), hexBaseAddress);
+                            var codeLineAddress = findAddressForLineNumber(codeLineNumber, docBytes, hexBaseAddress);
+                            if (codeLineAddress !== null) {
+                                // Z80 starts 7 bytes into the CODE line record.
+                                lastAddress = codeLineAddress + 7;
                             }
                         }
+                        catch (e) {
+                            // Keep existing fallback address if conversion fails.
+                        }
                     }
-                    // Start Z80 code at the address after all BASIC lines
-                    // Note: Z80 code is embedded WITHIN the CODE line structure at offset 7
-                    // (after 2-byte length + 2-byte line# + 1-byte CODE token + 2-byte opcode length)
-                    // basicTokeniseLine returns 8 bytes for CODE placeholder, but Z80 starts at byte 7
-                    lastAddress = hexBaseAddress + totalBytes;
                     // Now calculate bytes in current CODE block from scratch
                     for (var j = i + 1; j < position.line; j++) {
                         var z80Line = document.lineAt(j).text;
@@ -3694,7 +3699,7 @@ function activate(ctx) {
     )); // This closes registerCompletionItemProvider
     // Command: Renumber Z80 addresses in CODE block at cursor
     var renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', function () { return __awaiter(_this, void 0, void 0, function () {
-        var editor, doc, position, codeStartLine, codeEndLine, i, line, i, line, totalBytes, j, basicLine, lineBytes, isCodeLine, currentAddress, edits, i, line, match, indent, instruction, newAddr, newLine, parsed, instrLength;
+        var editor, doc, position, codeStartLine, codeEndLine, i, line, i, line, codeStartText, codeLineMatch, codeLineNumber, currentAddress, docBytes, codeLineAddress, edits, i, line, match, indent, instruction, newAddr, newLine, parsed, instrLength;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -3737,28 +3742,23 @@ function activate(ctx) {
                             break;
                         }
                     }
-                    totalBytes = 0;
-                    for (j = 0; j <= codeStartLine; j++) {
-                        basicLine = doc.lineAt(j).text;
-                        if (/^\d{1,5}\s/.test(basicLine)) {
-                            try {
-                                lineBytes = (0, mtxtokens_js_1.basicTokeniseLine)(basicLine, hexBaseAddress + totalBytes);
-                                isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                                if (isCodeLine) {
-                                    // CODE placeholder is 8 bytes, but actual header before Z80 is 7 bytes
-                                    // (8-byte placeholder includes EOF that gets replaced by Z80 code)
-                                    totalBytes += lineBytes.length - 1;
-                                }
-                                else {
-                                    totalBytes += lineBytes.length;
-                                }
-                            }
-                            catch (e) {
-                                // Skip lines that can't be tokenized
+                    codeStartText = doc.lineAt(codeStartLine).text;
+                    codeLineMatch = /^\s*(\d{1,5})\s+CODE\s*$/.exec(codeStartText);
+                    codeLineNumber = codeLineMatch ? parseInt(codeLineMatch[1], 10) : NaN;
+                    currentAddress = hexBaseAddress;
+                    if (!Number.isNaN(codeLineNumber)) {
+                        try {
+                            docBytes = (0, mtxtokens_js_1.convertTextToHex)(doc.getText(), hexBaseAddress);
+                            codeLineAddress = findAddressForLineNumber(codeLineNumber, docBytes, hexBaseAddress);
+                            if (codeLineAddress !== null) {
+                                // Z80 bytes begin 7 bytes into the CODE line record.
+                                currentAddress = codeLineAddress + 7;
                             }
                         }
+                        catch (e) {
+                            // Keep fallback base if conversion fails.
+                        }
                     }
-                    currentAddress = hexBaseAddress + totalBytes;
                     edits = [];
                     for (i = codeStartLine + 1; i <= codeEndLine; i++) {
                         line = doc.lineAt(i).text;

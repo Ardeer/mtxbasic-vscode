@@ -1521,7 +1521,16 @@ function replaceWithPlaceholders(mnemonic: string, operands: string[]): string {
  * when the other operands are compatible with the pattern.
  * Also recognizes literal numeric patterns (e.g., 0-7 for BIT/RES/SET instructions).
  */
-function operandPositionAllowsLabel(mnemonic: string, operands: string[], opIdx: number): boolean {
+function operandPositionAllowsValue(mnemonic: string, operands: string[], opIdx: number, allowXX: boolean): boolean {
+    const placeholderKind = (token: string): 'XXXX' | 'XX' | 'YY' | 'ZZ' | null => {
+        const t = token.toUpperCase().trim();
+        if (['XXXX', 'XX', 'YY', 'ZZ'].includes(t)) return t as 'XXXX' | 'XX' | 'YY' | 'ZZ';
+        if (t === '(XXXX)') return 'XXXX';
+        if (t === '(XX)') return 'XX';
+        if (/^\((IX|IY)[+-]ZZ\)$/.test(t)) return 'ZZ';
+        return null;
+    };
+
     const patterns = patternCmds.get(mnemonic);
     if (!patterns || patterns.length === 0) return false;
 
@@ -1537,8 +1546,8 @@ function operandPositionAllowsLabel(mnemonic: string, operands: string[], opIdx:
             const part = parts[j + 1];
             const op = upperOperands[j];
 
-            // placeholders always match
-            if (['XXXX', 'XX', 'YY', 'ZZ'].includes(part)) continue;
+            // Placeholder tokens always match, including parenthesized/indexed forms.
+            if (placeholderKind(part) !== null) continue;
 
             // allow common register/indirect tokens to match literally
             if (part === op) continue;
@@ -1581,13 +1590,44 @@ function operandPositionAllowsLabel(mnemonic: string, operands: string[], opIdx:
         if (!ok) continue;
 
         const wanted = parts[opIdx + 1];
-        // Return true if the wanted part is a placeholder OR a literal number that matched
-        if (['XXXX', 'XX', 'YY', 'ZZ'].includes(wanted)) return true;
+        const wantedKind = placeholderKind(wanted);
+        if (allowXX) {
+            // Numeric values are valid for XX/XXXX/YY/ZZ slots.
+            if (wantedKind !== null) return true;
+        } else {
+            // Labels are valid only for address-like slots.
+            // XX is 8-bit immediate, so label references like XOR AB are invalid.
+            if (wantedKind === 'XXXX' || wantedKind === 'YY' || wantedKind === 'ZZ') return true;
+        }
         // Also accept if wanted is a literal number (like 0-7 for BIT/RES/SET)
         if (/^[0-9]+$/.test(wanted)) return true;
     }
 
     return false;
+}
+
+function operandPositionAllowsLabel(mnemonic: string, operands: string[], opIdx: number): boolean {
+    return operandPositionAllowsValue(mnemonic, operands, opIdx, false);
+}
+
+function operandPositionAllowsNumeric(mnemonic: string, operands: string[], opIdx: number): boolean {
+    return operandPositionAllowsValue(mnemonic, operands, opIdx, true);
+}
+
+function extractLabelReferenceOperand(op: string): string | null {
+    const t = op.trim().toUpperCase();
+
+    if (isLabelOperand(t)) return t;
+
+    // (LABEL)
+    const indirect = /^\(([A-Z][A-Z0-9]*)\)$/.exec(t);
+    if (indirect && isLabelOperand(indirect[1])) return indirect[1];
+
+    // (IX+LABEL), (IX-LABEL), (IY+LABEL), (IY-LABEL)
+    const indexed = /^\((IX|IY)[+-]([A-Z][A-Z0-9]*)\)$/.exec(t);
+    if (indexed && isLabelOperand(indexed[2])) return indexed[2];
+
+    return null;
 }
 
 /**
@@ -1774,6 +1814,25 @@ function validateCodeBlock(lines: string[], startLine: number, baseAddr = 0x4000
         
         const mnemonic = parsed.mnemonic.toUpperCase();
         const operands = parsed.operands || [];
+
+        // Collect label references used by this instruction for later cross-checking.
+        // Examples: LD A,(COL), JR LOOP, LD HL,COL
+        for (let opIdx = 0; opIdx < operands.length; opIdx++) {
+            const op = operands[opIdx];
+            const labelRef = extractLabelReferenceOperand(op);
+            if (!labelRef) continue;
+
+            // Only count as a label reference where this operand position supports labels.
+            if (!operandPositionAllowsLabel(mnemonic, operands, opIdx)) continue;
+
+            const isRelative = (mnemonic === 'JR' || mnemonic === 'DJNZ');
+            labelUsages.push({
+                name: labelRef,
+                lineNumber: startLine + i,
+                instructionAddress: currentAddress,
+                isRelativeJump: isRelative
+            });
+        }
         
         // Build instruction string for matching
         const instruction = buildNormalizedInstruction(mnemonic, operands);
@@ -1817,8 +1876,11 @@ function validateCodeBlock(lines: string[], startLine: number, baseAddr = 0x4000
             const upper = op.toUpperCase();
             // If operand is a hex/decimal or looks like a label, check if allowed
             if (isHexOperand(op) || isDecimalOperand(op) || isLabelOperand(upper)) {
-                // If any pattern allows a value here, accept it
-                const patternAllows = operandPositionAllowsLabel(mnemonic, operands, opIdx);
+                const isLabelLike = isLabelOperand(upper);
+                // Labels cannot occupy XX slots; numeric values can.
+                const patternAllows = isLabelLike
+                    ? operandPositionAllowsLabel(mnemonic, operands, opIdx)
+                    : operandPositionAllowsNumeric(mnemonic, operands, opIdx);
 
                 // Build canonical operand signature for exact-forms lookup
                 const operandSignature = operands.map(o => o.toUpperCase().trim()).join(',');
@@ -1976,7 +2038,7 @@ function validateCodeBlock(lines: string[], startLine: number, baseAddr = 0x4000
                 line: usage.lineNumber,
                 start: 0,
                 end: lines[usage.lineNumber - startLine]?.length || 0,
-                message: `Label not found: ${usage.name}`,
+                message: `Label not defined in code block: ${usage.name}`,
                 severity: 'error'
             });
         }
@@ -2082,30 +2144,46 @@ function getDirectiveLength(parsed: Z80ParsedLine): number {
 function validateCodeBlocks(documentLines: string[], baseAddr = 0x4000): Z80Error[] {
     const allErrors: Z80Error[] = [];
     const codeBlocks = detectCodeBlocks(documentLines, baseAddr);
-    
-    for (const block of codeBlocks) {
-        // Calculate expected starting address by tokenizing BASIC lines before CODE
-        let expectedStartAddress = baseAddr;
-        try {
-            let totalBytes = 0;
-            for (let j = 0; j <= block.startLine; j++) {
-                const basicLine = documentLines[j];
-                if (/^\d{1,5}\s/.test(basicLine)) {
-                    const lineBytes = basicTokeniseLine(basicLine, baseAddr + totalBytes);
-                    const isCodeLine = /^\d{1,5}\s+CODE\s*$/.test(basicLine.trim());
-                    if (isCodeLine) {
-                        // CODE placeholder is 8 bytes, but Z80 starts at byte 7
-                        totalBytes += lineBytes.length - 1;
-                    } else {
-                        totalBytes += lineBytes.length;
-                    }
+    const codeBlockByStart = new Map<number, CodeBlock>();
+    for (const b of codeBlocks) codeBlockByStart.set(b.startLine, b);
+
+    // Pre-calculate the expected start address for each CODE block by walking
+    // BASIC lines in source order and tokenising full CODE blocks (not placeholders).
+    const expectedStartByCodeLine = new Map<number, number>();
+    try {
+        let totalBytes = 0;
+        for (let i = 0; i < documentLines.length; i++) {
+            const line = documentLines[i] || '';
+            if (!/^\d{1,5}\s/.test(line)) continue;
+
+            const isCodeLine = /^\d{1,5}\s+CODE\s*$/i.test(line.trim());
+            if (!isCodeLine) {
+                const lineBytes = basicTokeniseLine(line, baseAddr + totalBytes);
+                totalBytes += lineBytes.length;
+                continue;
+            }
+
+            // Z80 opcode stream starts at byte offset 7 from the start of the CODE line.
+            expectedStartByCodeLine.set(i, baseAddr + totalBytes + 7);
+
+            const block = codeBlockByStart.get(i);
+            const codeLines: string[] = [];
+            if (block) {
+                for (let k = block.startLine + 1; k <= block.endLine; k++) {
+                    if (k < documentLines.length) codeLines.push(documentLines[k]);
                 }
             }
-            expectedStartAddress = baseAddr + totalBytes;
-        } catch (e) {
-            // If tokenization fails, fall back to baseAddr
-            expectedStartAddress = baseAddr;
+
+            const blockText = `${line}\n${codeLines.join('\n')}`;
+            const codeBytes = basicTokeniseLine(blockText, baseAddr + totalBytes);
+            totalBytes += codeBytes.length;
         }
+    } catch {
+        // Leave map sparse; block-level fallback below will use baseAddr.
+    }
+    
+    for (const block of codeBlocks) {
+        const expectedStartAddress = expectedStartByCodeLine.get(block.startLine) ?? baseAddr;
         
         // Collect assembly lines from the CODE block
         const assemblyLines: string[] = [];

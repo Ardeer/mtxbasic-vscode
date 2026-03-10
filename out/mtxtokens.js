@@ -294,6 +294,27 @@ var mtxTokens = [
     { tokenDec: 255, tokenHex: 0xFF, token: "EOL" }
 ];
 exports.mtxTokens = mtxTokens;
+function createRefBuckets() {
+    return { byteOffsets: [], wordOffsets: [], relativeOffsets: [] };
+}
+function ensureRefBuckets(map, key) {
+    var k = key.toUpperCase();
+    var b = map.get(k);
+    if (!b) {
+        b = createRefBuckets();
+        map.set(k, b);
+    }
+    return b;
+}
+function addRefOffset(map, key, kind, offset) {
+    var buckets = ensureRefBuckets(map, key);
+    if (kind === 'byte')
+        buckets.byteOffsets.push(offset);
+    else if (kind === 'word')
+        buckets.wordOffsets.push(offset);
+    else
+        buckets.relativeOffsets.push(offset);
+}
 // --- token helpers (keep existing mtxTokens above) ---
 // tokens sorted by length (longest-first) + uppercase cache
 var tokensSorted = mtxTokens
@@ -985,10 +1006,30 @@ function parseCodeBlockPhase2(parsedLines, labelMap, labelReferences, numberRefe
 }
 // =================== PHASE 3: BUILD MTX DIRECTIVES ===================
 function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, directiveLines, commentLines, offsetBase, codeStartAbsolute) {
+    var _a, _b, _c;
     var mtxDirectiveBytes = [];
+    // Undefined label references are encoded as Number-definition records (historic MTX behaviour).
+    var mergedNumberRefs = new Map();
+    for (var _i = 0, _d = Array.from(numberReferences.entries()); _i < _d.length; _i++) {
+        var _e = _d[_i], name_1 = _e[0], refs = _e[1];
+        mergedNumberRefs.set(name_1, {
+            byteOffsets: __spreadArray([], refs.byteOffsets, true),
+            wordOffsets: __spreadArray([], refs.wordOffsets, true),
+            relativeOffsets: __spreadArray([], refs.relativeOffsets, true)
+        });
+    }
+    for (var _f = 0, _g = Array.from(labelReferences.entries()); _f < _g.length; _f++) {
+        var _h = _g[_f], labelName = _h[0], refs = _h[1];
+        if (typeof labelMap[labelName] === 'number')
+            continue;
+        var dst = ensureRefBuckets(mergedNumberRefs, labelName);
+        (_a = dst.byteOffsets).push.apply(_a, refs.byteOffsets);
+        (_b = dst.wordOffsets).push.apply(_b, refs.wordOffsets);
+        (_c = dst.relativeOffsets).push.apply(_c, refs.relativeOffsets);
+    }
     // 9a) Number definition blocks (0x00)
-    for (var _i = 0, _a = Array.from(numberReferences.entries()); _i < _a.length; _i++) {
-        var _b = _a[_i], numberStr = _b[0], info = _b[1];
+    for (var _j = 0, _k = Array.from(mergedNumberRefs.entries()); _j < _k.length; _j++) {
+        var _l = _k[_j], numberStr = _l[0], info = _l[1];
         mtxDirectiveBytes.push(0x00); // Number definition marker
         var numAscii = compressSpacesAndAscii(numberStr);
         mtxDirectiveBytes.push.apply(mtxDirectiveBytes, numAscii);
@@ -997,12 +1038,11 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
             mtxDirectiveBytes[mtxDirectiveBytes.length - 1] |= 0x80;
         }
         // Build reference section
-        var relOffsets = info.offsets.map(function (o) { return o - codeStartAbsolute; });
-        mtxDirectiveBytes.push.apply(mtxDirectiveBytes, buildReferenceSection(relOffsets, info.type));
+        mtxDirectiveBytes.push.apply(mtxDirectiveBytes, buildReferenceSections(info, codeStartAbsolute));
     }
     // 9c) Label definition blocks (0x02)
-    for (var _c = 0, _d = Object.entries(labelMap); _c < _d.length; _c++) {
-        var _e = _d[_c], labelName = _e[0], offset = _e[1];
+    for (var _m = 0, _o = Object.entries(labelMap); _m < _o.length; _m++) {
+        var _p = _o[_m], labelName = _p[0], offset = _p[1];
         mtxDirectiveBytes.push(0x02); // Label definition marker
         var relOffset = offset - codeStartAbsolute;
         mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
@@ -1015,16 +1055,15 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
         // Append label reference section (relative/word/byte) using newest-first order
         var refs = labelReferences.get(labelName.toUpperCase());
         if (refs) {
-            var relOffsets = refs.offsets.map(function (o) { return o - codeStartAbsolute; });
-            mtxDirectiveBytes.push.apply(mtxDirectiveBytes, buildReferenceSection(relOffsets, refs.type));
+            mtxDirectiveBytes.push.apply(mtxDirectiveBytes, buildReferenceSections(refs, codeStartAbsolute));
         }
         else {
             mtxDirectiveBytes.push(0x00, 0x00, 0x00);
         }
     }
     // 9d-9f) Directives (DB/DW/DS)
-    for (var _f = 0, directiveLines_1 = directiveLines; _f < directiveLines_1.length; _f++) {
-        var dir = directiveLines_1[_f];
+    for (var _q = 0, directiveLines_1 = directiveLines; _q < directiveLines_1.length; _q++) {
+        var dir = directiveLines_1[_q];
         if (dir.directiveType === 'DB') {
             // <0x03> <offset LSB/MSB> <byte count> <ascii length> <ascii chars w/ commas handling,bit7 set on last char of each item separated by commas> >
             mtxDirectiveBytes.push(0x03); // DB marker
@@ -1064,8 +1103,8 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
         }
     }
     // 9i) Comments (0x08)
-    for (var _g = 0, commentLines_1 = commentLines; _g < commentLines_1.length; _g++) {
-        var comment = commentLines_1[_g];
+    for (var _r = 0, commentLines_1 = commentLines; _r < commentLines_1.length; _r++) {
+        var comment = commentLines_1[_r];
         //<0x08><offset><length><comment string in ascii characters (excludes the semicolon marker at the start of the comment)><end of comment marker, 0xff>
         mtxDirectiveBytes.push(0x08); // Comment marker
         var relOffset = (comment.offset || 0) - offsetBase;
@@ -1114,6 +1153,55 @@ function buildReferenceSection(offsets, type) {
             bytes.push(offset & 0xff, (offset >> 8) & 0xff); // LSB/MSB pair for relative
         }
         // No pad bytes for relative
+    }
+    return bytes;
+}
+// Supports mixed reference kinds for a single symbol (byte + word + relative).
+function buildReferenceSections(refs, codeStartAbsolute) {
+    var toRelNewestFirst = function (arr) { return arr.map(function (o) { return o - codeStartAbsolute; }).reverse(); };
+    var byteRefs = toRelNewestFirst(refs.byteOffsets || []);
+    var wordRefs = toRelNewestFirst(refs.wordOffsets || []);
+    var relRefs = toRelNewestFirst(refs.relativeOffsets || []);
+    if (byteRefs.length === 0 && wordRefs.length === 0 && relRefs.length === 0) {
+        return [0x00, 0x00, 0x00];
+    }
+    var bytes = [];
+    if (byteRefs.length > 0) {
+        // Hybrid format for byte references: <count><offsets...>
+        bytes.push(byteRefs.length & 0xff);
+        for (var _i = 0, byteRefs_1 = byteRefs; _i < byteRefs_1.length; _i++) {
+            var o = byteRefs_1[_i];
+            bytes.push(o & 0xff, (o >> 8) & 0xff);
+        }
+    }
+    if (wordRefs.length > 0) {
+        // Word references: <0x00><count><offsets...>
+        bytes.push(0x00, wordRefs.length & 0xff);
+        for (var _a = 0, wordRefs_1 = wordRefs; _a < wordRefs_1.length; _a++) {
+            var o = wordRefs_1[_a];
+            bytes.push(o & 0xff, (o >> 8) & 0xff);
+        }
+        // Keep historical pad byte only when relative section does not follow.
+        if (relRefs.length === 0)
+            bytes.push(0x00);
+    }
+    if (relRefs.length > 0) {
+        // If mixed with word refs, emit compact relative section: <count><offsets...>
+        // Otherwise keep the standalone format: <0x00><0x00><count><offsets...>
+        if (wordRefs.length > 0) {
+            bytes.push(relRefs.length & 0xff);
+        }
+        else {
+            bytes.push(0x00, 0x00, relRefs.length & 0xff);
+        }
+        for (var _b = 0, relRefs_1 = relRefs; _b < relRefs_1.length; _b++) {
+            var o = relRefs_1[_b];
+            bytes.push(o & 0xff, (o >> 8) & 0xff);
+        }
+    }
+    // Legacy-only single-kind padding for byte refs remains via existing helper.
+    if (wordRefs.length === 0 && relRefs.length === 0 && byteRefs.length > 0) {
+        return buildReferenceSection(byteRefs, 'byte');
     }
     return bytes;
 }
@@ -1636,10 +1724,7 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
                 out.push(displacement & 0xFF);
                 // Track relative label reference
                 if (labelReferences) {
-                    if (!labelReferences.has(lab)) {
-                        labelReferences.set(lab, { type: 'relative', offsets: [] });
-                    }
-                    labelReferences.get(lab).offsets.push(baseOffset + out.length - 1);
+                    addRefOffset(labelReferences, lab, 'relative', baseOffset + out.length - 1);
                 }
             }
             else {
@@ -1657,11 +1742,8 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
                 var isHex = /^[#]/.test(checkOp);
                 var isDec = /^[0-9]+$/.test(checkOp);
                 if ((isHex || isDec) && numberReferences) {
-                    if (!numberReferences.has(cleanOp)) {
-                        numberReferences.set(cleanOp, { type: 'relative', offsets: [] });
-                    }
                     // Offset points to the displacement byte we just pushed (last element)
-                    numberReferences.get(cleanOp).offsets.push(baseOffset + out.length - 1);
+                    addRefOffset(numberReferences, cleanOp, 'relative', baseOffset + out.length - 1);
                 }
             }
         }
@@ -1698,20 +1780,14 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
                 if (labelMap && typeof labelMap[lab] === 'number')
                     v = labelMap[lab];
                 if (labelReferences) {
-                    if (!labelReferences.has(lab)) {
-                        labelReferences.set(lab, { type: 'byte', offsets: [] });
-                    }
-                    labelReferences.get(lab).offsets.push(baseOffset + out.length);
+                    addRefOffset(labelReferences, lab, 'byte', baseOffset + out.length);
                 }
             }
             else if (isHex || isDec) { // >>> HIGHLIGHT 2: Added `|| isDec` to this condition <<<
                 // Track number reference (byte type)
                 // Previous code only had: else if (/^[#]/.test(cleanOp))
                 if (numberReferences) {
-                    if (!numberReferences.has(cleanOp)) {
-                        numberReferences.set(cleanOp, { type: 'byte', offsets: [] });
-                    }
-                    numberReferences.get(cleanOp).offsets.push(baseOffset + out.length);
+                    addRefOffset(numberReferences, cleanOp, 'byte', baseOffset + out.length);
                 }
             }
             out.push(v & 0xff);
@@ -1734,20 +1810,14 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
                 if (labelMap && typeof labelMap[lab2] === 'number')
                     v2 = labelMap[lab2];
                 if (labelReferences) {
-                    if (!labelReferences.has(lab2)) {
-                        labelReferences.set(lab2, { type: 'word', offsets: [] });
-                    }
-                    labelReferences.get(lab2).offsets.push(baseOffset + out.length);
+                    addRefOffset(labelReferences, lab2, 'word', baseOffset + out.length);
                 }
             }
             else if (isHex2 || isDec2) { // >>> HIGHLIGHT 4: Added `|| isDec2` to this condition <<<
                 // Track number reference (word type)
                 // Previous code only had: else if (/^#/.test(opStr2))
                 if (numberReferences) {
-                    if (!numberReferences.has(opStr2)) {
-                        numberReferences.set(opStr2, { type: 'word', offsets: [] });
-                    }
-                    numberReferences.get(opStr2).offsets.push(baseOffset + out.length);
+                    addRefOffset(numberReferences, opStr2, 'word', baseOffset + out.length);
                 }
             }
             out.push(v2 & 0xff, (v2 >> 8) & 0xff);
