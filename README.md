@@ -11,30 +11,32 @@ This extension provides support for the MTX BASIC programming language in Visual
 
 ## Installation
 
-1. Clone the repository or download and unzip the ZIP file.
+1. Clone the repository or download and unzip the ZIP file. NOTE: in future hoping to have this available in the VS Code extension marketplace for download.
 2. In linux, move the folder to .vscode\extensions\  . You should now have a folder 
    .vscode\extensions\mtxbasic-extension
    In Windows this will be found at, remember to change the USERNAME to that in your system.
    C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\resources\app\extensions 
    Apologies, I don't have a mac.
 3. Exit and reload VS Code
-4. Eithed press `F5` to run the extension in a new Extension Development Host window or use "CTRL SHIFT p", select <Developer: Restart Host Extension> within the existing workspace window.
-5. package.json has been configured to to ensure Hover is switched on and autofill is off as invariably it gets it wrong. If that doesn't work, you can also
-   configure  VS code File->Preferences->Settings then select USER tab and search for Hover, and tick enabled.
-    Alternatively, to set manually, in VS Code, keypress: "CTRL SHIFT p" and select Preferences: OPEN USER SETTINGS (JSON). 
-    or if you want to access the user settings outside of VS code, in linux this can be found at ~/.config/Code/User/settings.json
-    "[mtxbasic]": {
+4. Either press `F5` to run the extension in a new Extension Development Host window or use "CTRL SHIFT p", select <Developer: Restart Host Extension> within the existing workspace window.
+5. package.json has been configured to to ensure Hover is switched on and autofill is off as invariably it gets it wrong. If that   
+   doesn't work, you can also configure VS code File->Preferences->Settings then select USER tab and search for Hover, and tick
+   enabled.
+   Alternatively, to set manually, in VS Code, keypress: "CTRL SHIFT p" and select Preferences: OPEN USER SETTINGS (JSON). 
+   or if you want to access the user settings outside of VS code, in linux this can be found at ~/.config/Code/User/settings.json
+   "[mtxbasic]": {
          //Hover is probably better for novices to the language or as a refresher. Experienced users may find it annoying, setting to false switches it off.
         "editor.hover.enabled": true,
-        //avoids colour swatches appearing in front of #hexadresses
+        //avoids colour swatches appearing in front of #hex addresses - well sometimes!!
         "editor.colorDecorators": false,
-        //intellisense from showing suggestions from otherfiles or documents which might be erroneous
+        //intellisense from showing suggestions from other files or documents which might be erroneous
         "editor.suggest.showWords": false
     }
-    Package.json in this extension, includes all the setting changes to apply, not just the example above.
-6. Once the extension is installed, Create a new file or text file, ideally use `.BAS` extension to start using the extension or open an existing MTX BASIC text based
-   file. If a .mtx or .BAS program file, you will have to convert to a text file format (see ref 5) to be able to amend in VS code editor. See below for further details.
-
+    package.json in this extension, includes all the setting changes that are applied as standard, not just the example above.
+6. Once the extension is installed, Create a new file or text file. Then click on the {} shown on the bottom left hand corner of VS code main. Click on this and scroll down until you find 
+   MTX-BASIC. You are now in the MTX-BASIC environment. You cannot open historical .mtx, .com or .BAS files, these will be in the original MTX binary format. Use mtxdisassembly.py (ref 5.) to 
+   convert these into .bas files, Use the lowercase .bas extension as this will be in VS code MTX-BASIC text format and you will be able to edit them in VS code editor, save as .bas and to 
+   save as .mtx binary format for execution on a MTX computer or emulator like MEMU, See below for further details.
 
 ## Coding Convention and Usage
 
@@ -55,7 +57,7 @@ One known issue is that MTX BASIC is a bit more forgiving than how I have coded 
 
 The use of colon (:) within REM statements that are not enclosed within double quotes will lead to ironically the following error "Unrecognised or stray text: 'function'. Did you mean to add 'REM'?". Avoid using : in free form REM statements.
 
-The mtxbasic-extension uses regular expressions (regex) to parse the command syntax (e.g. const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);). Unfortunately, this is not without its challenges, too many to discuss here, but one area where it struggles is with nested (or depth) parentheses, for example, ON MOD(Z(1),2) GOSUB 700,800 , I had to apply an additional a strip parentheses to this syntax parser to allow it to detect the second argument in the MOD() function due to Z(1) conflict. I am sure there will be other instances as detecting every eventuality is out with this scope of this hobbyist project. Please let me know of any specific issues and I will endeavour to update. 
+The mtxbasic-extension uses regular expressions (regex) to parse the command syntax (e.g. const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);). Unfortunately, this is not without its challenges, too many to discuss here, but one area where it struggles is with nested (or depth) parentheses, for example, ON MOD(Z(1),2) GOSUB 700,800 , I had to apply an additional a strip parentheses to this syntax parser to allow it to detect the second argument in the MOD() function due to Z(1) conflict. 
 
 MTX BASIC inline z80 assembler is handled slightly different. Inline z80 assembler (ASSEM <linenumber>) command would normally generate a <linenumber> CODE in MTX BASIC. ASSEM option is not required in VS Code as we can type <linenumber> CODE directly into the BASIC listing as a placeholder followed by return, you can then enter Z80 assembly language instructions. 
 
@@ -67,7 +69,7 @@ CODE must be on a dedicated line with no other commands, as shown above, otherwi
 The assembler format is unchanged from that used by the MTX assembler. 
 <indent><sp><hexaddr><LABEL: (optional)><z80 mnenomic><;COMMENT (optional)>
 
-Once a CODE block is defined as above, pressing <return> moves the line down 1 row and indents, so as to differentiate from a BASIC <linenumber>. Pressing the space bar <sp> after the indent will generate the next available hexadecimal address. Click on it to use it. 
+Once a CODE block is defined as above, pressing <return> moves the line down 1 row and indents, so as to differentiate from a BASIC <linenumber>. Pressing the space bar <sp> after the indent will generate the next available hexadecimal address. Click on it to use it. This can be a tad slow, I normally use 4000 for each line then use the auto renumber feature below to quick renumber the whole block with the correct hex addresses.
 
 20 CODE<return>
      4014 START: LD A,#0F ; START of the z80 code<return>
@@ -78,7 +80,7 @@ b) or from "CTRL SHIFT p" and select "MTX: Renumber Z80 addresses in CODE block"
 
 Hover over a Z80 mnenomic like LD and it will list possible options, e.g. LD (HL),A . There is no Symbols Label vs address summary at the end of the code block. CTRL F (find) is more convenient to use and it made the coding slightly less cumbersome. The code will flag an error if a LABEL is duplicated.
 
-A quirk of the assembler and to keep consistency with the original, the hexadecimal address is not preceded by '#' to indicate a hexadecimal number. However, numbers and addresses used in Z80 instructions must be preceded by '#' unless it the user uses the decimal equivalent, see examples below.
+A quirk of the assembler and to keep consistency with the original, the hexadecimal address in the code block is not preceded by '#' to indicate a hexadecimal number. However, numbers and addresses used in Z80 instructions must be preceded by '#' unless it the user uses the decimal equivalent, see examples below.
 
 20 CODE<return>
      4014 LD A,#0F ;hexadecimal number
@@ -136,11 +138,11 @@ i) Once you have created your MTX BASIC masterpiece, save the VS code text file,
 
 ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h.  This will bring up MTX save window, enter the filename.mtx (yes use the .mtx extension as preferred for MEMU emulator). A second prompt at the top of the VS code screen will ask if you want to auto-run or not. If auto-run is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator).
 
-The .mtx code generated for use on the Memotech MEMU emulator only uses minimal changes to the standard system variables that are normally saved to tape. In this version, the MTX header block including MTX system variables is equivalent to 619 bytes.
+The .mtx code generated for use on the Memotech MEMU emulator only uses minimal changes to the standard system variables that are normally saved to tape. In this version, the MTX header block including MTX tape based system variables is equivalent to 619 bytes.
 
 ## Contributing
 
-Contributions are welcome! Unfortunately, every eventuality cannot be tested for, so potential errors are possible. Please feel free to submit a pull request or open an issue for any enhancements or bug fixes. I don't claim to be anything other than an average hobbyist coder. Thanks.
+Contributions are welcome! I have tried to sandbox where possible, unfortunately, every eventuality for a rich programming language like MTX BASIC cannot be tested for, so potential errors or inconsistencies still are possible. Please feel free to submit a pull request or open an issue for any enhancements or bug fixes. I don't claim to be anything other than an average hobbyist coder. Thanks.
 
 ## License
 
@@ -148,7 +150,7 @@ This project is licensed under the GNU License. See the LICENSE file for more de
 
 ## Creation
 
-This extension was developed on a raspberry pi5 running Ubuntu 25.10 (ARM64). VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I decided to use a combination of Nicrosoft copilot which is integrated into VS code, user can select a range of non-Microsoft A.I. Models from Q4 20026 to Q1 2026 and a range of browser A.I. tools (like duck.ai) to supplement the use of my own python MTX disassembly and hexdump programs as the building blocks for this MTX BASIC extension. The majority of the underlying MTX BASIC (z80) building blocks were in place, but the one thing that I needed to get started, was a suitable JSON schema. I used https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension. Coding using A.I. tools needs a LOT  of patience and perseverance to get to a workable end result, even for the simplest of tasks. A lot of time is spent re-defining followed by extensive testing of any recommended code. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech MTX computer.
+This extension was developed on a raspberry pi5 running Ubuntu 25.10 (ARM64). VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I decided to use a combination of Microsoft copilot which is integrated into VS code, where a user can select a range of non-Microsoft A.I. Models (from Q4 20026 to Q1 2026) and a range of browser A.I. tools (like duck.ai) to assist in the development of this MTX BASIC extension. The building blocks of the extension were taken from my own python MTX disassembly and hexdump programs. The majority of the underlying MTX BASIC (z80) building blocks were in place, but the one thing that I needed to get started, was a suitable JSON schema. I used https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension. Coding using A.I. tools needs a LOT  of patience and perseverance to get to a workable end result, even for the simplest of tasks. A lot of time is spent re-defining followed by extensive testing of any recommended code. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech MTX computer.
 
 ## For more information
 

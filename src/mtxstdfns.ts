@@ -82,10 +82,8 @@ type BoolSpan = { spanStart: number; spanEnd: number };
             if (!s || s === '()' ) return false; 
             // Check for balanced parentheses and then test against simple variable arithmetic
             if (isBalancedParentheses(s)) {
-                    //console.log('Balanced parenthesis');
                     // Check for valid parenthesized expression
                     const sStrip=String(s).replace(/[\s[(|)]/g, '');
-                    //console.log('stripped out parentheses);
                     if (sStrip.startsWith('"') && sStrip.endsWith('"')) return true;
             }
             return false;
@@ -190,7 +188,6 @@ type BoolSpan = { spanStart: number; spanEnd: number };
             // In JavaScript/TypeScript we can use a balanced‑parentheses look‑ahead:
             const parts = sStrip.split(/\+(?![^(]*\))/).map(p => p.trim()); //backup option to use complexTokeniser() as used by VarExprParts
             parts.every(part => { //push used instead of using a counter
-                    //console.log('strexpr parts based on cat',part);
                     // Check each part for: Order changed
                     // 3. Nested String function call which requires numeric but returns a string e.g. CHRS(65)
                     //if (/^(?:CHR)\$\([^)]([\d+]*|[A-Z][A-Z0-9]*)\)$/.test(part)) return extractParts.push([part, true]);
@@ -210,21 +207,18 @@ type BoolSpan = { spanStart: number; spanEnd: number };
                     //}
                     if (/^(?:STR\$\()/.test(part)){ //deals with nested
                             const stripPart=part.slice(4,);
-                            //console.log('remove STR$(',stripPart); 
                             if (isValidVarExprArithmetic(stripPart)) {
-                                    //console.log('valid arithmetic variable expression');
-                                    return extractParts.push([part, true]);         
+                                    return extractParts.push([part, true]);
                             } 
                             else {
-                                    //console.log('invalid arithmetic/var expression');
-                                    return extractParts.push([part, false]);                                
+                                    return extractParts.push([part, false]);
                             }
                     }
                     // 5. Nested String Command call - no associated argunments
                     if (/^(?:INKEY|SPK|TIME)\$\s*$/.test(part)) return extractParts.push([part, true]);
                     // 6. Nested String variable (ends with $)
                     if (isValidStrVarName(part) || isValidString(part)) return extractParts.push([part, true]);
-                    //if (/^(?:[A-Z][A-Z0-9]*\$)$/.test(part)) return extractParts.push([part, true]);              
+                    //if (/^(?:[A-Z][A-Z0-9]*\$)$/.test(part)) return extractParts.push([part, true]);
                     // 7. Quoted string option to check with isBalancedDoubleQuotes()
                     //if (/^(?:"[^"]*")$/.test(part)) return extractParts.push([part, true]);
 
@@ -256,34 +250,27 @@ type BoolSpan = { spanStart: number; spanEnd: number };
             //covers 1 deep nested functions but not 1 deep variables.
                     if (parts.length === 0) extractParts.push(['', false]);
                         for (const part of parts) {
-                            //console.log('strexpr parts based on cat',part);
-                            // Check each part for: Order changed                               
+                            // Check each part for: Order changed
 
                             // 2. Nested functions excluding specials
                             // 2a. LN(x)
                             //if (/^(?:LN)\s*\(/.test(part)) { //removed LN as copvered by isValidVarExprArithmetic
                             /*        const stripPart=part.slice(2,);
-                                    console.log('remove LN(',stripPart); 
                                     if (isValidVarExprArithmetic(stripPart)) {
-                                            console.log('valid arithmetic variable expression');
                                             extractParts.push([part, true]);         
                                     } 
                                     else {
-                                            console.log('invalid arithmetic/var expression');
-                                            extractParts.push([part, false]);                                
+                                            extractParts.push([part, false]);
                                     }
                             } */                        
                             // 2b. FCN(x)
                             if (/^(?:ABS|ATN|COS|INP|INT|SGN|SIN|SQR|TAN|USR)\s*\(/.test(part)) { //removed EXP as copvered by isValidVarExprArithmetic
                                     const stripPart=part.slice(3,);
-                                    //console.log('remove FUNC(',stripPart); 
                                     if (isValidVarExprArithmetic(stripPart)) {
-                                            //console.log('valid arithmetic variable expression');
                                             extractParts.push([part, true]);         
                                     } 
                                     else {
-                                            //console.log('invalid arithmetic/var expression');
-                                            extractParts.push([part, false]);                                
+                                            extractParts.push([part, false]);
                                     }
                             }
                             // 2c. MOD(x,y)
@@ -294,45 +281,36 @@ type BoolSpan = { spanStart: number; spanEnd: number };
                             else if (/^(?:ASC\()/.test(part)) {
                                     const stripPart=part.slice(3,);
                                     const ifStrExpr=stringExprParts(stripPart);
-                                    console.log('remove ASC(',stripPart); 
                                     //if (isValidStrVarName(stripPart) || isValidString(stripPart) || (ifStrExpr.every(row => row[1] === true))) {
                                     if ((ifStrExpr.every(row => row[1] === true))) {
-                                    console.log('valid string variable expression');
-                                            extractParts.push([part, true]);         
+                                            extractParts.push([part, true]);
                                     } 
                                     else {
-                                            console.log('invalid string/string var expression');
-                                            extractParts.push([part, false]);                                
+                                            extractParts.push([part, false]);
                                     }
                             }
                             // 3b. LEN () //LEN needs a space after it 
                             else if (/^(?:LEN\s\()/.test(part)) {
                                     const stripPart=part.slice(4,);
                                     const ifStrExpr=stringExprParts(stripPart);
-                                    //console.log('remove LEN (',stripPart); 
                                     //if (isValidStrVarName(stripPart) || isValidString(stripPart) || (ifStrExpr.every(row => row[1] === true))){
                                     if ((ifStrExpr.every(row => row[1] === true))) {
-                                            //console.log('valid string variable expression');
-                                            extractParts.push([part, true]);         
+                                            extractParts.push([part, true]);
                                     } 
                                     else {
-                                            //console.log('invalid string/string var expression');
-                                            extractParts.push([part, false]);                                
+                                            extractParts.push([part, false]);
                                     }
                             }
                             // 3c. VAL()
                             else if (/^(?:VAL\()/.test(part)) {
                                     const stripPart=part.slice(3,);
                                     const ifStrExpr=stringExprParts(stripPart);
-                                    //console.log('remove VAL(',stripPart); 
                                     //if (isValidStrVarName(stripPart) || isValidString(stripPart) || (ifStrExpr.every(row => row[1] === true))) {
                                     if ((ifStrExpr.every(row => row[1] === true))) {
-                                            //console.log('valid string variable expression');
-                                            extractParts.push([part, true]);         
+                                            extractParts.push([part, true]);
                                     } 
                                     else {
-                                            //console.log('invalid string/string var expression');
-                                            extractParts.push([part, false]);                                
+                                            extractParts.push([part, false]); 
                                     }
                             } 
                             // Check for expression wrapped in parentheses - e.g. (A+B) or (Y(AA,P)*Q)
@@ -384,7 +362,6 @@ type BoolSpan = { spanStart: number; spanEnd: number };
                     n++;
                     if (depth === 0) break;
             }
-            //console.log('captureParenthesesGroups, n=',n)
             return n;
     } //END of captureParenthesesGroup
 
@@ -616,10 +593,8 @@ type BoolSpan = { spanStart: number; spanEnd: number };
 
             // Check for balanced parentheses
             if (isBalancedParentheses(s)) {
-                    //console.log('Balanced parenthesis');
                     // Check for valid parenthesized expression
                     const sStrip=String(s).replace(/[\s[(|)]/g, ''); 
-                    //console.log('stripped out parenthesis', sStrip);
                     if (simpleArith1.test(sStrip) || simpleArith2.test(sStrip)) {
                             return true;         
                     }   
@@ -667,9 +642,7 @@ function classifyExpr(expr: string): { hasString: boolean; hasNumeric: boolean }
     // capture the command token (letters and optional trailing $)
     const m = input.trim().toUpperCase().match(/^([A-Z]+\$?)/);
     const cmd = m ? m[1] : '';
-    //console.log('cmd = ',cmd);
     if (!cmd) return true; // no command found -> treat as requires space
-    //console.log('!noSpaceAllowed boolean =', !noSpaceAllowed.has(cmd))
     return !noSpaceAllowed.has(cmd); // returns true if requires a space and false if no space required
     }
 

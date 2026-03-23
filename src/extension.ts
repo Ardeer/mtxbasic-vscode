@@ -364,15 +364,12 @@ export function activate(ctx: vscode.ExtensionContext) {
                                 vscode.DiagnosticSeverity.Error));
                 }
                 else { //valid LET statement
-                //console.log('LET statement appears valid: ',lhsCheck,'=',rhsCheck);
                 if (lhsIsString && rhsIsString.every(row => row[1] === true)) {
-                        //console.log(`Both sides are string types: ${lhsCheck} and ${rhsCheck}`);
                         //use rhs to process as individual components separated by + operators using strExprParts in the validation section below
                         return rhsIsString.map(row => row[0])  ;
                         
                 }
                 else if (lhsIsVariable && rhsIsNumericAdjusted.every(row => row[1] === true)) {
-                        //console.log(`Both sides are numeric types: ${lhsCheck} and ${rhsCheck}`);
                         //use rhs to process further as individual components separeted by + - * / ^ operators using varExprParts in the validation section below
                         return rhsIsNumericAdjusted.map(row => row[0]) ;
                 }   
@@ -1026,9 +1023,8 @@ export function activate(ctx: vscode.ExtensionContext) {
                             else if (parts.length !== 7) {
                                     res.push({ groupIndex: 1, message: `${spec.id} requires either 3 or 7 argument(s)` });
                             } 
-                    } //END of SOUND argument check                     
+                    } //END of SOUND argument check
                             
-                    //console.log('want =',want);
                     if (want.length === 0) {
                             if (argsText && spec.expectEnd) {
                             res.push({ groupIndex: 1, message: `${spec.id}: unexpected argument(s): ${argsText}` });

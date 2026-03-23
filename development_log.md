@@ -1,4 +1,259 @@
-Check CODETEST.BAS - DONE
+4-Aug-2025 to 1-Nov-2025
+Revisiting mtx BASIC to TEXT with a view of using it as the basis of an VS code mtx-basic extension.
+
+1st part was setting up a list of mtx basic commands and information to link to VS code hover feature.
+
+VS code extensions use node and typescript/javascript. Rather than learn another language syntax, javascript is known to be troublesome, so will use this as a test bed of using free AI tools to program the extension. 
+
+2-Nov-2025
+All variables to be capitalised.
+Max nested Gosubs = 34
+Maximum variable length is 159 chars (3x40+1x39) later changed to 158 as when edit a line its indented by a character.
+Maximum file name is 15 characters
+A mtx programm starts with FF (255) in the header followed by the tape name. The memu emulator allws longer filenames and adds .mtx after it which is not required when loading a filename.
+Significant figures for numbers is 9 or 10 plus minus character
+number range is -1E+38 to 1E+38
+trig ranges lower and limited to -1E9 to +1E9 to avoid 0 overflow
++ sign is used for string concatenation.
+LEN is a special case as needs a space after it LEN (A$) unlike other functions like CHR$(65), this was supposed to differentiate it from an array definition. Will flag LEN() as an error to keep logic as a minimum.
+see mtx BASIC to text for z80 opcodes, mnenomics and BASIC ascii and tokens.
+
+3-Nov-2025
+Creating and testing a range of functions
+isValidNumericExpression, isValidString, convertToNumber, isStringExpression, isNumericExpression, splitTopLevel, splitLineSegments,stripCharacters, splitStringConcats, splitTopLevelWithStrings
+
+A LOT of testing and refining needed. Struggles with string commands. 
+
+Typescript uses regular expressions (regexes) to parse majority of commands, which is flaky and doesn't always work as intended, leading too much frustration and rework.
+
+19-Nov-2025
+created stdFns.ts (note later changed to mtxstdfns.ts)
+
+20-Nov-2025
+Colons used as BASIC multiline separator. Addressing colons used in REM statements and between double quotes.
+more issues with regex.
+VaidExprParts to help address some arithmetic handling.
+
+22-Nov-2025
+updated sideways testing regime in argdrivenfunctions.ts as similar diagnostics as allows console output easily.
+managed to get LET var or var$ = expr or expr$ to work.
+
+23-Nov-2025
+transferred LET code into extension.ts with mixed results.
+Issues with LET BX=PX+1+32*(PX=31)
+didn't pickup space issue with LEN() or LEN   () (multiple spaces). Revisit complexTokeniser
+widened functions to be numeric and expressions.
+Issues with COLOUR 4,LEN (D$) giving a false positive
+Lots of testing to resolve.
+
+25-Nov-2025
+PRINT/LPRINT parser update
+NEXT I was fine but NEXT X or NEXT N or NEXT E or NEXT T would throw an error because rawMatch.IndexOf(arg) finds the 1st occurence of the argument text anywhere in the match.
+
+The use of AND, NOT, OR and expr like (NOT 2=2) to test and update LET and IF statements to accommodate.
+
+1-Dec-2025
+removed return res in some of the early checks to ensure all errors are returned.
+A major issue with SAVE and LOAD errors.
+
+3-Dec-2025
+SAVE/LOAD resolved. The groupIndex was not looking at groupIndex=0.
+
+7-Dec-2025
+Resolved IF A$=" " or A$= " " and IF A=12+3+6
+
+Added Noddy command option
+
+8-Dec-2025
+Used my files afw_Z80_mnemonics.py, afw_mtx_tokens.py and afw_mtx_sys_vars.py as building blocks for z80codes.ts (started today) and mtxtokens.ts and mtxsysvars.ts.
+
+9-Dec-2025
+Debugging z80codes.ts, its struggling with labels.
+New rules for NN, n, e, d
+if starts with # then a hexadecimal number else a decimal number [0-9]
+check labels mismatch at end of a codeblock.
+
+10-Dec-2025
+moved codeblock code from extension.ts to z80codes.ts due to syncing issues and duplication.
+hexaddr doesn't start with a # to match the current mtx z80 inline assembler. This is causing issues with BASIC line numbering. Need to indent the hexaddr in the codeblock.
+
+The AI didn't convert the z80 list from python to typescript properly, large chunks missing. I did this manually after a number of AI attempts!!!
+
+13-Dec-2025 to 21-Dec-2025
+confirmed bottom right hand corner of VS Code page, shows MTX-BASIC
+the annoying colour swatches which appears if use # followed by 4 numbers, should be surpressed after changes to user preferences but it keeps coming back!
+Analysed MTX header default 619 bytes versus the variable length versions, like BSHIPS_84 which was 2827 bytes.
+Carrying out investigative work using hexdump and mtx Panel to identify common variables that need to be there and which others can be ignored.
+
+22-Dec-2025
+Code inserting an unwanted space between keywords USER and SAVE when the hex dump was reviewed.
+100 USER SAVE "PANEL.COD"
+
+added BASTOP, BASBOT, NODTOP and NODBOT counters
+
+24-Dec-2025
+Tested changes to basicTokeniseLine and processCodeBlock
+
+10 CODE\n0000 LD A,#C3\n0002 LD (#FA9E),A\n0005 LD HL,#B012
+expected and actual bytes matched [16,0,10,0,194,8,0,62,195,50,158,250,33,18,176,255]
+
+2-Jan-2026
+Updated processCodeBlock conversion to include mtx directives (LABELS, Comments, DB, DW, DS)
+
+4-Jan-2026 to 11-Jan-2026
+in VS Code, compiled PANELCOD.bas to PANELCOD2.mtx  and compared the hexdump to the original PANELCOD.mtx
+START label not shown
+JR showing numbers instead of labels but JR NZ,POUT and JR Z,END were correct
+lots of debugging and refining.
+
+12-Jan-2026
+recent changes mean the mtx directives offset by +7 as the offsets are based on the start of the opcodes not the start of the BASIC line CODE.
+
+13-Jan-2026
+Fixed the extra FF at the end, only time you would see a double FF is if the last item in a code block was a comment which ends with a FF and then the FF for the end of the code block.
+
+14-Jan-2026
+More analysis of mtx header
+the key is the 1st byte is FF (so likely to be a program not a text file), next 15 bytes are the tape name
+bytes 16 and 17 are a marker for where the variable header ends and the the start of the taped mtx system variables. This is key as need to oull out 
+is it a MTX 500 (32k, starts at #8000) or MTX 512 (48k, starts at #4000) => LSTPG = 0 or 1
+NODDY start, BASIC start and end
+
+15-Jan-2026
+issues with space compression and overall count.
+
+23-Jan-2026
+added createHdr to extension.ts
+fixed error where forgot that byte zero is FF and had mistakenly had the name as 16 bytes not 15.
+PANELCOD2.bas needed blank comments (;) removed as this was inflating the BASIC file length vs the original.
+A lot of work interrogating the code to understand compiling byte differences vs original
+
+24-Jan-2026
+Eventually forensically analysed the original BASIC listing vs VS code one generated from MTX BASIC to TEXT. Identified 11 byte discrepency
+"IS " 3 bytes missing and added to VS code listing
+"THE " 4 bytes missing and added to VS code listing
+"." 1 byte to remove from VS code listing
+" " 5 misisng space bytes and added to VS code listing
+
+25-Jan-2026
+orginal and now the VSC compiled version match up with 3022 bytes.
+Identified the missing spaces after ; were due to a regex, this was updated.
+Also, the total length had been out by 1 byte was because it was already pointing to the next byte, although end of program reached.
+Initially the file loaded and crashed. The error was traced to DESAVE system variable, 00 00. This needed to be FB4E + filename (excludes .mtx) length
+
+When loaded into the MEMU emualtor, the symbols table at the code length showed that JPANEL at 0007 instead of 4007. To resolve.
+
+Tested against MTX program (BASIC only - no assembly or noddy) BOMBER.mtx, found a number of issues. Spaces between double quotes were being processed as compressed spaces rather than normal spaces resulting in an 111 byte variance.
+
+VS Code extension sections for IF-THEN-ELSE and LET and PRINT were not showing no space or multiple space errors.
+
+
+26-Jan-2026
+IF-THEN-ELSE and THEN/ELSE flags resolved the space issues, now showing no space or multiple space errors.
+
+Changed logical (<,>, etc) and arithmetic (/,+, etc) to tokenised versions instead of the ascii versions as this is what the mtx assembler does.
+
+BOMBER2.mtx created using VSC starts to run then line 27 appears with error undefined. If I press enter and re-run, the game runs fine. Need to solve the cause.
+
+ALso, need to fix double spaces after TO, THEN and ELSE and to recode so that ELSE RETURN didn't show as an error in VSC.
+
+Did another deep dive of hex byte differences.
+
+27-Jan-2026
+stripped out excess spaces after OR, NOT, AND, ELSE identified yesterday, expected 7 byte reduction in compiling but only 6 byte reduction.
+loads ok but still the same issue with line 27 undefined. A way around this is to add a new line 1 GOTO 22 which bypasses the genpat definitions in the BASIC listing. 
+This worked for the 1st run not the second. Also, the original autostarts on loading, I have to type RUN once loaded. This was due to the value of DESAVE
+the original #401B which jumps to line 4, start of the genpat information. When loaded,it still crashed at line 27 undefined.
+
+reviewing the hexdump again, noticed that B$=CHR$(143) was [ 02,24,d4,f5,28,31,34,33,29] then B was offset by #40. After further investigation (should have realised from mtx BASIC to text).
+
+Updated SAVEHEX in extention.ts to ask the user to input an autostart BASIC line number or hex address. default ius the DESAVE speced previously.
+
+28-Jan-2026
+further testing to be done with BSHIPS_84.mtx (BASIC and noddy) and CHARTS_V4.mtx (BASIC, CODE and noddy)
+Both these programs have larger header bytes than the standard but anything generated from VSC will be the stheader length (includes system vars) of 619 bytes.
+
+BSHIPS_84.mtx testing crashed at line 40 PLOD "PROG3":REM instructions
+Wrote a python script to compare VSC and original hexdumps. NOTE: AI was shockingly bad at this, ended up writing the bulk of it myself. I thought AI coding agents were supposed to be a pHD level!!
+
+29-Jan-2026
+DATA to have a space after it. Updated extension.ts
+
+31-Jan-2026
+BASPO should be NODTOPaddr. This fixed NODDY directory in MEMU - no longer blank.
+The string variable offset by #40 had not been implemented fully which caused issues in BSHIPS_84
+
+tested changes with BOMBER2.mtx now auto-runs, no crashes.
+
+NODDY picking up BASIC keywords like FOR. Hover updated to exclude NODDY block.
+1st line of INST ad INST2 need to be 39 characters long otherwise the NODDY text page is out of alignment.
+
+1-Feb-2026
+regex for LET amd validVarNames amended to allow for arrays. Changes to complexTokeniser and varExprParts stripping out (), so Y(1,1) became 1,1 which is an error as not a function or arithmetic.
+radius updated for CIRCLE to allow decimal to align with current mtx programs.
+
+Upadted text width for Noddy to 39 characters after retestsing.
+
+3-Feb-2026
+Fixed boolean boundaries as picking up OR with variables like CORR in ANALYSIS.BAS
+Further testing found DEV=SQR(ERR OR/...) VSC added a space to spearate the OR in ERROR which was incorrect
+Another error TO NUM was represented as TONUM resulting in an error. space removal by VSC was too aggressive.
+
+Analysis then ran fine after VSC compiling.
+BOMBER.BAS ran OK once the above change was implemented, as line 36 FOR Z=BY TO22 was resolved.
+CHARTS_V$ and BSHIPS_84 all ran  OK after retesting.
+
+4-Feb-2026
+
+issue with mixed case resolved.
+
+NEXT without an optional argument resolved.
+
+resolved hex address 40AF showing hover info for z80 register AF.
+
+5-Feb-2026
+removed a lot of /i and /i. regexes in z80codes.ts to ensure mixedcase variables.
+
+updates to TextMate (mtxbasic.tmlanguage.json)
+
+6-Feb-2026
+Mixedcase updated for keywords not just variables.
+VSC doesn't do <TAB> to trigger the z80 hex address auto generate, so will have to use space.
+Z80renumber generated and assigned to CTRL SHIFT r
+SAVEHEX assigned to CTRL SHIFT h as CTRL SHIFT S reserved for save
+
+7 to 9-feb-2026
+further debugging. Updated extension to github.
+
+14-Feb-2026
+MTX BASIC to TEXT renamed as mtxdisassembly as would be helpful to include with the extension.
+hexdump renamed as mtxhexdump, again to be included with extension as part of the overall development tools to support IDE use.
+mtxdisassembly.py and mtxhexdump.py were written in python by me and will be adapted over the coming month to be integrate with the extension, to minimise inconsistencies other than the inclusion of REM NODDY placeholder.
+
+Test CR at end of Noddy lines to see if had any impact - NONE. Plan to add spaces and end of each noddy line when compiling to ensure 39 character alignment.
+
+in z80codes.ts, detectCodeBlocks, validateCodeBlocks and collectLabels are all hardwired to baseaddr of 0x4000. This should only be as a fallback and to use the baseaddr configuration in extension.ts This is the cause of some hexaddr's not being flagged as an error when the code is scanned.
+
+15-Feb-2026
+importing basicLineTokeniser into z80codes.ts
+More hexdump analysis / debugging of Noddy page/prog setup.
+There was an extra byte in the ANALYSIS6.BAS VSC compilation test. 10825 bytes vs 10824 bytes. There was a blank line after a return which the system processed as a newline <0x80+0x27> for spaces followed by FF to signify end of Noddy page. Removal of the extra space bytes, resulted in the correct compilation bytes vs the original.
+
+TESTMTX.bas crashed as no return in 20 CODE. Also, needed to add VS 4 before CIRCLEas need to be in graphics mode to work.
+
+16-Feb-2026
+the BOMBER.mtx header byte 16/17 marker was f2 f4 but the 2nd f2 f4 marker for sys_var was too far on. The default system variable marker f2 f8 was earlier and better aligned with where the system variable start should be
+
+Confirmed REM **   TEST used 0x20 for spaces not compressed and PRINT "**    **", also confirmed 0x20 for spaces not compressed spaces.
+
+17-Feb-2026
+TESTMTX.bas correctly assembled by VSC and then disassembled by mtxdisassembly.
+mtxdisassembly now injecting REM NODDY placeholder at the end of BASIC as part of VSC code integration requirements.
+
+Noddy text and prog page line lengths must comply with 39 characters. Code updated.
+
+### Summary update to date
+CODETEST.BAS (renamed to Z80CODETEST.bas) where z80 code was compared against z80Cmds in z80codes.ts - DONE
 
 Check against PANELCOD.BAS (started 13-Jan-2026) - DONE
     in a number if more than 1 instances, VS code list in order whereas MTX has them in reverse order - is this an issue - doesn't appear to be. 
@@ -19,7 +274,7 @@ if any of the following stack pointers are in the code, then another quirk of th
     LD SP,IY                LDSPIY: DB #FD,#F9
     need to check how best to code. Also, may require the python disassembler to be updated.
 
-In addition to the hover note above, need to add a new hover for RST 10 and how this is used for screen manipulation.
+In addition to the potental hover note above, need to add a new hover for RST 10 and how this is used for screen manipulation - STILL to be done
 
 Test .mtx code generated in VS code in the MTX emulator
 a) PANELCOD - DONE. Only error appears that the symbols are from 0x0000 instead of 0x4000 when loaded into the emulator! Need to resolve.
@@ -125,6 +380,7 @@ The call site in extension.ts line 2672
 Importing basicTokeniseLine into z80codes.ts
 
 The original code planner log, now called development log was uploaded to the cloud as part of an inadvertent ask vscode and it was lost!! This backup was last updated on the 14th Feb 2026, so lost all the logs from then until 5th March.
+### END OF summary
 
 22/23-Feb-2026
 FIXED the JR/DJNZ jumps going upwards. 
@@ -300,8 +556,6 @@ when it should have been
 0x01 0x00 => reference
 0x00 =>pad byte
 
-
-
 The above changes resolved the z80 renumber and providercompletionitem hex address misalignement. Tested in list2-3b.bas All the errors disappeared.
 block 3 used to be reported as starting at 4460 instead of 4469, which is why the diagnostics complained and the emulator
 looked “wrong”. The only thing that ever affects those numbers is the byte stream returned by
@@ -337,3 +591,73 @@ Because they’re orthogonal there is no need to duplicate either set of checks.
 Still to add the following error checks
 If use a label in say LD A,(COL) or JR ROTSTART but the label is not defined before or later as COL: or ROTSTART: then flag an error (Label not defined)
 AND Z or AND AA not showing as an error even though these operands are not valid. Why?
+
+FIXED incorrect operands not flagging as errors
+
+11-Mar-2026
+removal of debugging code
+Active Console Debug Logs (in-use files)
+
+out/mtxtokens.ts:628
+out/mtxtokens.ts:632
+out/mtxtokens.ts:642
+out/mtxtokens.ts:643
+out/mtxtokens.ts:644
+out/mtxtokens.ts:645
+out/mtxtokens.ts:655
+out/mtxtokens.ts:1007
+out/mtxtokens.ts:1018
+out/mtxtokens.ts:1044
+out/mtxtokens.ts:1143
+out/mtxtokens.ts:1146
+out/mtxtokens.ts:1165
+out/mtxtokens.ts:1169
+out/mtxtokens.ts:1465
+out/mtxtokens.ts:1614
+out/mtxtokens.ts:1615
+out/mtxstdfns.ts:266
+out/mtxstdfns.ts:268
+out/mtxstdfns.ts:272
+out/mtxstdfns.ts:297
+out/mtxstdfns.ts:300
+out/mtxstdfns.ts:304
+
+Likely Debug/Trace But Could Be Intentional Error Reporting
+
+out/mtxtokens.ts:1210
+out/mtxtokens.ts:1211
+out/mtxtokens.ts:1212
+out/mtxtokens.ts:1217
+out/mtxtokens.ts:1224
+out/mtxtokens.ts:1622
+out/mtxtokens.ts:1677
+
+Commented-Out Debug Console Lines (cleanup only)
+
+out/extension.ts:367
+out/extension.ts:369
+out/extension.ts:375
+out/extension.ts:1031
+out/mtxstdfns.ts:85
+out/mtxstdfns.ts:88
+out/mtxstdfns.ts:193
+out/mtxstdfns.ts:213
+out/mtxstdfns.ts:215
+out/mtxstdfns.ts:219
+out/mtxstdfns.ts:259
+out/mtxstdfns.ts:279
+out/mtxstdfns.ts:281
+out/mtxstdfns.ts:285
+out/mtxstdfns.ts:312
+out/mtxstdfns.ts:315
+out/mtxstdfns.ts:319
+out/mtxstdfns.ts:327
+out/mtxstdfns.ts:330
+out/mtxstdfns.ts:334
+out/mtxstdfns.ts:387
+out/mtxstdfns.ts:619
+out/mtxstdfns.ts:622
+out/mtxstdfns.ts:670
+out/mtxstdfns.ts:672
+
+to test code after changes. will do this as part of wider checking.

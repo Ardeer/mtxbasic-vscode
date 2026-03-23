@@ -625,24 +625,15 @@ function basicTokeniseLine(line: string, baseAddr = 0x4000): number[] {
       // Stop if line has leading whitespace but no hex address following it
       if (/^\s+/.test(l) && !/^\s+[0-9A-F]{1,4}\b/.test(l)) break;
       // This is a code block line, add it
-      console.log(`[basicTokeniseLine] Code line ${rawCodeLines.length}: ${JSON.stringify(l.substring(0, 50))}`);
       rawCodeLines.push(l);
     }
     
-    console.log(`[basicTokeniseLine] Collected ${rawCodeLines.length} code lines`);
-
     // Process code lines: preserve hex addresses and handle comments
     // If a trailing ';' comment exists, preserve it as a separate comment-only
     // UPDATE: We do NOT split comments here anymore. We pass the full line to processCodeBlock
     // which handles inline comments correctly by preserving the same offset.
     // Alternative simpler approach: just filter out empty lines
     const codeLines = rawCodeLines.filter(l => l.trim().length > 0);
-
-    // DEBUG: inspect what we will pass to processCodeBlock
-    console.log('DEBUG basicTokeniseLine: restFull=', JSON.stringify(restFull));
-    console.log('DEBUG basicTokeniseLine: linesArr=', linesArr);
-    console.log('DEBUG basicTokeniseLine: rawCodeLines=', rawCodeLines);
-    console.log('DEBUG basicTokeniseLine: codeLines=', codeLines);
 
     if (codeLines.length === 0) {
       const payloadPlaceholder = [codeTok, 0x00, 0x00, 0xFF];
@@ -651,8 +642,6 @@ function basicTokeniseLine(line: string, baseAddr = 0x4000): number[] {
     }
 
     const codeBlockStr = codeLines.join('\n');
-
-    console.log('DEBUG basicTokeniseLine: codeBlockStr=', JSON.stringify(codeBlockStr));
 
     const codeBlockResult = processCodeBlock(codeBlockStr, baseAddr);
 
@@ -1004,7 +993,6 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
   directiveLines: any[];
   commentLines: any[];
 } {
-  console.log(`[Phase1] Starting with codeBlock length: ${codeBlock.length}`);
   
   const parsedLines: any[] = [];
   const labelMap: Record<string, number> = {};
@@ -1014,8 +1002,6 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
   const commentLines: any[] = [];
 
   const lines = codeBlock.split(/\r?\n/).map(l => l.replace(/\t/g, ' ').replace(/\r?\n$/, ''));
-
-  console.log(`[Phase1] Split into ${lines.length} lines`);
 
   let offset = 0;
   let firstLine = true;
@@ -1041,7 +1027,6 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
     }
     
     // [Step 3]: Logic to reconstruct the 'parsed' object
-    console.log(`[Phase1] Processing raw line: "${raw}"`);
 
     // Initialize parsed object
     const parsed: any = {
@@ -1139,11 +1124,8 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
     offset += instrLen;
     firstLine = false;
 
-    // Debug logging
-    console.log(`[Phase1] PARSED: mnemonic=${parsed.mnemonic || 'N/A'}, addr=${parsed.address || 'none'}, offset=0x${(parsed._offset || 0).toString(16)}, instrLen=${instrLen}`);
   }
 
-  console.log(`[Phase1] Total parsed lines: ${parsedLines.length}, labels: ${Object.keys(labelMap).length}`);
   return { parsedLines, labelMap, labelReferences, numberReferences, directiveLines, commentLines };
 }
 
@@ -1161,12 +1143,10 @@ function parseCodeBlockPhase2(
 } {
   const opcodeBytes: number[] = [];
   let cumulativeOffset = 0;
-
-  console.log(`[Phase2] Starting with ${parsedLines.length} parsed lines`);
   
   for (const p of parsedLines) {
     if (p.isComment || p.isUnparsed) {
-      console.log(`[Phase2] Skipping comment/unparsed: ${p.raw}`);
+      //[Phase2] Skipping comment/unparsed
       continue;
     }
 
@@ -1207,21 +1187,17 @@ function parseCodeBlockPhase2(
     const best = findBestZ80Match(instr, operands);
     
     if (!best) {
-      console.error(`ERROR: No Z80 opcode match found for instruction: "${instr}" with operands: [${operands.join(', ')}]`);
-      console.error(`  Raw line: ${p.raw || '(no raw)'}`);
-      console.error(`  Offset: 0x${baseOffset.toString(16)}`);
       // Try emergency fallback: direct lookup in z80Cmds by z80 field
       if (Array.isArray(z80Cmds)) {
         const fallback = z80Cmds.find(cmd => cmd.z80.toUpperCase().trim() === instr.toUpperCase().trim());
         if (fallback) {
-          console.warn(`  Using fallback match: ${fallback.z80} = ${fallback.opCode}`);
           const bytesForInstr = opCodePatternToBytes(fallback.opCode, p, labelMap, numberReferences, baseOffsetAbs);
           opcodeBytes.push(...bytesForInstr);
           cumulativeOffset = baseOffset + bytesForInstr.length;
           continue;
         }
       }
-      console.warn(`  Skipping instruction (no match and no fallback found)`);
+      // Skipping instruction (no match and no fallback found)
       continue;
     }
 
@@ -1462,7 +1438,6 @@ function processCodeBlock(codeBlock: string, baseAddr = 0x4000): {
   mtxDirectiveBytes: number[];
   totalCodeLength: number;
 } {
-  console.log('[processCodeBlock] ENTRY - codeBlock length:', codeBlock.length, 'baseAddr:', baseAddr);
   
   // Phase 1: Parse and discover labels, directives, comments
   const phase1 = parseCodeBlockPhase1(codeBlock, baseAddr);
@@ -1611,13 +1586,12 @@ function assembleCodeBlock(lines: string[], baseAddr = 0x4000): number[] {
     }
 
     if (cmd) {
-      console.log('Normalized instruction:', instr);
-      console.log('Matching against:', cmd.z80, 'Normalized:', instr);
+
       // Use the actual instruction address from parsed._address if available, otherwise use cumulativeOffset
       const instrAddr = parsed._address !== undefined ? parsed._address : cumulativeOffset;
       const instrBytes = opCodePatternToBytes(cmd.opCode, parsed, labelMap, new Map(), instrAddr, new Map());
       
-      // Validate that generated bytes match the expected length
+      // Validate that generated bytes match the expected length - KEEP FOR DEVELOPMENT USE ONLY
       if (instrBytes.length !== cmd.length) {
         console.error(
           `OPCODE LENGTH MISMATCH: ${cmd.z80} at address 0x${instrAddr.toString(16)} - ` +
@@ -1674,7 +1648,7 @@ function findBestZ80Match(instruction: string, operands: string[]): any {
   });
 
   if (potentialMatches.length === 0) {
-    console.warn(`No matches found for instruction: ${instruction} ${operands.join(', ')}`);
+    //No matches found for instruction
     return null;
   }
 

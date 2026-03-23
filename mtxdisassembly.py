@@ -2212,8 +2212,22 @@ def convert_mtx_to_txt():
             if skip_bytes>0:
                 #print("TEST: skip bytes>0 section , = ",skip_bytes)
                 RES_code=RES_code+decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st+"\n"
-                fn_w.write("\t "+decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st) #add an indent (tab + 1 space)
-                fn_w.write('\n')
+                #Format z80 output to improve readability
+                if label_st=="":
+                    if comment_st=="":
+                        fn_w.write("\t"+decval_to_hexstr(MemPos)+"\t\t\t"+tmp_disassem_str)
+                    else:
+                        fn_w.write("\t"+decval_to_hexstr(MemPos)+"\t\t\t"+tmp_disassem_str+"\t\t"+comment_st)
+                    #end if-else
+                    fn_w.write('\n')
+                else:
+                    if comment_st=="":
+                        fn_w.write("\t"+decval_to_hexstr(MemPos)+" "+label_st+"\t"+tmp_disassem_str)
+                    else:
+                        fn_w.write("\t"+decval_to_hexstr(MemPos)+" "+label_st+"\t"+tmp_disassem_str+"\t\t"+comment_st)
+                    #end if-else
+                    fn_w.write('\n')
+                #end if-else
                 if skip_bytes<4:
                     dis_size=skip_bytes
                 else: #replace all 4 bytes but remember to exclude the 4 bytes already in play
@@ -2312,8 +2326,22 @@ def convert_mtx_to_txt():
                                 pass
                 #end if
                 RES_code=RES_code+decval_to_hexstr(MemPos)+label_st+tmp_disassem_str+comment_st+"\n"
-                fn_w.write("\t "+decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st) #add an indent (tab + 1 space)
-                fn_w.write('\n') 
+                #Format z80 output to improve readability
+                if label_st=="":
+                    if comment_st=="":
+                        fn_w.write("\t"+decval_to_hexstr(MemPos)+"\t\t\t"+tmp_disassem_str)
+                    else:
+                        fn_w.write("\t"+decval_to_hexstr(MemPos)+"\t\t\t"+tmp_disassem_str+"\t\t"+comment_st)
+                    #end if-else
+                    fn_w.write('\n')
+                else:
+                    if comment_st=="":
+                        fn_w.write("\t"+decval_to_hexstr(MemPos)+" "+label_st+"\t"+tmp_disassem_str)
+                    else:
+                        fn_w.write("\t"+decval_to_hexstr(MemPos)+" "+label_st+"\t"+tmp_disassem_str+"\t\t"+comment_st)
+                    #end if-else
+                    fn_w.write('\n')
+                #end if-else
                 #print("TEST: Z80 disaasembled as = ",decval_to_hexstr(MemPos)+" "+label_st+tmp_disassem_str+comment_st)
             #end if-else
             
@@ -2396,7 +2424,7 @@ def convert_mtx_to_txt():
             fn_w.write('\n')
             for vv in range(len(symbols)):
                 RES_code=RES_code+symbols[vv][0]+str(symbols[vv][1])
-                fn_w.write("\t "+symbols[vv][0]+str(symbols[vv][1])) #indent symbols as per other CODE indents
+                fn_w.write("\t"+symbols[vv][0]+str(symbols[vv][1])) #indent symbols as per other CODE indents
                 fn_w.write('\n')
             fn_w.write('\n')
             #end for
