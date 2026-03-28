@@ -283,14 +283,11 @@ function activate(ctx) {
                 vsDiags.push(new vscode.Diagnostic(vsRange, "Type mismatch or no or multiple spaces found or other LET statement construction error", vscode.DiagnosticSeverity.Error));
             }
             else { //valid LET statement
-                //console.log('LET statement appears valid: ',lhsCheck,'=',rhsCheck);
                 if (lhsIsString && rhsIsString.every(function (row) { return row[1] === true; })) {
-                    //console.log(`Both sides are string types: ${lhsCheck} and ${rhsCheck}`);
                     //use rhs to process as individual components separated by + operators using strExprParts in the validation section below
                     return rhsIsString.map(function (row) { return row[0]; });
                 }
                 else if (lhsIsVariable && rhsIsNumericAdjusted.every(function (row) { return row[1] === true; })) {
-                    //console.log(`Both sides are numeric types: ${lhsCheck} and ${rhsCheck}`);
                     //use rhs to process further as individual components separeted by + - * / ^ operators using varExprParts in the validation section below
                     return rhsIsNumericAdjusted.map(function (row) { return row[0]; });
                 }
@@ -391,10 +388,25 @@ function activate(ctx) {
     }
     // Run all validators over `segment` and call `onError` for each CheckResult.
     // - Skips matches that begin inside double-quoted strings (isIndexInQuotedString)
-    function runValidatorsOnSegment(segment, validatorsList, onError, baseOffset) {
+    function runValidatorsOnSegment(segment, validatorsList, onError, baseOffset, preferSegmentStartCommand) {
         var _a;
         if (baseOffset === void 0) { baseOffset = 0; }
+        if (preferSegmentStartCommand === void 0) { preferSegmentStartCommand = false; }
         var commandMatchedAtStart = false;
+        var validatorsToRun = validatorsList;
+        if (preferSegmentStartCommand) {
+            var startCommandValidator = validatorsList.find(function (validator) {
+                var _a;
+                if (!validator.expectEnd)
+                    return false;
+                var match = validator.re.exec(segment);
+                return !!match && ((_a = match.index) !== null && _a !== void 0 ? _a : -1) === 0;
+            });
+            if (startCommandValidator) {
+                validatorsToRun = [startCommandValidator];
+                commandMatchedAtStart = true;
+            }
+        }
         var _loop_1 = function (validator) {
             var flags = validator.re.flags.includes('g') ? validator.re.flags : validator.re.flags + 'g';
             var iter = new RegExp(validator.re.source, flags);
@@ -412,7 +424,7 @@ function activate(ctx) {
                     return "continue";
                 // If a command matched at the start of the segment, skip ALL other validators
                 // This prevents INT from matching inside "CSR INT(x),INT(y)" or SIN inside "CIRCLE SIN(a),COS(b),R"
-                if (commandMatchedAtStart)
+                if (commandMatchedAtStart && !preferSegmentStartCommand)
                     return "continue";
                 var groups = match.slice(1);
                 var failures = validator.validate(groups, match[0]);
@@ -429,8 +441,8 @@ function activate(ctx) {
                 _loop_2();
             }
         };
-        for (var _i = 0, validatorsList_1 = validatorsList; _i < validatorsList_1.length; _i++) {
-            var validator = validatorsList_1[_i];
+        for (var _i = 0, validatorsToRun_1 = validatorsToRun; _i < validatorsToRun_1.length; _i++) {
+            var validator = validatorsToRun_1[_i];
             _loop_1(validator);
         }
     } // END of runValidatorsOnSegment
@@ -664,7 +676,7 @@ function activate(ctx) {
         return { errors: errors, noddyStartLine: noddyStartLine, codeBlockRanges: codeBlockRanges };
     } // END of validateLineNumbers function 
     function refreshDiagnostics(doc) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s;
         if (doc.languageId !== 'mtxbasic') {
             return;
         }
@@ -764,6 +776,7 @@ function activate(ctx) {
             { id: 'RIGHT$', pattern: 'RIGHT\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=RIGHT$("str..",num) = 28chars or more 
             { id: 'RND', pattern: 'RND', cmdname: 'stdcmd', args: [] }, //removed , expectEnd: true so that A=RND*5 is valid
             { id: 'ROM', pattern: 'ROM', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 255 }], expectEnd: true }, //range to be confirmed
+            { id: 'RUN', pattern: 'RUN', cmdname: 'stdcmd', args: [], expectEnd: true },
             { id: 'SAVE', pattern: 'SAVE', cmdname: 'strcmd', args: [{ kind: 'string', min: 0, max: 14 }], expectEnd: true },
             { id: 'SBUF', pattern: 'SBUF', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 8160 }], expectEnd: true }, //range confirmed, see appendix 8
             { id: 'SGN', pattern: 'SGN', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1, max: 1 }], expectEnd: true }, //-1 if -ve 0 if 0 and +1 if +ve
@@ -795,11 +808,15 @@ function activate(ctx) {
             { id: 'VIEW', pattern: 'VIEW', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 7 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
             { id: 'VS', pattern: 'VS', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 7 }], expectEnd: true },
             // add other specs here; use '\\$' in pattern for names ending with $
+            // illegal keywords ASSEM|AUTO|EDIT|FRE|LIST|LLIST|PANEL|VERIFY
         ];
         // build generic validators from specs and confirm MTX BASIC line and commands/functions are correctly formatted
         var validators = specs.map(function (spec) {
             //const re = new RegExp(`\\b(?:${spec.pattern})\\s*([^:']*)`, 'gi'); 
-            var re = new RegExp("\\b(?:".concat(spec.pattern, ")\\b\\s*(.*)"), ''); // case-sensitive: only uppercase keywords match specs, mixed-case caught by MIXED_CASE_KEYWORD validator
+            //const re = new RegExp(`\\b(?:${spec.pattern})\\b\\s*(.*)`, ''); // case-sensitive: only uppercase keywords match specs, mixed-case caught by MIXED_CASE_KEYWORD validator
+            var hasDollarSuffix = /\\\$$/.test(spec.pattern);
+            var trailingGuard = hasDollarSuffix ? "(?=$|[^A-Za-z0-9_])" : "\\b";
+            var re = new RegExp("\\b(?:".concat(spec.pattern, ")").concat(trailingGuard, "\\s*(.*)"), ''); // case-sensitive: only uppercase keywords match specs, mixed-case caught by MIXED_CASE_KEYWORD validator
             //colon and single quote handling moved to stripTrailingCommentUnquoted function, 
             // although single quotes are not allowed in MTX BASIC unless within a double quotation string literal
             // capture args up to comment/colon Also needs to be \\b not \b as before. 
@@ -916,8 +933,7 @@ function activate(ctx) {
                         else if (parts.length !== 7) {
                             res.push({ groupIndex: 1, message: "".concat(spec.id, " requires either 3 or 7 argument(s)") });
                         }
-                    } //END of SOUND argument check                     
-                    //console.log('want =',want);
+                    } //END of SOUND argument check
                     if (want.length === 0) {
                         if (argsText && spec.expectEnd) {
                             res.push({ groupIndex: 1, message: "".concat(spec.id, ": unexpected argument(s): ").concat(argsText) });
@@ -1092,11 +1108,451 @@ function activate(ctx) {
             'ABS', 'ASC', 'ATN', 'COS', 'EXP', 'INT', 'LN', 'RND', 'SGN', 'SIN', 'SQR', 'TAN', 'VAL',
             'CHR$', 'LEFT$', 'MID$', 'RIGHT$', 'STR$', 'LEN', 'INKEY$', 'TIME$', 'SPK$', 'GR$',
             'PEEK', 'POKE', 'OUT', 'INP', 'USR', 'AND', 'OR', 'NOT', 'MOD', 'ON',
-            'SAVE', 'LOAD', 'VERIFY', 'RUN', 'LIST', 'NEW', 'AUTO', 'EDIT', 'PI', 'PHI',
+            'SAVE', 'LOAD', 'RUN', 'NEW', 'PI', 'PHI',
             'ADJSPR', 'ANGLE', 'ARC', 'ATTR', 'BAUD', 'CLOCK', 'CRVS', 'CSR', 'CTLSPR',
-            'DSI', 'EDITOR', 'GENPAT', 'LLIST', 'MVSPR', 'NODDY', 'PAUSE', 'PLOD', 'RAND',
+            'DSI', 'EDITOR', 'GENPAT', 'MVSPR', 'NODDY', 'PAUSE', 'PLOD', 'RAND',
             'RESTORE', 'ROM', 'SBUF', 'SPRITE', 'USER', 'VIEW', 'VS'
         ];
+        var unsupportedEditorKeywords = ['ASSEM', 'AUTO', 'EDIT', 'FRE', 'LIST', 'LLIST', 'PANEL', 'VERIFY'];
+        var allKnownKeywords = __spreadArray(__spreadArray([], knownKeywords, true), unsupportedEditorKeywords, true);
+        var knownKeywordSet = new Set(allKnownKeywords.map(function (k) { return k.toUpperCase(); }));
+        var unsupportedEditorKeywordSet = new Set(unsupportedEditorKeywords.map(function (k) { return k.toUpperCase(); }));
+        var standaloneFunctionNames = specs
+            .filter(function (spec) { return spec.cmdname === 'numfn' || spec.cmdname === 'strfn'; })
+            .map(function (spec) { return spec.id.toUpperCase(); })
+            .sort(function (left, right) { return right.length - left.length; });
+        function escapeRegex(text) {
+            return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+        function getBaseIdentifier(name) {
+            return name
+                .trim()
+                .replace(/\(.*\)$/, '') // remove array suffix
+                .toUpperCase();
+        }
+        function isReservedKeyword(name) {
+            var baseIdentifier = getBaseIdentifier(name);
+            return knownKeywordSet.has(baseIdentifier) || knownKeywordSet.has(baseIdentifier.replace(/\$$/, ''));
+        }
+        function isRemCommentSegment(text) {
+            return /^\s*(?:\d+\s+)?REM(?:\s|$|=)/.test(text);
+        }
+        function getStandaloneFunctionDiagnostic(text, lineNum, absStart) {
+            var stripped = stripTrailingCommentUnquoted(text);
+            var leadingTrim = stripped.length - stripped.trimStart().length;
+            var trimmed = stripped.trimStart();
+            var upperTrimmed = trimmed.toUpperCase();
+            for (var _i = 0, standaloneFunctionNames_1 = standaloneFunctionNames; _i < standaloneFunctionNames_1.length; _i++) {
+                var functionName = standaloneFunctionNames_1[_i];
+                var trailingGuard = functionName.endsWith('$') ? '(?=$|[^A-Z0-9_])' : '\\b';
+                var functionRe = new RegExp("^(".concat(escapeRegex(functionName), ")").concat(trailingGuard, "(.*)$"));
+                var match = functionRe.exec(upperTrimmed);
+                if (!match) {
+                    continue;
+                }
+                var startChar = absStart + leadingTrim;
+                var endChar = startChar + functionName.length;
+                return new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "Function ".concat(functionName, " cannot be used as a standalone statement; use it within LET, PRINT, IF, or another command"), vscode.DiagnosticSeverity.Error);
+            }
+            return null;
+        }
+        function addUnsupportedKeywordWarnings(text, lineNum, absStart) {
+            if (!text || isRemCommentSegment(text)) {
+                return;
+            }
+            var keywordRe = /\b([A-Z][A-Z0-9$]*)\b/g;
+            var match;
+            while ((match = keywordRe.exec(text)) !== null) {
+                var keyword = match[1] || '';
+                if (!unsupportedEditorKeywordSet.has(keyword.toUpperCase())) {
+                    continue;
+                }
+                var startChar = absStart + match.index;
+                if (isInQuotedStringAt(doc.lineAt(lineNum).text, startChar)) {
+                    continue;
+                }
+                var endChar = startChar + keyword.length;
+                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "This keyword ".concat(keyword, " is not required by the VS code editor"), vscode.DiagnosticSeverity.Warning));
+            }
+        }
+        function getMissingLetDiagnostic(text, lineNum, absStart) {
+            var bareAss = /^\s*(?!LET\b)([A-Z][A-Z0-9]*\$?)\s*=/.exec(text);
+            if (!bareAss) {
+                return null;
+            }
+            var varName = bareAss[1] || '';
+            var varOffset = text.search(/[A-Z][A-Z0-9]*\$?/);
+            var startChar = absStart + Math.max(0, varOffset);
+            var endChar = startChar + Math.max(1, varName.length);
+            var range = new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar));
+            if (isRemCommentSegment(text)) {
+                return null;
+            }
+            if (isReservedKeyword(varName)) {
+                return new vscode.Diagnostic(range, "Keywords cannot be used as variable names: \"".concat(varName, "\""), vscode.DiagnosticSeverity.Error);
+            }
+            var builtInVars = new Set(['INKEY$', 'SPK$', 'TIME$']);
+            if (builtInVars.has(varName.toUpperCase())) {
+                return null;
+            }
+            return new vscode.Diagnostic(range, "Assignment requires LET command - use 'LET ".concat(varName, "='"), vscode.DiagnosticSeverity.Error);
+        }
+        function getImplicitBranchTargetDiagnostic(text, lineNum, absStart, branchName) {
+            var bareLineTarget = /^\s*(\d{1,5})\s*$/.exec(text);
+            if (!bareLineTarget) {
+                return null;
+            }
+            var target = bareLineTarget[1] || '';
+            var startChar = absStart + (text.indexOf(target) >= 0 ? text.indexOf(target) : 0);
+            var endChar = startChar + target.length;
+            return new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(branchName, " requires explicit GOTO or GOSUB before line number ").concat(target), vscode.DiagnosticSeverity.Error);
+        }
+        function getUnknownLeadingTokenDiagnostic(text, lineNum, absStart, branchName) {
+            var trimmed = text.trimStart();
+            var firstWordMatch = /^([A-Za-z_][A-Za-z0-9_]*\$?)/.exec(trimmed);
+            if (!firstWordMatch) {
+                return null;
+            }
+            var token = firstWordMatch[1] || '';
+            var upperToken = token.toUpperCase();
+            if (knownKeywordSet.has(upperToken)) {
+                return null;
+            }
+            var startChar = absStart + (text.indexOf(token) >= 0 ? text.indexOf(token) : 0);
+            var endChar = startChar + token.length;
+            return new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(branchName, " contains invalid MTX BASIC keyword or command: \"").concat(token, "\""), vscode.DiagnosticSeverity.Error);
+        }
+        function isInQuotedStringAt(lineText, column) {
+            if (typeof column !== 'number' || column < 0) {
+                return false;
+            }
+            var inString = false;
+            var stringStart = -1;
+            for (var idx = 0; idx < lineText.length; idx++) {
+                if (lineText[idx] !== '"') {
+                    continue;
+                }
+                if (!inString) {
+                    inString = true;
+                    stringStart = idx;
+                    continue;
+                }
+                if (column >= stringStart && column < idx + 1) {
+                    return true;
+                }
+                inString = false;
+                stringStart = -1;
+            }
+            return false;
+        }
+        function isSingleAdjacentTransposition(a, b) {
+            if (a.length !== b.length || a.length < 2) {
+                return false;
+            }
+            for (var idx = 0; idx < a.length - 1; idx++) {
+                if (a[idx] === b[idx]) {
+                    continue;
+                }
+                return (a[idx] === b[idx + 1]
+                    && a[idx + 1] === b[idx]
+                    && a.slice(0, idx) === b.slice(0, idx)
+                    && a.slice(idx + 2) === b.slice(idx + 2));
+            }
+            return false;
+        }
+        function levenshteinDistance(a, b) {
+            var rows = a.length + 1;
+            var cols = b.length + 1;
+            var dp = Array.from({ length: rows }, function () { return Array(cols).fill(0); });
+            for (var row = 0; row < rows; row++)
+                dp[row][0] = row;
+            for (var col = 0; col < cols; col++)
+                dp[0][col] = col;
+            for (var row = 1; row < rows; row++) {
+                for (var col = 1; col < cols; col++) {
+                    var cost = a[row - 1] === b[col - 1] ? 0 : 1;
+                    dp[row][col] = Math.min(dp[row - 1][col] + 1, dp[row][col - 1] + 1, dp[row - 1][col - 1] + cost);
+                }
+            }
+            return dp[a.length][b.length];
+        }
+        function getKeywordTypoScore(token, expected) {
+            var upperToken = token.toUpperCase();
+            var upperExpected = expected.toUpperCase();
+            if (upperToken === upperExpected) {
+                return null;
+            }
+            if (upperToken.startsWith(upperExpected)) {
+                return upperToken.length - upperExpected.length;
+            }
+            if (isSingleAdjacentTransposition(upperToken, upperExpected)) {
+                return 1;
+            }
+            var distance = levenshteinDistance(upperToken, upperExpected);
+            return distance <= 1 ? distance : null;
+        }
+        function findLikelyKeywordTypo(text, expectedKeywords) {
+            var tokenRe = /\b([A-Z][A-Z0-9$]*)\b/g;
+            var match;
+            var best = null;
+            while ((match = tokenRe.exec(text.toUpperCase())) !== null) {
+                var token = match[1] || '';
+                for (var _i = 0, expectedKeywords_1 = expectedKeywords; _i < expectedKeywords_1.length; _i++) {
+                    var expected = expectedKeywords_1[_i];
+                    var score = getKeywordTypoScore(token, expected);
+                    if (score === null) {
+                        continue;
+                    }
+                    if (!best || score < best.score) {
+                        best = { token: token, expected: expected.toUpperCase(), index: match.index, score: score };
+                    }
+                }
+            }
+            return best ? { token: best.token, expected: best.expected, index: best.index } : null;
+        }
+        function reportKeywordTypo(text, lineNum, absStart, labelPrefix, expectedKeywords, defaultMessage) {
+            var _a;
+            var typo = findLikelyKeywordTypo(text, expectedKeywords);
+            if (typo) {
+                var startChar = absStart + typo.index;
+                var endChar = startChar + typo.token.length;
+                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(labelPrefix, ": expected ").concat(typo.expected, " keyword, found \"").concat(typo.token, "\""), vscode.DiagnosticSeverity.Error));
+                return true;
+            }
+            var fallbackLength = ((_a = expectedKeywords[0]) === null || _a === void 0 ? void 0 : _a.length) || 1;
+            diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, absStart), new vscode.Position(lineNum, absStart + fallbackLength)), "".concat(labelPrefix, ": ").concat(defaultMessage), vscode.DiagnosticSeverity.Error));
+            return true;
+        }
+        function validateOnCommand(text, lineNum, absStart, labelPrefix) {
+            var _a, _b;
+            if (!/^\s*ON\b/.test(text)) {
+                return false;
+            }
+            var onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(text);
+            if (!onMatch) {
+                var afterOn = text.replace(/^\s*ON\b\s*/, '');
+                return reportKeywordTypo(afterOn, lineNum, absStart + (text.length - afterOn.length), labelPrefix, ['GOTO', 'GOSUB'], 'ON statement requires GOTO or GOSUB followed by line numbers');
+            }
+            var selectorExprRaw = onMatch[1], branchKeyword = onMatch[2], targetsRaw = onMatch[3];
+            var selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
+            selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/, '$1');
+            var selectorType = (0, mtxstdfns_js_1.classifyExpr)(selectorExpr);
+            if (!selectorType.hasNumeric) {
+                var idx = text.indexOf(selectorExpr, (_a = onMatch.index) !== null && _a !== void 0 ? _a : 0);
+                var startChar = absStart + (idx >= 0 ? idx : 0);
+                var endChar = startChar + selectorExpr.length;
+                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(labelPrefix, " ").concat(branchKeyword, ": selector must be numeric (got \"").concat(selectorExpr, "\")"), vscode.DiagnosticSeverity.Error));
+            }
+            var targets = (0, mtxstdfns_js_1.splitTopLevel)(targetsRaw).map(function (t) { return t.trim(); }).filter(Boolean);
+            if (targets.length === 0) {
+                var idx = text.indexOf(branchKeyword, (_b = onMatch.index) !== null && _b !== void 0 ? _b : 0);
+                var startChar = absStart + (idx >= 0 ? idx : 0);
+                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, startChar + branchKeyword.length)), "".concat(labelPrefix, " ").concat(branchKeyword, ": requires at least one line number"), vscode.DiagnosticSeverity.Error));
+            }
+            else {
+                targets.forEach(function (target) {
+                    var _a;
+                    var n = Number(target);
+                    var valid = Number.isInteger(n) && n >= 0 && n <= 65535;
+                    if (!valid) {
+                        var idx = text.indexOf(target, (_a = onMatch.index) !== null && _a !== void 0 ? _a : 0);
+                        var startChar = absStart + (idx >= 0 ? idx : 0);
+                        var endChar = startChar + target.length;
+                        diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(labelPrefix, " ").concat(branchKeyword, ": line numbers must be integers 0..65535 (got \"").concat(target, "\")"), vscode.DiagnosticSeverity.Error));
+                    }
+                });
+            }
+            runValidatorsOnSegment(selectorExpr, validators, function (err, rawMatch, absIdx) {
+                if (!err || typeof absIdx !== 'number' || isInQuotedStringAt(doc.lineAt(lineNum).text, absIdx))
+                    return;
+                var startChar = absIdx;
+                var endChar = startChar + Math.max(1, rawMatch.length);
+                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(labelPrefix, " ").concat(branchKeyword, " selector: ").concat(err.message), vscode.DiagnosticSeverity.Error));
+            }, absStart);
+            return true;
+        }
+        function validateForCommand(text, lineNum, absStart, labelPrefix) {
+            var _a;
+            if (!/^\s*FOR\b/.test(text)) {
+                return { matched: false, hasStep: false };
+            }
+            var reportForError = function (targetText, msg) {
+                var idx = targetText ? text.indexOf(targetText) : -1;
+                var startChar = absStart + (idx >= 0 ? idx : 0);
+                var endChar = startChar + ((targetText && targetText.length) || 1);
+                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(labelPrefix, ": ").concat(msg), vscode.DiagnosticSeverity.Error));
+            };
+            var forHeaderMatch = /^\s*FOR\s+([A-Z][A-Z0-9]*\$?)(.*)$/.exec(text);
+            var malformedHeaderMatch = /^\s*FOR\s+([^\s=]+)(.*)$/.exec(text);
+            if (!forHeaderMatch && !malformedHeaderMatch) {
+                reportForError('FOR', 'malformed FOR statement');
+                return { matched: true, hasStep: false };
+            }
+            var _b = forHeaderMatch !== null && forHeaderMatch !== void 0 ? forHeaderMatch : malformedHeaderMatch, ctrlVarRaw = _b[1], remainderRaw = _b[2];
+            var ctrlVar = ctrlVarRaw !== null && ctrlVarRaw !== void 0 ? ctrlVarRaw : '';
+            var remainder = remainderRaw !== null && remainderRaw !== void 0 ? remainderRaw : '';
+            var ctrlIsNumeric = (0, mtxstdfns_js_1.isValidVarName)(ctrlVar);
+            if (!ctrlIsNumeric) {
+                reportForError(ctrlVar, "control variable must be alphanumeric without $ (got \"".concat(ctrlVar, "\")"));
+            }
+            if (!/^\s*=/.test(remainder)) {
+                reportForError(ctrlVar, 'FOR statement requires = after the control variable');
+                return { matched: true, hasStep: false };
+            }
+            var afterEquals = remainder.replace(/^\s*=\s*/, '');
+            var rangeMatch = /^(.*?)\s+TO\s+(.+?)(?:\s+STEP\s+(.+?))?\s*$/.exec(afterEquals);
+            if (!rangeMatch) {
+                var exactToIndex = afterEquals.search(/\bTO\b/);
+                if (exactToIndex < 0) {
+                    var malformedToMatch = findLikelyKeywordTypo(afterEquals, ['TO']);
+                    if (malformedToMatch) {
+                        reportForError(malformedToMatch.token, "expected TO keyword, found \"".concat(malformedToMatch.token, "\""));
+                    }
+                    else {
+                        reportForError(afterEquals || ctrlVar || 'FOR', 'FOR statement requires TO followed by an end expression');
+                    }
+                }
+                else {
+                    var afterTo = afterEquals.slice(exactToIndex + 2);
+                    var stepCandidateMatch = /^\s*.+?\s+([A-Z][A-Z0-9$]*)\b/.exec(afterTo);
+                    var stepCandidate = (_a = stepCandidateMatch === null || stepCandidateMatch === void 0 ? void 0 : stepCandidateMatch[1]) !== null && _a !== void 0 ? _a : '';
+                    var stepTypoScore = stepCandidate ? getKeywordTypoScore(stepCandidate, 'STEP') : null;
+                    if (stepCandidate && stepTypoScore !== null) {
+                        reportForError(stepCandidate, "expected STEP keyword, found \"".concat(stepCandidate, "\""));
+                    }
+                    else {
+                        reportForError(afterTo.trim() || 'FOR', 'FOR statement has invalid text after the end expression');
+                    }
+                }
+                return { matched: true, hasStep: false };
+            }
+            var startExprRaw = rangeMatch[1], endExprRaw = rangeMatch[2], stepExprRaw = rangeMatch[3];
+            var startExpr = stripTrailingCommentUnquoted(startExprRaw.trim());
+            var endExpr = stripTrailingCommentUnquoted(endExprRaw.trim());
+            var stepExpr = stepExprRaw ? stripTrailingCommentUnquoted(stepExprRaw.trim()) : undefined;
+            var startType = (0, mtxstdfns_js_1.classifyExpr)(startExpr);
+            var endType = (0, mtxstdfns_js_1.classifyExpr)(endExpr);
+            if (!startType.hasNumeric) {
+                reportForError(startExpr, "start expression must be numeric (got \"".concat(startExpr, "\")"));
+            }
+            if (!endType.hasNumeric) {
+                reportForError(endExpr, "end expression must be numeric (got \"".concat(endExpr, "\")"));
+            }
+            if (stepExpr) {
+                var stepType = (0, mtxstdfns_js_1.classifyExpr)(stepExpr);
+                if (!stepType.hasNumeric) {
+                    reportForError(stepExpr, "STEP expression must be numeric (got \"".concat(stepExpr, "\")"));
+                }
+            }
+            var validateChunk = function (expr, label) {
+                runValidatorsOnSegment(expr, validators, function (err, rawMatch, absIdx) {
+                    if (!err || typeof absIdx !== 'number')
+                        return;
+                    var startChar = absIdx;
+                    var endChar = startChar + Math.max(1, rawMatch.length);
+                    if (isInQuotedStringAt(doc.lineAt(lineNum).text, startChar))
+                        return;
+                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(label, ": ").concat(err.message), vscode.DiagnosticSeverity.Error));
+                }, absStart);
+            };
+            validateChunk(startExpr, "".concat(labelPrefix, " start"));
+            validateChunk(endExpr, "".concat(labelPrefix, " end"));
+            if (stepExpr)
+                validateChunk(stepExpr, "".concat(labelPrefix, " step"));
+            return { matched: true, hasStep: !!stepExpr };
+        }
+        function validateBasicCommandSequence(text, lineNum, absStart, branchName) {
+            var segments = (0, mtxstdfns_js_1.splitLineSegments)(text);
+            var _loop_5 = function (commandSeg) {
+                var segText = stripTrailingCommentUnquoted(commandSeg.text).trim();
+                if (!segText || /^".*"$/.test(segText)) {
+                    return "continue";
+                }
+                var segAbsStart = absStart + commandSeg.start;
+                var segRange = new vscode.Range(new vscode.Position(lineNum, segAbsStart), new vscode.Position(lineNum, segAbsStart + segText.length));
+                var letM = /^\s*LET\s+([A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?))\s*=\s*(.+)$/.exec(segText);
+                if (letM) {
+                    var lhs = letM[1], rhsText = letM[2];
+                    var rhsParts = letCheck(lhs !== null && lhs !== void 0 ? lhs : '', rhsText !== null && rhsText !== void 0 ? rhsText : '', segRange, diags);
+                    if (!rhsParts || rhsParts.length === 0) {
+                        diags.push(new vscode.Diagnostic(segRange, "".concat(branchName, ": invalid LET statement"), vscode.DiagnosticSeverity.Error));
+                    }
+                    else {
+                        rhsParts.forEach(function (itemInRhs) {
+                            var _a;
+                            var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
+                            if (!rhsPart.trim() || (0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(rhsPart))
+                                return;
+                            runValidatorsOnSegment(rhsPart, validators, function (err, rawMatch2) {
+                                if (!err)
+                                    return;
+                                var innerIdx = segText.indexOf(rawMatch2);
+                                var startChar = segAbsStart + (innerIdx >= 0 ? innerIdx : 0);
+                                var endChar = startChar + (rawMatch2.length || 1);
+                                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(branchName, "->LET RHS: ").concat(err.message), vscode.DiagnosticSeverity.Error));
+                            });
+                        });
+                    }
+                    return "continue";
+                }
+                if (/^\s*(?:PRINT|LPRINT)\b/.test(segText)) {
+                    var args = segText.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
+                    var perr = printCheck(args, validators);
+                    perr.forEach(function (e) {
+                        if (!e)
+                            return;
+                        diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, segAbsStart), new vscode.Position(lineNum, segAbsStart + Math.min(segText.length, 1))), "".concat(branchName, "->PRINT: ").concat(e.message), vscode.DiagnosticSeverity.Error));
+                    });
+                    return "continue";
+                }
+                if (validateOnCommand(segText, lineNum, segAbsStart, "".concat(branchName, "->ON"))) {
+                    return "continue";
+                }
+                var forValidation = validateForCommand(segText, lineNum, segAbsStart, "".concat(branchName, "->FOR"));
+                if (forValidation.matched) {
+                    return "continue";
+                }
+                var implicitBranchDiag = getImplicitBranchTargetDiagnostic(segText, lineNum, segAbsStart, branchName);
+                var missingLetDiag = getMissingLetDiagnostic(segText, lineNum, segAbsStart);
+                var unknownTokenDiag = getUnknownLeadingTokenDiagnostic(segText, lineNum, segAbsStart, branchName);
+                if (implicitBranchDiag) {
+                    diags.push(implicitBranchDiag);
+                    return "continue";
+                }
+                if (missingLetDiag) {
+                    diags.push(missingLetDiag);
+                    return "continue";
+                }
+                if (unknownTokenDiag) {
+                    diags.push(unknownTokenDiag);
+                    return "continue";
+                }
+                runValidatorsOnSegment(segText, validators, function (err, rawMatch, absoluteIdx, matchArray) {
+                    var _a, _b, _c;
+                    if (!err || typeof absoluteIdx !== 'number')
+                        return;
+                    if (isInQuotedStringAt(doc.lineAt(lineNum).text, absoluteIdx))
+                        return;
+                    var capture = rawMatch;
+                    if (matchArray && typeof err.groupIndex === 'number') {
+                        var idx = err.groupIndex;
+                        capture = (_c = (_b = (_a = matchArray[idx]) !== null && _a !== void 0 ? _a : matchArray[idx + 1]) !== null && _b !== void 0 ? _b : matchArray[1]) !== null && _c !== void 0 ? _c : rawMatch;
+                    }
+                    var startChar = absoluteIdx;
+                    if (matchArray && matchArray[0] && capture) {
+                        var inner = matchArray[0].indexOf(capture);
+                        if (inner >= 0)
+                            startChar = absoluteIdx + inner;
+                    }
+                    var endChar = startChar + Math.max(1, capture.length);
+                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(branchName, " part: ").concat(err.message), vscode.DiagnosticSeverity.Error));
+                }, segAbsStart, true);
+            };
+            for (var _i = 0, segments_1 = segments; _i < segments_1.length; _i++) {
+                var commandSeg = segments_1[_i];
+                _loop_5(commandSeg);
+            }
+        }
         // Shared helper: check if a word is a mixed-case MTX BASIC keyword
         // Returns the uppercase version if it's a keyword, null otherwise
         var checkMixedCaseKeyword = function (word) {
@@ -1104,7 +1560,7 @@ function activate(ctx) {
             if (word === word.toUpperCase())
                 return null;
             var upperCase = word.toUpperCase();
-            return knownKeywords.includes(upperCase) ? upperCase : null;
+            return allKnownKeywords.includes(upperCase) ? upperCase : null;
         };
         // Catch mixed-case keywords at the start of commands
         // Catch keywords with embedded or trailing underscores (e.g., COLOUR_, Col_our)
@@ -1119,7 +1575,7 @@ function activate(ctx) {
                     // Remove underscores and check if it matches a keyword
                     var withoutUnderscore = keyword.replace(/_/g, '');
                     var upperWithoutUnderscore = withoutUnderscore.toUpperCase();
-                    if (knownKeywords.includes(upperWithoutUnderscore)) {
+                    if (allKnownKeywords.includes(upperWithoutUnderscore)) {
                         return [{
                                 groupIndex: 1,
                                 message: "Keywords cannot contain underscores: \"".concat(keyword, "\" should be \"").concat(upperWithoutUnderscore, "\"")
@@ -1138,23 +1594,31 @@ function activate(ctx) {
                 return [];
             }
         });
-        // Catch mixed-case keywords used as variable names in LET statements
+        // Catch mixed-case keywords, reserved keywords, and invalid variable names in LET statements
         validators.push({
             name: 'INVALID_LET_VARIABLE',
             re: /^\s*LET\s+([^=\s]+)\s*=/,
             expectEnd: false,
             validate: function (groups, rawMatch) {
-                var varName = groups[1] || '';
+                var varName = (groups[0] || '').trim();
+                if (!varName) {
+                    return [];
+                }
+                var upperCase = checkMixedCaseKeyword(varName);
+                if (upperCase) {
+                    return [{
+                            groupIndex: 1,
+                            message: "Keywords must be uppercase: \"".concat(varName, "\" should be \"").concat(upperCase, "\"")
+                        }];
+                }
+                if (isReservedKeyword(varName)) {
+                    return [{
+                            groupIndex: 1,
+                            message: "Keywords cannot be used as variable names: \"".concat(varName, "\"")
+                        }];
+                }
                 // Check if it's NOT a valid variable name pattern [A-Z][A-Z0-9]*(\$|())
                 if (!/^[A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?)$/.test(varName)) {
-                    // Check if it's a mixed-case keyword
-                    var upperCase = checkMixedCaseKeyword(varName);
-                    if (upperCase) {
-                        return [{
-                                groupIndex: 1,
-                                message: "Keywords must be uppercase: \"".concat(varName, "\" should be \"").concat(upperCase, "\"")
-                            }];
-                    }
                     // Not a keyword, so it's an invalid variable name
                     return [{
                             groupIndex: 1,
@@ -1166,7 +1630,7 @@ function activate(ctx) {
         });
         // Check line numbers first and suppress NODDY lines
         // Check line numbers first - also detects NODDY trigger line AND CODE block ranges
-        var _w = validateLineNumbers(doc), lineNumErrors = _w.errors, noddyStartLine = _w.noddyStartLine, codeBlockRanges = _w.codeBlockRanges;
+        var _t = validateLineNumbers(doc), lineNumErrors = _t.errors, noddyStartLine = _t.noddyStartLine, codeBlockRanges = _t.codeBlockRanges;
         for (var _i = 0, lineNumErrors_1 = lineNumErrors; _i < lineNumErrors_1.length; _i++) {
             var err = lineNumErrors_1[_i];
             var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
@@ -1186,8 +1650,8 @@ function activate(ctx) {
         // Z80 CODE BLOCK VALIDATION - PART 1
         // Validate assembly lines BEFORE the main BASIC loop
         // ============================================
-        for (var _x = 0, codeBlockRanges_2 = codeBlockRanges; _x < codeBlockRanges_2.length; _x++) {
-            var block = codeBlockRanges_2[_x];
+        for (var _u = 0, codeBlockRanges_2 = codeBlockRanges; _u < codeBlockRanges_2.length; _u++) {
+            var block = codeBlockRanges_2[_u];
             for (var i = block.start; i <= block.end; i++) {
                 var lineText = doc.lineAt(i).text;
                 var trimmed = lineText.trim();
@@ -1347,7 +1811,7 @@ function activate(ctx) {
                 processedLineText = result;
             }
             var segments = (0, mtxstdfns_js_1.splitLineSegments)(processedLineText); // Changed from line.text                
-            var _loop_5 = function (seg) {
+            var _loop_6 = function (seg) {
                 // lowercase REM is a syntax error; seg.text has already been
                 // upper‑cased by the segmentiser, so look at the original line.
                 var origLine = doc.lineAt(i).text;
@@ -1380,6 +1844,7 @@ function activate(ctx) {
                     //return stringRanges.every(r => pos >= r[0] && pos < r[1]);
                     return stringRanges.some(function (r) { return pos >= r[0] && pos < r[1]; });
                 };
+                addUnsupportedKeywordWarnings(seg.text, i, seg.start);
                 // --- end quoted-string helper ---  
                 // simple scan to flag any numeric literal over 9 significant digits
                 // this runs once per BASIC segment and skips CODE/NODDY lines so we
@@ -1441,10 +1906,18 @@ function activate(ctx) {
                 var brange = new vscode.Range(new vscode.Position(i, bstart), new vscode.Position(i, bstart + 3)); //length for testing only
                 if (bareAss) {
                     var varName = bareAss[1] || '';
-                    // Skip built-in variables - not sure the validity of these builtInVars exceptions
-                    var builtInVars = new Set(['INKEY$', 'SPK$', 'TIME$']); //removed GR$ as this is a string function
-                    if (!builtInVars.has(varName.toUpperCase())) {
-                        diags.push(new vscode.Diagnostic(brange, "Assignment requires LET command - use 'LET ".concat(varName, "='"), vscode.DiagnosticSeverity.Error));
+                    if (isRemCommentSegment(seg.text)) {
+                        // REM = and REM == are valid comment text, not assignments.
+                    }
+                    else if (isReservedKeyword(varName)) {
+                        diags.push(new vscode.Diagnostic(brange, "Keywords cannot be used as variable names: \"".concat(varName, "\""), vscode.DiagnosticSeverity.Error));
+                    }
+                    else {
+                        // Skip built-in variables - not sure the validity of these builtInVars exceptions
+                        var builtInVars = new Set(['INKEY$', 'SPK$', 'TIME$']); //removed GR$ as this is a string function
+                        if (!builtInVars.has(varName.toUpperCase())) {
+                            diags.push(new vscode.Diagnostic(brange, "Assignment requires LET command - use 'LET ".concat(varName, "='"), vscode.DiagnosticSeverity.Error));
+                        }
                     }
                 } // END of BareAssignment validator
                 //Guard to capture a string only line, for example "string only test"
@@ -1459,7 +1932,7 @@ function activate(ctx) {
                 if (remNoSpace) {
                     var start = seg.start + remNoSpace.index + 3;
                     var range = new vscode.Range(new vscode.Position(i, start), new vscode.Position(i, start + seg.text.length));
-                    diags.push(new vscode.Diagnostic(range, 'REM must be followed by a space before comment text', vscode.DiagnosticSeverity.Error));
+                    diags.push(new vscode.Diagnostic(range, 'REM must now be followed by a space before comment text', vscode.DiagnosticSeverity.Error));
                 }
                 // GOSUB nested-call counter: if this segment is a GOSUB command - THIS CODE ONLY COUNTS TOTAL NUMBER OF GOSUBS
                 //NESTED is when a GOSUB is called within another GOSUB subroutine. This is hard to determine with static analysis.
@@ -1500,8 +1973,8 @@ function activate(ctx) {
                     //special handling for LET as could be complex expression on RHS
                     if (rhs.length !== 0) {
                         // process each part of RHS further
-                        for (var _10 = 0, rhs_1 = rhs; _10 < rhs_1.length; _10++) {
-                            var itemInRhs = rhs_1[_10];
+                        for (var _7 = 0, rhs_1 = rhs; _7 < rhs_1.length; _7++) {
+                            var itemInRhs = rhs_1[_7];
                             var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
                             var t = rhsPart.trim();
                             // skip standalone arithmetic operator tokens
@@ -1591,8 +2064,8 @@ function activate(ctx) {
                         var argsOffsetInSeg = Math.max(0, seg.text.indexOf(argsTextRaw, segMatchIndex));
                         var startChar = seg.start + argsOffsetInSeg;
                         var endChar = startChar + (argsTextRaw.length || 1);
-                        for (var _11 = 0, printErrors_1 = printErrors; _11 < printErrors_1.length; _11++) {
-                            var e = printErrors_1[_11];
+                        for (var _8 = 0, printErrors_1 = printErrors; _8 < printErrors_1.length; _8++) {
+                            var e = printErrors_1[_8];
                             if (!e)
                                 continue; // Skip null entries
                             var range = new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar));
@@ -1671,7 +2144,14 @@ function activate(ctx) {
                                 all must be on the same line. If separated over multiple lines, throw a syntax error as required by MTX BASIC
                                 Consider return indices and substrings: {condStart,condEnd,thenStart,thenEnd,elseStart,elseEnd,cond,then,else}.
                 */
+                var ifStarts = /^\s*IF\b/.test(seg.text);
                 var ifMatch = /^\s*IF\s+(.+?)\s+THEN\s+(.+?)(?:\s+ELSE\s+(.+?))?\s*$/.exec(seg.text);
+                if (ifStarts && !ifMatch && !/\bTHEN\b/.test(seg.text)) {
+                    var afterIf = seg.text.replace(/^\s*IF\b\s*/, '');
+                    reportKeywordTypo(afterIf, i, seg.start + (seg.text.length - afterIf.length), 'IF', ['THEN'], 'IF statement requires THEN before the command sequence');
+                    ifFlag = true;
+                    segHandled = true;
+                }
                 if (ifMatch) {
                     var cond_1 = (_f = ifMatch[1]) !== null && _f !== void 0 ? _f : '';
                     var thenPart = ((_g = ifMatch[2]) !== null && _g !== void 0 ? _g : '').trim();
@@ -1721,8 +2201,8 @@ function activate(ctx) {
                         // Check for AND/OR at word boundary
                         var slice = condUpper.slice(j);
                         var matched = false;
-                        for (var _12 = 0, _13 = [' AND ', ' OR ']; _12 < _13.length; _12++) {
-                            var op = _13[_12];
+                        for (var _9 = 0, _10 = [' AND ', ' OR ']; _9 < _10.length; _9++) {
+                            var op = _10[_9];
                             if (slice.startsWith(op)) {
                                 if (currentPart.trim()) {
                                     condParts.push({ text: currentPart.trim(), start: currentStart });
@@ -1746,8 +2226,8 @@ function activate(ctx) {
                         condParts.push({ text: currentPart.trim(), start: currentStart });
                     }
                     // Now validate each individual comparison
-                    for (var _14 = 0, condParts_1 = condParts; _14 < condParts_1.length; _14++) {
-                        var part = condParts_1[_14];
+                    for (var _11 = 0, condParts_1 = condParts; _11 < condParts_1.length; _11++) {
+                        var part = condParts_1[_11];
                         // Strip leading NOT if present
                         var compText = part.text.trim();
                         var notOffset = 0;
@@ -1784,122 +2264,19 @@ function activate(ctx) {
                     // thenPart/elsePart may be command sequences (e.g. PRINT ..., LET ...), validate them as segments
                     // Validate THEN chunks
                     if (thenPart) {
-                        var thenText_1 = stripTrailingCommentUnquoted(thenPart).trim();
-                        if (thenText_1 && !/^".*"$/.test(thenText_1)) {
-                            var chunkIdx_1 = chunkStartIndex(thenText_1);
-                            var chunkStart_1 = seg.start + (chunkIdx_1 >= 0 ? chunkIdx_1 : 0);
-                            var chunkRange = new vscode.Range(new vscode.Position(i, chunkStart_1), new vscode.Position(i, chunkStart_1 + thenText_1.length));
-                            // Allow array subscripts in THEN: LET Y(I,J)=10, F$(1)="text"
-                            var letM = /^\s*LET\s+([A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?))\s*=\s*(.+)$/.exec(thenText_1);
-                            if (letM) {
-                                var lhs = letM[1], rhsText = letM[2];
-                                var rhsParts = letCheck(lhs !== null && lhs !== void 0 ? lhs : '', rhsText !== null && rhsText !== void 0 ? rhsText : '', chunkRange, diags);
-                                if (!rhsParts || rhsParts.length === 0) {
-                                    diags.push(new vscode.Diagnostic(chunkRange, "THEN: invalid LET statement", vscode.DiagnosticSeverity.Error));
-                                }
-                                else {
-                                    rhsParts.forEach(function (itemInRhs) {
-                                        var _a;
-                                        var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
-                                        if (!rhsPart.trim() || (0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(rhsPart))
-                                            return;
-                                        runValidatorsOnSegment(rhsPart, validators, function (err, rawMatch2) {
-                                            var _a;
-                                            if (!err)
-                                                return;
-                                            var innerIdx = thenText_1.indexOf(rawMatch2);
-                                            var globalIdx = (innerIdx >= 0 && chunkIdx_1 >= 0) ? seg.start + chunkIdx_1 + innerIdx : seg.text.indexOf(rawMatch2, ((_a = ifMatch.index) !== null && _a !== void 0 ? _a : 0));
-                                            if (isInString(globalIdx))
-                                                return;
-                                            var startChar = globalIdx >= 0 ? globalIdx : chunkStart_1;
-                                            var endChar = startChar + (rawMatch2.length || 1);
-                                            diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "THEN->LET RHS: ".concat(err.message), vscode.DiagnosticSeverity.Error));
-                                        });
-                                    });
-                                }
-                            }
-                            else if (/^\s*(?:PRINT|LPRINT)\b/.test(thenText_1)) {
-                                var args = thenText_1.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
-                                var perr = printCheck(args, validators);
-                                perr.forEach(function (e) {
-                                    if (!e)
-                                        return; // Skip null entries
-                                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, chunkStart_1), new vscode.Position(i, chunkStart_1 + Math.min(thenText_1.length, 1))), "THEN->PRINT: ".concat(e.message), vscode.DiagnosticSeverity.Error));
-                                });
-                            }
-                            else {
-                                runValidatorsOnSegment(thenText_1, validators, function (err, rawMatch) {
-                                    var _a;
-                                    if (!err)
-                                        return;
-                                    var innerIdx = thenText_1.indexOf(rawMatch);
-                                    var globalIdx = (innerIdx >= 0 && chunkIdx_1 >= 0) ? seg.start + chunkIdx_1 + innerIdx : seg.text.indexOf(rawMatch, ((_a = ifMatch.index) !== null && _a !== void 0 ? _a : 0));
-                                    if (isInString(globalIdx))
-                                        return;
-                                    var startChar = globalIdx >= 0 ? globalIdx : chunkStart_1;
-                                    var endChar = startChar + (rawMatch.length || 1);
-                                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "THEN part: ".concat(err.message), vscode.DiagnosticSeverity.Error));
-                                });
-                            }
+                        var thenText = stripTrailingCommentUnquoted(thenPart).trim();
+                        if (thenText && !/^".*"$/.test(thenText)) {
+                            var chunkIdx = chunkStartIndex(thenText);
+                            var chunkStart = seg.start + (chunkIdx >= 0 ? chunkIdx : 0);
+                            validateBasicCommandSequence(thenText, i, chunkStart, 'THEN');
                         }
                     }
                     if (elsePart) {
-                        var elseText_1 = stripTrailingCommentUnquoted(elsePart).trim();
-                        if (elseText_1 && !/^".*"$/.test(elseText_1)) {
-                            var chunkIdx_2 = chunkStartIndex(elseText_1);
-                            var chunkStart_2 = seg.start + (chunkIdx_2 >= 0 ? chunkIdx_2 : 0);
-                            var chunkRange = new vscode.Range(new vscode.Position(i, chunkStart_2), new vscode.Position(i, chunkStart_2 + elseText_1.length));
-                            var letM2 = /^\s*LET\s+([A-Z][A-Z0-9]*\$?(?:\([^)]+\))?)\s*=\s*(.+)$/.exec(elseText_1);
-                            if (letM2) {
-                                var lhs = letM2[1], rhsText = letM2[2];
-                                var rhsParts = letCheck(lhs !== null && lhs !== void 0 ? lhs : '', rhsText !== null && rhsText !== void 0 ? rhsText : '', chunkRange, diags);
-                                if (!rhsParts || rhsParts.length === 0) {
-                                    diags.push(new vscode.Diagnostic(chunkRange, "ELSE: invalid LET statement", vscode.DiagnosticSeverity.Error));
-                                }
-                                else {
-                                    rhsParts.forEach(function (itemInRhs) {
-                                        var _a;
-                                        var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
-                                        if (!rhsPart.trim() || (0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(rhsPart))
-                                            return;
-                                        runValidatorsOnSegment(rhsPart, validators, function (err, rawMatch2) {
-                                            var _a;
-                                            if (!err)
-                                                return;
-                                            var innerIdx = elseText_1.indexOf(rawMatch2);
-                                            var globalIdx = (innerIdx >= 0 && chunkIdx_2 >= 0) ? seg.start + chunkIdx_2 + innerIdx : seg.text.indexOf(rawMatch2, ((_a = ifMatch.index) !== null && _a !== void 0 ? _a : 0));
-                                            if (isInString(globalIdx))
-                                                return;
-                                            var startChar = globalIdx >= 0 ? globalIdx : chunkStart_2;
-                                            var endChar = startChar + (rawMatch2.length || 1);
-                                            diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ELSE->LET RHS: ".concat(err.message), vscode.DiagnosticSeverity.Error));
-                                        });
-                                    });
-                                }
-                            }
-                            else if (/^\s*(?:PRINT|LPRINT)\b/.test(elseText_1)) {
-                                var args = elseText_1.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
-                                var perr = printCheck(args, validators);
-                                perr.forEach(function (e) {
-                                    if (!e)
-                                        return; // Skip null entries
-                                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, chunkStart_2), new vscode.Position(i, chunkStart_2 + Math.min(elseText_1.length, 1))), "ELSE->PRINT: ".concat(e.message), vscode.DiagnosticSeverity.Error));
-                                });
-                            }
-                            else {
-                                runValidatorsOnSegment(elseText_1, validators, function (err, rawMatch) {
-                                    var _a;
-                                    if (!err)
-                                        return;
-                                    var innerIdx = elseText_1.indexOf(rawMatch);
-                                    var globalIdx = (innerIdx >= 0 && chunkIdx_2 >= 0) ? seg.start + chunkIdx_2 + innerIdx : seg.text.indexOf(rawMatch, ((_a = ifMatch.index) !== null && _a !== void 0 ? _a : 0));
-                                    if (isInString(globalIdx))
-                                        return;
-                                    var startChar = globalIdx >= 0 ? globalIdx : chunkStart_2;
-                                    var endChar = startChar + (rawMatch.length || 1);
-                                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ELSE part: ".concat(err.message), vscode.DiagnosticSeverity.Error));
-                                });
-                            }
+                        var elseText = stripTrailingCommentUnquoted(elsePart).trim();
+                        if (elseText && !/^".*"$/.test(elseText)) {
+                            var chunkIdx = chunkStartIndex(elseText);
+                            var chunkStart = seg.start + (chunkIdx >= 0 ? chunkIdx : 0);
+                            validateBasicCommandSequence(elseText, i, chunkStart, 'ELSE');
                         }
                     }
                     // mark IF handled so main validator pass doesn't re-run over the same text
@@ -1912,57 +2289,10 @@ function activate(ctx) {
                 // This occurs when IF...THEN...ELSE has multiple commands between the THEN and ELSE parts
                 var elseMatch = /^\s*ELSE\s+(.+)$/.exec(seg.text);
                 if (elseMatch) {
-                    var elseContent_1 = ((_o = elseMatch[1]) !== null && _o !== void 0 ? _o : '').trim();
-                    if (elseContent_1) {
-                        var elseStart_1 = seg.start + seg.text.indexOf(elseContent_1);
-                        var elseRange_1 = new vscode.Range(new vscode.Position(i, elseStart_1), new vscode.Position(i, elseStart_1 + elseContent_1.length));
-                        // Check for LET in ELSE
-                        var letM = /^\s*LET\s+([A-Z][A-Z0-9]*\$?(?:\([^)]+\))?)\s*=\s*(.+)$/.exec(elseContent_1);
-                        if (letM) {
-                            var lhs = letM[1], rhsText = letM[2];
-                            var rhsParts = letCheck(lhs !== null && lhs !== void 0 ? lhs : '', rhsText !== null && rhsText !== void 0 ? rhsText : '', elseRange_1, diags);
-                            if (rhsParts && rhsParts.length > 0) {
-                                rhsParts.forEach(function (itemInRhs) {
-                                    var _a;
-                                    var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
-                                    if (!rhsPart.trim() || (0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(rhsPart))
-                                        return;
-                                    runValidatorsOnSegment(rhsPart, validators, function (err, rawMatch2) {
-                                        if (!err)
-                                            return;
-                                        var innerIdx = elseContent_1.indexOf(rawMatch2);
-                                        var globalIdx = innerIdx >= 0 ? elseStart_1 + innerIdx : elseStart_1;
-                                        if (isInString(globalIdx))
-                                            return;
-                                        var startChar = globalIdx;
-                                        var endChar = startChar + (rawMatch2.length || 1);
-                                        diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ELSE->LET RHS: ".concat(err.message), vscode.DiagnosticSeverity.Error));
-                                    });
-                                });
-                            }
-                        }
-                        // Check for PRINT/LPRINT in ELSE
-                        else if (/^\s*(?:PRINT|LPRINT)\b/.test(elseContent_1)) {
-                            var args = elseContent_1.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
-                            var perr = printCheck(args, validators);
-                            perr.forEach(function (e) {
-                                diags.push(new vscode.Diagnostic(elseRange_1, "ELSE->PRINT: ".concat(e === null || e === void 0 ? void 0 : e.message), vscode.DiagnosticSeverity.Error));
-                            });
-                        }
-                        // Generic validation for other commands in ELSE
-                        else {
-                            runValidatorsOnSegment(elseContent_1, validators, function (err, rawMatch, absIdx) {
-                                if (!err)
-                                    return;
-                                var innerIdx = elseContent_1.indexOf(rawMatch);
-                                var globalIdx = innerIdx >= 0 ? elseStart_1 + innerIdx : elseStart_1;
-                                if (isInString(globalIdx))
-                                    return;
-                                var startChar = globalIdx;
-                                var endChar = startChar + (rawMatch.length || 1);
-                                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ELSE part: ".concat(err.message), vscode.DiagnosticSeverity.Error));
-                            }, elseStart_1);
-                        }
+                    var elseContent = ((_o = elseMatch[1]) !== null && _o !== void 0 ? _o : '').trim();
+                    if (elseContent) {
+                        var elseStart = seg.start + seg.text.indexOf(elseContent);
+                        validateBasicCommandSequence(elseContent, i, elseStart, 'ELSE');
                     }
                     // Set flag to skip further processing of this segment
                     ifFlag = true;
@@ -1977,56 +2307,11 @@ function activate(ctx) {
                                 FOR I = 1 TO 10 STEP 1
                                 FOR A = B to C STEP D
                 */
-                var forMatch = /^\s*FOR\s+([A-Z][A-Z0-9]*)\s*=\s*(.+?)\s+TO\s+(.+?)(?:\s+STEP\s+(.+?))?\s*$/.exec(seg.text);
-                if (forMatch) {
-                    var ctrlVar = forMatch[1], startExprRaw = forMatch[2], endExprRaw = forMatch[3], stepExprRaw = forMatch[4];
-                    var ctrlIsNumeric = !!ctrlVar && (0, mtxstdfns_js_1.isValidVarName)(ctrlVar);
-                    var segBase = seg.start + ((_p = forMatch.index) !== null && _p !== void 0 ? _p : 0);
-                    var reportForError = function (text, msg) {
-                        var _a;
-                        var idx = seg.text.indexOf(text, (_a = forMatch.index) !== null && _a !== void 0 ? _a : 0);
-                        var startChar = seg.start + (idx >= 0 ? idx : 0);
-                        var endChar = startChar + (text.length || 1);
-                        diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "FOR: ".concat(msg), vscode.DiagnosticSeverity.Error));
-                    };
-                    if (!ctrlIsNumeric) {
-                        reportForError(ctrlVar !== null && ctrlVar !== void 0 ? ctrlVar : '', "control variable must be alphanumeric without $ (got \"".concat(ctrlVar !== null && ctrlVar !== void 0 ? ctrlVar : '', "\")"));
-                    }
-                    var startExpr = stripTrailingCommentUnquoted(startExprRaw.trim());
-                    var endExpr = stripTrailingCommentUnquoted(endExprRaw.trim());
-                    var stepExpr = stepExprRaw ? stripTrailingCommentUnquoted(stepExprRaw.trim()) : undefined;
-                    var startType = (0, mtxstdfns_js_1.classifyExpr)(startExpr);
-                    var endType = (0, mtxstdfns_js_1.classifyExpr)(endExpr);
-                    if (!startType.hasNumeric) {
-                        reportForError(startExpr, "start expression must be numeric (got \"".concat(startExpr, "\")"));
-                    }
-                    if (!endType.hasNumeric) {
-                        reportForError(endExpr, "end expression must be numeric (got \"".concat(endExpr, "\")"));
-                    }
-                    if (stepExpr) {
-                        var stepType = (0, mtxstdfns_js_1.classifyExpr)(stepExpr);
-                        if (!stepType.hasNumeric) {
-                            reportForError(stepExpr, "STEP expression must be numeric (got \"".concat(stepExpr, "\")"));
-                        }
-                    }
-                    var validateChunk = function (expr, label) {
-                        runValidatorsOnSegment(expr, validators, function (err, rawMatch, absIdx) {
-                            if (!err || typeof absIdx !== 'number')
-                                return;
-                            var startChar = absIdx;
-                            var endChar = startChar + Math.max(1, rawMatch.length);
-                            if (isInString(startChar))
-                                return;
-                            diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "".concat(label, ": ").concat(err.message), vscode.DiagnosticSeverity.Error));
-                        }, seg.start);
-                    };
-                    validateChunk(startExpr, 'FOR start');
-                    validateChunk(endExpr, 'FOR end');
-                    if (stepExpr)
-                        validateChunk(stepExpr, 'FOR step');
+                var forValidation = validateForCommand(seg.text, i, seg.start, 'FOR');
+                if (forValidation.matched) {
                     forFlag = true;
                     toFlag = true;
-                    if (stepExpr)
+                    if (forValidation.hasStep)
                         stepFlag = true;
                 } // end of FOR handling
                 /**               Special
@@ -2037,51 +2322,15 @@ function activate(ctx) {
                                 Should CmdSpecs have expectEnd = true removed as the ON case allows multiple linenumbers?
                 */
                 var onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);
-                if (onMatch) {
-                    var selectorExprRaw = onMatch[1], branchKeyword_1 = onMatch[2], targetsRaw = onMatch[3];
-                    //parenthesis caused an issue with ON MOD(Z(1),2) not detecting the inner comma resulting insufficient arguments 
-                    //const selectorExpr = stripOuterParentheses(stripTrailingCommentUnquoted(selectorExprRaw.trim())); //didn't work
-                    var selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
-                    // drop the function name and its parentheses, leaving just the contents
-                    selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/, '$1');
-                    var selectorType = (0, mtxstdfns_js_1.classifyExpr)(selectorExpr);
-                    if (!selectorType.hasNumeric) {
-                        var idx = seg.text.indexOf(selectorExpr, (_q = onMatch.index) !== null && _q !== void 0 ? _q : 0);
-                        var startChar = seg.start + (idx >= 0 ? idx : 0);
-                        var endChar = startChar + selectorExpr.length;
-                        diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ON ".concat(branchKeyword_1, ": selector must be numeric (got \"").concat(selectorExpr, "\")"), vscode.DiagnosticSeverity.Error));
+                if (/^\s*ON\b/.test(seg.text)) {
+                    var onHandled = validateOnCommand(seg.text, i, seg.start, 'ON');
+                    if (onHandled) {
+                        onFlag = true;
+                        if (onMatch && onMatch[2].toUpperCase() === 'GOTO')
+                            gotoFlag = true;
+                        if (onMatch && onMatch[2].toUpperCase() === 'GOSUB')
+                            gosubFlag = true;
                     }
-                    var targets = (0, mtxstdfns_js_1.splitTopLevel)(targetsRaw).map(function (t) { return t.trim(); }).filter(Boolean);
-                    if (targets.length === 0) {
-                        var idx = seg.text.indexOf(branchKeyword_1, (_r = onMatch.index) !== null && _r !== void 0 ? _r : 0);
-                        var startChar = seg.start + (idx >= 0 ? idx : 0);
-                        diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + branchKeyword_1.length)), "ON ".concat(branchKeyword_1, ": requires at least one line number"), vscode.DiagnosticSeverity.Error));
-                    }
-                    else {
-                        targets.forEach(function (target) {
-                            var _a;
-                            var n = Number(target);
-                            var valid = Number.isInteger(n) && n >= 0 && n <= 65535;
-                            if (!valid) {
-                                var idx = seg.text.indexOf(target, (_a = onMatch.index) !== null && _a !== void 0 ? _a : 0);
-                                var startChar = seg.start + (idx >= 0 ? idx : 0);
-                                var endChar = startChar + target.length;
-                                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ON ".concat(branchKeyword_1, ": line numbers must be integers 0..65535 (got \"").concat(target, "\")"), vscode.DiagnosticSeverity.Error));
-                            }
-                        });
-                    }
-                    runValidatorsOnSegment(selectorExpr, validators, function (err, rawMatch, absIdx) {
-                        if (!err || typeof absIdx !== 'number' || isInString(absIdx))
-                            return;
-                        var startChar = absIdx;
-                        var endChar = startChar + Math.max(1, rawMatch.length);
-                        diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "ON ".concat(branchKeyword_1, " selector: ").concat(err.message), vscode.DiagnosticSeverity.Error));
-                    }, seg.start);
-                    onFlag = true;
-                    if (branchKeyword_1.toUpperCase() === 'GOTO')
-                        gotoFlag = true;
-                    if (branchKeyword_1.toUpperCase() === 'GOSUB')
-                        gosubFlag = true;
                 } // end of ON handling
                 /**               Special
                                 DIM A(10),B(20)
@@ -2184,7 +2433,7 @@ function activate(ctx) {
                         var codeWordRe = /\bCODE\b/gi;
                         var cm = void 0;
                         while ((cm = codeWordRe.exec(seg.text)) !== null) {
-                            var matchIdx = (_s = cm.index) !== null && _s !== void 0 ? _s : -1;
+                            var matchIdx = (_p = cm.index) !== null && _p !== void 0 ? _p : -1;
                             if (isInString(matchIdx))
                                 continue;
                             var start = seg.start + matchIdx;
@@ -2193,7 +2442,7 @@ function activate(ctx) {
                         // 3) also flag concatenated/malformed uses like "CODE5" or "CODEPRINT" (CODE followed immediately by word-chars)
                         var codeConcatRe = /\bCODE(?=\w)/gi;
                         while ((cm = codeConcatRe.exec(seg.text)) !== null) {
-                            var matchIdx = (_t = cm.index) !== null && _t !== void 0 ? _t : -1;
+                            var matchIdx = (_q = cm.index) !== null && _q !== void 0 ? _q : -1;
                             if (isInString(matchIdx))
                                 continue;
                             // highlight the whole token starting at matchIdx
@@ -2229,8 +2478,8 @@ function activate(ctx) {
                     { kw: 'PRINT', flag: printFlag, checkMissing: true },
                     { kw: 'LPRINT', flag: printFlag, checkMissing: true }
                 ];
-                for (var _15 = 0, spacedKeywords_1 = spacedKeywords; _15 < spacedKeywords_1.length; _15++) {
-                    var _16 = spacedKeywords_1[_15], kw = _16.kw, flag = _16.flag, checkMissing = _16.checkMissing;
+                for (var _12 = 0, spacedKeywords_1 = spacedKeywords; _12 < spacedKeywords_1.length; _12++) {
+                    var _13 = spacedKeywords_1[_12], kw = _13.kw, flag = _13.flag, checkMissing = _13.checkMissing;
                     if (!flag)
                         continue;
                     //NEXT is the only CmdSpecs that has optional arguments, so needs special handling with regards to space detection
@@ -2239,7 +2488,7 @@ function activate(ctx) {
                         : new RegExp("\\b".concat(kw, "\\b"), 'gi'); // All other keywords
                     var m = void 0;
                     while ((m = re.exec(seg.text)) !== null) {
-                        var matchIdx = (_u = m.index) !== null && _u !== void 0 ? _u : -1;
+                        var matchIdx = (_r = m.index) !== null && _r !== void 0 ? _r : -1;
                         if (matchIdx < 0)
                             continue;
                         var absStart = seg.start + matchIdx;
@@ -2247,9 +2496,9 @@ function activate(ctx) {
                             continue;
                         var after = seg.text.slice(matchIdx + kw.length);
                         var spaceMatch = /^(\s*)/.exec(after);
-                        var space = spaceMatch ? ((_v = spaceMatch[1]) !== null && _v !== void 0 ? _v : '') : '';
-                        var _17 = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _17.spaceMissingYes, msg0 = _17.msg0;
-                        var _18 = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _18.multiSpaceYes, msg2 = _18.msg2;
+                        var space = spaceMatch ? ((_s = spaceMatch[1]) !== null && _s !== void 0 ? _s : '') : '';
+                        var _14 = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _14.spaceMissingYes, msg0 = _14.msg0;
+                        var _15 = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _15.multiSpaceYes, msg2 = _15.msg2;
                         if (checkMissing && spaceMissingYes) {
                             var range = new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + kw.length));
                             diags.push(new vscode.Diagnostic(range, msg0, vscode.DiagnosticSeverity.Error));
@@ -2276,6 +2525,11 @@ function activate(ctx) {
                             }
                         }
                     }
+                }
+                var standaloneFunctionDiag = getStandaloneFunctionDiagnostic(seg.text, i, seg.start);
+                if (standaloneFunctionDiag) {
+                    diags.push(standaloneFunctionDiag);
+                    segHandled = true;
                 }
                 // Segments.length is based on multicommands on 1 line. If commands separated by say spaces then doesn't register
                 // Does this mean that validator.name will fail?
@@ -2312,13 +2566,15 @@ function activate(ctx) {
                         if (isInString(startChar))
                             return;
                         diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), "".concat(rawMatch, ": ").concat(err.message), vscode.DiagnosticSeverity.Error));
-                    }, seg.start);
+                    }, seg.start, true);
                     // Mark segment handled if any special-case flag was set earlier
                     segHandled = segHandled || letFlag || printFlag || ifFlag || thenFlag || elseFlag || forFlag || toFlag || stepFlag || nextFlag || onFlag || gotoFlag || gosubFlag || returnFlag || dataFlag || readFlag || inputFlag || dimFlag || codeFlag;
                     // FINAL STRAY-TEXT CHECK: flag top-level stray text or forgotten REM tokens
                     (function finalStrayTextCheck() {
                         // Build known commands set
                         var knownCmds = new Set(specs.map(function (s) { return s.id.toUpperCase(); }));
+                        //const knownCmdsByLength = [...knownCmds].sort((left, right) => right.length - left.length);
+                        var knownCmdsByLength = Array.from(knownCmds).sort(function (left, right) { return right.length - left.length; });
                         // Skip if this segment was already handled by earlier checks/validators
                         if (typeof segHandled !== 'undefined' && segHandled)
                             return;
@@ -2327,6 +2583,33 @@ function activate(ctx) {
                         var firstWordMatch = /^([A-Za-z_][A-Za-z0-9_]*\$?)/.exec(segTrimStart);
                         if (firstWordMatch && knownCmds.has(firstWordMatch[1].toUpperCase()))
                             return;
+                        // Fallback for attempted commands with a missing space after the keyword.
+                        // Keep the main validator regex unchanged and only claim obvious
+                        // "keyword + first argument" cases here.
+                        var missingSpaceCommand = knownCmdsByLength.find(function (kw) {
+                            if (!(0, mtxstdfns_js_1.isSpaceNeeded)(kw))
+                                return false;
+                            if (!segTrimStart.toUpperCase().startsWith(kw))
+                                return false;
+                            if (segTrimStart.length <= kw.length)
+                                return false;
+                            var nextChar = segTrimStart[kw.length];
+                            if (/\s/.test(nextChar))
+                                return false;
+                            // Only claim plausible first-argument starts so unrelated junk
+                            // still falls through to the stray-text warning.
+                            return /[A-Z0-9\"#£(+\-.]/.test(nextChar);
+                        });
+                        if (missingSpaceCommand) {
+                            var leadingTrim = seg.text.length - segTrimStart.length;
+                            var absStart = seg.start + leadingTrim;
+                            var _a = (0, mtxstdfns_js_1.isNoSpaceFound)(''), spaceMissingYes = _a.spaceMissingYes, msg0 = _a.msg0;
+                            if (spaceMissingYes) {
+                                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + missingSpaceCommand.length)), msg0, vscode.DiagnosticSeverity.Error));
+                                segHandled = true;
+                                return;
+                            }
+                        }
                         // Helper to detect if an index is inside any quoted string ranges
                         var isIdxInStringRanges = function (pos) {
                             // string ranges computed earlier as [stringRanges]
@@ -2348,9 +2631,17 @@ function activate(ctx) {
                             // detect bare assignment LHS followed by '=' (e.g. NV=19 but with a leading token like fhien)
                             var rest = seg.text.slice(startIdx + tok.length).trimStart();
                             if (/^[A-Za-z_][A-Za-z0-9_]*\$?$/.test(tok) && rest.startsWith('=')) {
+                                if (up === 'REM' && /^=+/.test(rest)) {
+                                    return;
+                                }
                                 var startCol_1 = seg.start + startIdx;
                                 var rng_1 = new vscode.Range(new vscode.Position(i, startCol_1), new vscode.Position(i, startCol_1 + tok.length));
-                                diags.push(new vscode.Diagnostic(rng_1, "Assignment requires LET command - use 'LET ".concat(tok, "='"), vscode.DiagnosticSeverity.Error));
+                                if (isReservedKeyword(tok)) {
+                                    diags.push(new vscode.Diagnostic(rng_1, "Keywords cannot be used as variable names: \"".concat(tok, "\""), vscode.DiagnosticSeverity.Error));
+                                }
+                                else {
+                                    diags.push(new vscode.Diagnostic(rng_1, "Assignment requires LET command - use 'LET ".concat(tok, "='"), vscode.DiagnosticSeverity.Error));
+                                }
                                 return;
                             }
                             // If token looks like ordinary text (not a command/label/assignment), warn the user
@@ -2398,9 +2689,9 @@ function activate(ctx) {
                 } // END of main validator error checking block
             };
             //const segments = splitLineSegments(line.text); // each { text, start }
-            for (var _9 = 0, segments_1 = segments; _9 < segments_1.length; _9++) {
-                var seg = segments_1[_9];
-                _loop_5(seg);
+            for (var _6 = 0, segments_2 = segments; _6 < segments_2.length; _6++) {
+                var seg = segments_2[_6];
+                _loop_6(seg);
             } // END of for (const seg of segments) loop
         };
         // run validators over each line (updated to handle multiple commands per line)
@@ -2426,20 +2717,20 @@ function activate(ctx) {
                 allLines.push(doc.lineAt(j).text);
             }
             // Parse and validate NODDY content
-            var _y = (0, mtxstdfns_js_1.parseNoddyContent)(allLines, noddyStartLine + 1), pages = _y.pages, parseErrors = _y.errors;
+            var _v = (0, mtxstdfns_js_1.parseNoddyContent)(allLines, noddyStartLine + 1), pages = _v.pages, parseErrors = _v.errors;
             // Add parse errors to diagnostics
-            for (var _z = 0, parseErrors_1 = parseErrors; _z < parseErrors_1.length; _z++) {
-                var err = parseErrors_1[_z];
+            for (var _w = 0, parseErrors_1 = parseErrors; _w < parseErrors_1.length; _w++) {
+                var err = parseErrors_1[_w];
                 var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                 diags.push(new vscode.Diagnostic(range, "NODDY: ".concat(err.message), vscode.DiagnosticSeverity.Error));
             }
             // Validate each program page
-            for (var _0 = 0, pages_1 = pages; _0 < pages_1.length; _0++) {
-                var page = pages_1[_0];
+            for (var _x = 0, pages_1 = pages; _x < pages_1.length; _x++) {
+                var page = pages_1[_x];
                 if (page.type === 'program') {
                     var progErrors = (0, mtxstdfns_js_1.validateNoddyProgram)(page, pages, page.lineStart);
-                    for (var _1 = 0, progErrors_1 = progErrors; _1 < progErrors_1.length; _1++) {
-                        var err = progErrors_1[_1];
+                    for (var _y = 0, progErrors_1 = progErrors; _y < progErrors_1.length; _y++) {
+                        var err = progErrors_1[_y];
                         var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                         diags.push(new vscode.Diagnostic(range, "NODDY: ".concat(err.message), vscode.DiagnosticSeverity.Error));
                     }
@@ -2463,11 +2754,11 @@ function activate(ctx) {
             }
             // Check for unused text pages
             var usedTextPages = new Set();
-            for (var _2 = 0, pages_2 = pages; _2 < pages_2.length; _2++) {
-                var page = pages_2[_2];
+            for (var _z = 0, pages_2 = pages; _z < pages_2.length; _z++) {
+                var page = pages_2[_z];
                 if (page.type === 'program') {
-                    for (var _3 = 0, _4 = page.content; _3 < _4.length; _3++) {
-                        var line = _4[_3];
+                    for (var _0 = 0, _1 = page.content; _0 < _1.length; _0++) {
+                        var line = _1[_0];
                         var displayMatch = /^\*(?:D|DISPLAY)\s+([^\s*^.]+)\./i.exec(line.trim());
                         if (displayMatch) {
                             usedTextPages.add(displayMatch[1]);
@@ -2475,8 +2766,8 @@ function activate(ctx) {
                     }
                 }
             }
-            for (var _5 = 0, pages_3 = pages; _5 < pages_3.length; _5++) {
-                var page = pages_3[_5];
+            for (var _2 = 0, pages_3 = pages; _2 < pages_3.length; _2++) {
+                var page = pages_3[_2];
                 if (page.type === 'text' && !usedTextPages.has(page.name)) {
                     var range = new vscode.Range(new vscode.Position(page.lineStart, 0), new vscode.Position(page.lineStart, 50));
                     diags.push(new vscode.Diagnostic(range, "NODDY: Text page \"".concat(page.name, "\" is never displayed"), vscode.DiagnosticSeverity.Hint));
@@ -2484,8 +2775,8 @@ function activate(ctx) {
             }
             // Check for unused program pages (not called by PLOD)
             var usedPrograms = new Set(plodRefs.map(function (r) { return r.progName; }));
-            for (var _6 = 0, pages_4 = pages; _6 < pages_4.length; _6++) {
-                var page = pages_4[_6];
+            for (var _3 = 0, pages_4 = pages; _3 < pages_4.length; _3++) {
+                var page = pages_4[_3];
                 if (page.type === 'program' && !usedPrograms.has(page.name)) {
                     var range = new vscode.Range(new vscode.Position(page.lineStart, 0), new vscode.Position(page.lineStart, 50));
                     diags.push(new vscode.Diagnostic(range, "NODDY: Program \"".concat(page.name, "\" is never called by PLOD"), vscode.DiagnosticSeverity.Hint));
@@ -2509,8 +2800,8 @@ function activate(ctx) {
             // validateCodeBlocks takes the document lines array, not CodeBlock[]
             var z80Errors = (0, z80codes_js_1.validateCodeBlocks)(allDocLines, hexBaseAddress);
             // duplicate‑label check
-            for (var _7 = 0, codeBlockRanges_3 = codeBlockRanges; _7 < codeBlockRanges_3.length; _7++) {
-                var block = codeBlockRanges_3[_7];
+            for (var _4 = 0, codeBlockRanges_3 = codeBlockRanges; _4 < codeBlockRanges_3.length; _4++) {
+                var block = codeBlockRanges_3[_4];
                 var seen = new Map();
                 for (var i = block.start; i <= block.end; i++) {
                     var line = doc.lineAt(i).text;
@@ -2535,8 +2826,8 @@ function activate(ctx) {
                     }
                 }
             }
-            for (var _8 = 0, z80Errors_1 = z80Errors; _8 < z80Errors_1.length; _8++) {
-                var err = z80Errors_1[_8];
+            for (var _5 = 0, z80Errors_1 = z80Errors; _5 < z80Errors_1.length; _5++) {
+                var err = z80Errors_1[_5];
                 var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                 var severity = err.severity === 'error'
                     ? vscode.DiagnosticSeverity.Error
@@ -2713,7 +3004,7 @@ function activate(ctx) {
                         "The angle parameter, theta in radians determines the curvature of the arc by specifying what angle is subtended.\n\n" +
                         "In other words the larger the angle, the tighter the curve.\n\n" +
                         "If the angle is greater than 360\u00BA or 2*pi radians, the arc will retrace its path.\n\n" +
-                        "Must be in graphics mode (VS 4) for command to exexute without an error");
+                        "Must be in graphics mode (VS 4) for command to execute without an error");
                 }
                 if (word === 'ASC') {
                     return new vscode.Hover("**ASC**:  Returns the ASCII code of the first character of the string.\n\n" +
@@ -2782,7 +3073,7 @@ function activate(ctx) {
                         "X: X coordinate of the centre of a circle.\n\n" +
                         "Y: Y coordinate of the centre of a circle.\n\n" +
                         "R: radius of a circle.\n\n" +
-                        "Must be in graphics mode (VS 4) for command to exexute without an error");
+                        "Must be in graphics mode (VS 4) for command to execute without an error");
                 }
                 if (word === 'CLEAR') {
                     return new vscode.Hover("**CLEAR**:  CLEAR removes all of the variables.\n\n" +
@@ -2826,13 +3117,13 @@ function activate(ctx) {
                         "P: The value of p selects which areas of the screen the colour refers to.\n\n" +
                         "Two sets of colours are defined. The print colours refer to Colours that will be used when colours are printed.\n\n" +
                         "The non-print or PLOT colours refer to colours that will be used when colours are plotted or when screen functions are used.\n\n" +
-                        "P=0, print paper.\n\n" +
-                        "P=1, print ink.\n\n" +
-                        "P=2, non-print (plot) paper.\n\n" +
-                        "P=3, non-print ink.\n\n" +
-                        "P=4, border colour.\n\n" +
+                        "P=0, print (text) paper.\n\n" +
+                        "P=1, print (text) ink.\n\n" +
+                        "P=2, non-print (graphics) paper.\n\n" +
+                        "P=3, non-print (graphics) ink.\n\n" +
+                        "P=4, border colour (graphics).\n\n" +
                         "N: Selects the colour (see colour table in the appendix 7). (0 to 15)\n\n" +
-                        "Must be in graphics mode (VS 4) for command to exexute without an error");
+                        "Must be in graphics mode (VS 4) for command to execute without an error");
                 }
                 if (word === 'CONT') {
                     return new vscode.Hover("**CONT**:  Used to restart a program after a STOP instruction or BRK kety pressed.\n\n" +
@@ -2907,7 +3198,7 @@ function activate(ctx) {
                     return new vscode.Hover("**DRAW**:  Draws a simple line with the specified parameter.\n\n" +
                         "Usage: DRAW x \n\n" +
                         "Draws a line of length X from the current plot position in the current direction The plot position is updated to the end of the line.\n\n" +
-                        "Must be in graphics mode (VS 4) for command to exexute without an error, see LINE");
+                        "Must be in graphics mode (VS 4) for command to execute without an error, see LINE");
                 }
                 if (word === 'DSI') {
                     return new vscode.Hover("**AA**:  Direct Screen Input.\n\n" +
@@ -3084,7 +3375,7 @@ function activate(ctx) {
                     return new vscode.Hover("**LINE**:  Draws a line between 2 sets of coordinates. See also DRAW\n\n" +
                         "Usage: LINE X1,Y1,X2,Y2 \n\n" +
                         "Draws a line from coordinates (X1,Y1) to (X2,Y2)\n\n" +
-                        "Must be in graphics mode (VS 4) for command to exexute without an error, see LINE");
+                        "Must be in graphics mode (VS 4) for command to execute without an error, see LINE");
                 }
                 if (word === 'LIST') {
                     return new vscode.Hover("**LIST**:  List a program to the screen.\n\n" +
@@ -3279,7 +3570,7 @@ function activate(ctx) {
                     return new vscode.Hover("**PLOT**:  Plots a point on the graphics screen.\n\n" +
                         "Usage: PLOT X,Y \n\n" +
                         "Plots a point in the graphics screen at the graphics coordinates (X,Y)\n\n" +
-                        "Must be in graphics mode (VS 4) for command to exexute without an error, see LINE, see COLOUR and ATTR");
+                        "Must be in graphics mode (VS 4) for command to execute without an error, see LINE, see COLOUR and ATTR");
                 }
                 if (word === 'POKE') {
                     return new vscode.Hover("**POKE**:  Stores a specified value in the computer memory.\n\n" +
@@ -3371,7 +3662,7 @@ function activate(ctx) {
                         "RUN tells the computer to start running the program from beginning.\n\n" +
                         "All variables will be cleared.\n\n" +
                         "A program can also be run by using a GOTO statement as a direct command. In this case the variables will be unaltered.\n\n" +
-                        "NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ROM.");
+                        "NOTE: The VS CODE extension for MTX-BASIC does not execute RUN.");
                 }
                 if (word === 'SAVE') {
                     return new vscode.Hover("**SAVE**:  Saves a program from memory to cassete tape. (see USER DISC for disc save options).\n\n" +

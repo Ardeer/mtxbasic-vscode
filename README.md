@@ -55,7 +55,7 @@ The length of a BASIC line is the same as for MTX BASIC (158 characters), otherw
 
 One known issue is that MTX BASIC is a bit more forgiving than how I have coded it, for example, MTX BASIC allows X,Y coordinates to be decimals when clearly they should be integers. Therefore, there is a possibility that some original programs if disaasembled and loaded into VS Code will show up as errors, e.g. CIRCLE 10.5,20,1.5 . There are some function command ranges where I have selected based the maximum-minium MTX BASIC allowed me to enter before showing an error. Further work is needed in this area.
 
-The use of colon (:) within REM statements that are not enclosed within double quotes will lead to ironically the following error "Unrecognised or stray text: 'function'. Did you mean to add 'REM'?". Avoid using : in free form REM statements.
+The use of colon (:) within REM statements that are not enclosed within double quotes will lead to ironically the following error "Unrecognised or stray text: 'function'. Did you mean to add 'REM'?". Avoid using a colon (:) in free form REM statements. Also, ensure there is a space after REM. Minor changes from original MTX editor to simplify the parser coding in VS code.
 
 The mtxbasic-extension uses regular expressions (regex) to parse the command syntax (e.g. const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);). Unfortunately, this is not without its challenges, too many to discuss here, but one area where it struggles is with nested (or depth) parentheses, for example, ON MOD(Z(1),2) GOSUB 700,800 , I had to apply an additional a strip parentheses to this syntax parser to allow it to detect the second argument in the MOD() function due to Z(1) conflict. 
 

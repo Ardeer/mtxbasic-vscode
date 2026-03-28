@@ -5,7 +5,7 @@ This program takes any binary file and outputs a text file showing both the hexa
 ## Features
 
 - Written in Python
-- Reads text or program file (binary .mtx or .BAS or .com file types)
+- Reads text or program file (binary .mtx or .BAS or .COM file types)
 - Outputs a text file (address, 16 byte data per line, 16 ASCII characters per line)
 - MTX series customised output version breaks the code into sections:
     Tape header,

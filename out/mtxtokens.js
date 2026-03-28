@@ -429,21 +429,14 @@ function basicTokeniseLine(line, baseAddr) {
             if (/^\s+/.test(l) && !/^\s+[0-9A-F]{1,4}\b/.test(l))
                 break;
             // This is a code block line, add it
-            console.log("[basicTokeniseLine] Code line ".concat(rawCodeLines.length, ": ").concat(JSON.stringify(l.substring(0, 50))));
             rawCodeLines.push(l);
         }
-        console.log("[basicTokeniseLine] Collected ".concat(rawCodeLines.length, " code lines"));
         // Process code lines: preserve hex addresses and handle comments
         // If a trailing ';' comment exists, preserve it as a separate comment-only
         // UPDATE: We do NOT split comments here anymore. We pass the full line to processCodeBlock
         // which handles inline comments correctly by preserving the same offset.
         // Alternative simpler approach: just filter out empty lines
         var codeLines = rawCodeLines.filter(function (l) { return l.trim().length > 0; });
-        // DEBUG: inspect what we will pass to processCodeBlock
-        console.log('DEBUG basicTokeniseLine: restFull=', JSON.stringify(restFull));
-        console.log('DEBUG basicTokeniseLine: linesArr=', linesArr);
-        console.log('DEBUG basicTokeniseLine: rawCodeLines=', rawCodeLines);
-        console.log('DEBUG basicTokeniseLine: codeLines=', codeLines);
         if (codeLines.length === 0) {
             var payloadPlaceholder = [codeTok, 0x00, 0x00, 0xFF];
             if (hasLineNumber)
@@ -451,7 +444,6 @@ function basicTokeniseLine(line, baseAddr) {
             return payloadPlaceholder;
         }
         var codeBlockStr = codeLines.join('\n');
-        console.log('DEBUG basicTokeniseLine: codeBlockStr=', JSON.stringify(codeBlockStr));
         var codeBlockResult = processCodeBlock(codeBlockStr, baseAddr);
         // Build final payload with separated opcode and directive bytes
         var payload = __spreadArray(__spreadArray(__spreadArray([
@@ -800,7 +792,6 @@ function parseDwValues(raw) {
 // =================== PHASE 1: PARSE & DISCOVER ===================
 function parseCodeBlockPhase1(codeBlock, baseAddr) {
     if (baseAddr === void 0) { baseAddr = 0x4000; }
-    console.log("[Phase1] Starting with codeBlock length: ".concat(codeBlock.length));
     var parsedLines = [];
     var labelMap = {};
     var labelReferences = new Map();
@@ -808,7 +799,6 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
     var directiveLines = [];
     var commentLines = [];
     var lines = codeBlock.split(/\r?\n/).map(function (l) { return l.replace(/\t/g, ' ').replace(/\r?\n$/, ''); });
-    console.log("[Phase1] Split into ".concat(lines.length, " lines"));
     var offset = 0;
     var firstLine = true;
     for (var _i = 0, lines_1 = lines; _i < lines_1.length; _i++) {
@@ -831,7 +821,6 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
             continue;
         }
         // [Step 3]: Logic to reconstruct the 'parsed' object
-        console.log("[Phase1] Processing raw line: \"".concat(raw, "\""));
         // Initialize parsed object
         var parsed = {
             raw: rawLine, // Store full original line
@@ -925,20 +914,15 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
         // Increment offset for the next line
         offset += instrLen;
         firstLine = false;
-        // Debug logging
-        console.log("[Phase1] PARSED: mnemonic=".concat(parsed.mnemonic || 'N/A', ", addr=").concat(parsed.address || 'none', ", offset=0x").concat((parsed._offset || 0).toString(16), ", instrLen=").concat(instrLen));
     }
-    console.log("[Phase1] Total parsed lines: ".concat(parsedLines.length, ", labels: ").concat(Object.keys(labelMap).length));
     return { parsedLines: parsedLines, labelMap: labelMap, labelReferences: labelReferences, numberReferences: numberReferences, directiveLines: directiveLines, commentLines: commentLines };
 }
 // =================== PHASE 2: GENERATE OPCODES ===================
 function parseCodeBlockPhase2(parsedLines, labelMap, labelReferences, numberReferences, baseAddr, offsetBase) {
     var opcodeBytes = [];
     var cumulativeOffset = 0;
-    console.log("[Phase2] Starting with ".concat(parsedLines.length, " parsed lines"));
     var _loop_1 = function (p) {
         if (p.isComment || p.isUnparsed) {
-            console.log("[Phase2] Skipping comment/unparsed: ".concat(p.raw));
             return "continue";
         }
         var baseOffset = typeof p._offset === 'number' ? p._offset : cumulativeOffset;
@@ -977,21 +961,16 @@ function parseCodeBlockPhase2(parsedLines, labelMap, labelReferences, numberRefe
         var operands = p.operands || [];
         var best = findBestZ80Match(instr, operands);
         if (!best) {
-            console.error("ERROR: No Z80 opcode match found for instruction: \"".concat(instr, "\" with operands: [").concat(operands.join(', '), "]"));
-            console.error("  Raw line: ".concat(p.raw || '(no raw)'));
-            console.error("  Offset: 0x".concat(baseOffset.toString(16)));
             // Try emergency fallback: direct lookup in z80Cmds by z80 field
             if (Array.isArray(z80codes_js_1.z80Cmds)) {
                 var fallback = z80codes_js_1.z80Cmds.find(function (cmd) { return cmd.z80.toUpperCase().trim() === instr.toUpperCase().trim(); });
                 if (fallback) {
-                    console.warn("  Using fallback match: ".concat(fallback.z80, " = ").concat(fallback.opCode));
                     var bytesForInstr_1 = opCodePatternToBytes(fallback.opCode, p, labelMap, numberReferences, baseOffsetAbs);
                     opcodeBytes.push.apply(opcodeBytes, bytesForInstr_1);
                     cumulativeOffset = baseOffset + bytesForInstr_1.length;
                     return "continue";
                 }
             }
-            console.warn("  Skipping instruction (no match and no fallback found)");
             return "continue";
         }
         var bytesForInstr = opCodePatternToBytes(best.opCode, p, labelMap, numberReferences, baseOffsetAbs, labelReferences);
@@ -1223,7 +1202,6 @@ function convertToAsciiWithHiBit(str) {
 // =================== MAIN PROCESSCODEBOCK FUNCTION ===================
 function processCodeBlock(codeBlock, baseAddr) {
     if (baseAddr === void 0) { baseAddr = 0x4000; }
-    console.log('[processCodeBlock] ENTRY - codeBlock length:', codeBlock.length, 'baseAddr:', baseAddr);
     // Phase 1: Parse and discover labels, directives, comments
     var phase1 = parseCodeBlockPhase1(codeBlock, baseAddr);
     var offsetCandidates = phase1.parsedLines
@@ -1378,12 +1356,10 @@ function assembleCodeBlock(lines, baseAddr) {
             }
         }
         if (cmd) {
-            console.log('Normalized instruction:', instr);
-            console.log('Matching against:', cmd.z80, 'Normalized:', instr);
             // Use the actual instruction address from parsed._address if available, otherwise use cumulativeOffset
             var instrAddr = parsed._address !== undefined ? parsed._address : cumulativeOffset;
             var instrBytes = opCodePatternToBytes(cmd.opCode, parsed, labelMap, new Map(), instrAddr, new Map());
-            // Validate that generated bytes match the expected length
+            // Validate that generated bytes match the expected length - KEEP FOR DEVELOPMENT USE ONLY
             if (instrBytes.length !== cmd.length) {
                 console.error("OPCODE LENGTH MISMATCH: ".concat(cmd.z80, " at address 0x").concat(instrAddr.toString(16), " - ") +
                     "Expected ".concat(cmd.length, " bytes but generated ").concat(instrBytes.length, " bytes. ") +
@@ -1433,7 +1409,7 @@ function findBestZ80Match(instruction, operands) {
         return normalizedCmd.startsWith(normalizedInstr);
     });
     if (potentialMatches.length === 0) {
-        console.warn("No matches found for instruction: ".concat(instruction, " ").concat(operands.join(', ')));
+        //No matches found for instruction
         return null;
     }
     // If multiple matches, select the best one based on specificity

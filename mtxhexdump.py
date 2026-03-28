@@ -113,7 +113,7 @@ def hexdump_file_to_txt(): #read
     msgbox.showinfo(title="MTX Hexdump",message="This program reads a file and produces a corresponding text file showing the byte data (hexadecimal) and ASCII characters.\n" \
                     "Option to select a customised version for the Memotech MTX computer.\n" )
 
-    GV_fname_r = askopenfilename(title="Binary (Program) input filename",defaultextension=GC_extn_r, filetypes=[("Binary (Program) files", GC_extn_r),("COM files", "*.com"),("EXE files", "*.exe"),("All files","*.*")])
+    GV_fname_r = askopenfilename(title="Binary (Program) input filename",defaultextension=GC_extn_r, filetypes=[("Binary (Program) files", GC_extn_r),("COM files", "*.COM"),("EXE files", "*.exe"),("All files","*.*")])
     #print("write conversion out as a text hex/ascii file (*.txt)")
     GV_fname_w = asksaveasfilename(title="Hexdump output filename", defaultextension=GC_extn_w, filetypes=[("TEXT files", GC_extn_w),("All files","*.*")]) 
     

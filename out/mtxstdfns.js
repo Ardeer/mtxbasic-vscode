@@ -104,10 +104,8 @@ function isValidString(s) {
         return false;
     // Check for balanced parentheses and then test against simple variable arithmetic
     if (isBalancedParentheses(s)) {
-        //console.log('Balanced parenthesis');
         // Check for valid parenthesized expression
         var sStrip = String(s).replace(/[\s[(|)]/g, '');
-        //console.log('stripped out parentheses);
         if (sStrip.startsWith('"') && sStrip.endsWith('"'))
             return true;
     }
@@ -206,7 +204,6 @@ function stringExprParts(expr) {
     // In JavaScript/TypeScript we can use a balanced‑parentheses look‑ahead:
     var parts = sStrip.split(/\+(?![^(]*\))/).map(function (p) { return p.trim(); }); //backup option to use complexTokeniser() as used by VarExprParts
     parts.every(function (part) {
-        //console.log('strexpr parts based on cat',part);
         // Check each part for: Order changed
         // 3. Nested String function call which requires numeric but returns a string e.g. CHRS(65)
         //if (/^(?:CHR)\$\([^)]([\d+]*|[A-Z][A-Z0-9]*)\)$/.test(part)) return extractParts.push([part, true]);
@@ -231,13 +228,10 @@ function stringExprParts(expr) {
         //}
         if (/^(?:STR\$\()/.test(part)) { //deals with nested
             var stripPart = part.slice(4);
-            //console.log('remove STR$(',stripPart); 
             if (isValidVarExprArithmetic(stripPart)) {
-                //console.log('valid arithmetic variable expression');
                 return extractParts.push([part, true]);
             }
             else {
-                //console.log('invalid arithmetic/var expression');
                 return extractParts.push([part, false]);
             }
         }
@@ -247,7 +241,7 @@ function stringExprParts(expr) {
         // 6. Nested String variable (ends with $)
         if (isValidStrVarName(part) || isValidString(part))
             return extractParts.push([part, true]);
-        //if (/^(?:[A-Z][A-Z0-9]*\$)$/.test(part)) return extractParts.push([part, true]);              
+        //if (/^(?:[A-Z][A-Z0-9]*\$)$/.test(part)) return extractParts.push([part, true]);
         // 7. Quoted string option to check with isBalancedDoubleQuotes()
         //if (/^(?:"[^"]*")$/.test(part)) return extractParts.push([part, true]);
         else
@@ -279,32 +273,25 @@ function varExprParts(expr) {
         extractParts.push(['', false]);
     for (var _i = 0, parts_1 = parts; _i < parts_1.length; _i++) {
         var part = parts_1[_i];
-        //console.log('strexpr parts based on cat',part);
-        // Check each part for: Order changed                               
+        // Check each part for: Order changed
         // 2. Nested functions excluding specials
         // 2a. LN(x)
         //if (/^(?:LN)\s*\(/.test(part)) { //removed LN as copvered by isValidVarExprArithmetic
         /*        const stripPart=part.slice(2,);
-                console.log('remove LN(',stripPart);
                 if (isValidVarExprArithmetic(stripPart)) {
-                        console.log('valid arithmetic variable expression');
                         extractParts.push([part, true]);
                 }
                 else {
-                        console.log('invalid arithmetic/var expression');
                         extractParts.push([part, false]);
                 }
         } */
         // 2b. FCN(x)
         if (/^(?:ABS|ATN|COS|INP|INT|SGN|SIN|SQR|TAN|USR)\s*\(/.test(part)) { //removed EXP as copvered by isValidVarExprArithmetic
             var stripPart = part.slice(3);
-            //console.log('remove FUNC(',stripPart); 
             if (isValidVarExprArithmetic(stripPart)) {
-                //console.log('valid arithmetic variable expression');
                 extractParts.push([part, true]);
             }
             else {
-                //console.log('invalid arithmetic/var expression');
                 extractParts.push([part, false]);
             }
         }
@@ -317,14 +304,11 @@ function varExprParts(expr) {
         else if (/^(?:ASC\()/.test(part)) {
             var stripPart = part.slice(3);
             var ifStrExpr = stringExprParts(stripPart);
-            console.log('remove ASC(', stripPart);
             //if (isValidStrVarName(stripPart) || isValidString(stripPart) || (ifStrExpr.every(row => row[1] === true))) {
             if ((ifStrExpr.every(function (row) { return row[1] === true; }))) {
-                console.log('valid string variable expression');
                 extractParts.push([part, true]);
             }
             else {
-                console.log('invalid string/string var expression');
                 extractParts.push([part, false]);
             }
         }
@@ -332,14 +316,11 @@ function varExprParts(expr) {
         else if (/^(?:LEN\s\()/.test(part)) {
             var stripPart = part.slice(4);
             var ifStrExpr = stringExprParts(stripPart);
-            //console.log('remove LEN (',stripPart); 
             //if (isValidStrVarName(stripPart) || isValidString(stripPart) || (ifStrExpr.every(row => row[1] === true))){
             if ((ifStrExpr.every(function (row) { return row[1] === true; }))) {
-                //console.log('valid string variable expression');
                 extractParts.push([part, true]);
             }
             else {
-                //console.log('invalid string/string var expression');
                 extractParts.push([part, false]);
             }
         }
@@ -347,14 +328,11 @@ function varExprParts(expr) {
         else if (/^(?:VAL\()/.test(part)) {
             var stripPart = part.slice(3);
             var ifStrExpr = stringExprParts(stripPart);
-            //console.log('remove VAL(',stripPart); 
             //if (isValidStrVarName(stripPart) || isValidString(stripPart) || (ifStrExpr.every(row => row[1] === true))) {
             if ((ifStrExpr.every(function (row) { return row[1] === true; }))) {
-                //console.log('valid string variable expression');
                 extractParts.push([part, true]);
             }
             else {
-                //console.log('invalid string/string var expression');
                 extractParts.push([part, false]);
             }
         }
@@ -417,7 +395,6 @@ function captureParenthesesGroup(s, n) {
         if (depth === 0)
             break;
     }
-    //console.log('captureParenthesesGroups, n=',n)
     return n;
 } //END of captureParenthesesGroup
 // simple tokeniser – split on whitespace and keep punctuation as separate tokens
@@ -654,10 +631,8 @@ function isValidArithmetic(rawArith) {
         return false;
     // Check for balanced parentheses
     if (isBalancedParentheses(s)) {
-        //console.log('Balanced parenthesis');
         // Check for valid parenthesized expression
         var sStrip = String(s).replace(/[\s[(|)]/g, '');
-        //console.log('stripped out parenthesis', sStrip);
         if (simpleArith1.test(sStrip) || simpleArith2.test(sStrip)) {
             return true;
         }
@@ -700,10 +675,8 @@ function isSpaceNeeded(input) {
     // capture the command token (letters and optional trailing $)
     var m = input.trim().toUpperCase().match(/^([A-Z]+\$?)/);
     var cmd = m ? m[1] : '';
-    //console.log('cmd = ',cmd);
     if (!cmd)
         return true; // no command found -> treat as requires space
-    //console.log('!noSpaceAllowed boolean =', !noSpaceAllowed.has(cmd))
     return !noSpaceAllowed.has(cmd); // returns true if requires a space and false if no space required
 }
 function isNoSpaceFound(expr) {

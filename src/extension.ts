@@ -482,10 +482,26 @@ export function activate(ctx: vscode.ExtensionContext) {
                         absoluteMatchIndex?: number,
                         matchArray?: RegExpExecArray
                 ) => void,
-                baseOffset: number = 0
+                baseOffset: number = 0,
+                preferSegmentStartCommand: boolean = false
                 ) {                               
                 let commandMatchedAtStart = false;
-                for (const validator of validatorsList) {
+                let validatorsToRun = validatorsList;
+
+                if (preferSegmentStartCommand) {
+                        const startCommandValidator = validatorsList.find(validator => {
+                                if (!validator.expectEnd) return false;
+                                const match = validator.re.exec(segment);
+                                return !!match && (match.index ?? -1) === 0;
+                        });
+
+                        if (startCommandValidator) {
+                                validatorsToRun = [startCommandValidator];
+                                commandMatchedAtStart = true;
+                        }
+                }
+
+                for (const validator of validatorsToRun) {
                         const flags = validator.re.flags.includes('g') ? validator.re.flags : validator.re.flags + 'g';
                         const iter = new RegExp(validator.re.source, flags);
                         let match: RegExpExecArray | null;
@@ -503,7 +519,7 @@ export function activate(ctx: vscode.ExtensionContext) {
 
                         // If a command matched at the start of the segment, skip ALL other validators
                         // This prevents INT from matching inside "CSR INT(x),INT(y)" or SIN inside "CIRCLE SIN(a),COS(b),R"
-                        if (commandMatchedAtStart) continue;
+                        if (commandMatchedAtStart && !preferSegmentStartCommand) continue;
 
                         const groups = match.slice(1);
                         const failures = validator.validate(groups, match[0]);
@@ -862,6 +878,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 { id: 'RIGHT$', pattern: 'RIGHT\\$',  cmdname:'strfn'  ,args: [{ kind: 'string'}, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=RIGHT$("str..",num) = 28chars or more 
                 { id: 'RND', pattern: 'RND',  cmdname:'stdcmd'  ,args: []  }, //removed , expectEnd: true so that A=RND*5 is valid
                 { id: 'ROM', pattern: 'ROM', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 1, max: 255}], expectEnd: true }, //range to be confirmed
+                { id: 'RUN', pattern: 'RUN',  cmdname:'stdcmd'  ,args: [] , expectEnd: true },
                 { id: 'SAVE', pattern: 'SAVE', cmdname:'strcmd'  ,args: [{ kind: 'string' ,min: 0, max:14}], expectEnd: true }, 
                 { id: 'SBUF', pattern: 'SBUF', cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 1, max: 8160}], expectEnd: true }, //range confirmed, see appendix 8
                 { id: 'SGN', pattern: 'SGN', cmdname:'numfn'  ,args: [{ kind: 'numeric', min: -1, max: 1}], expectEnd: true }, //-1 if -ve 0 if 0 and +1 if +ve
@@ -893,13 +910,18 @@ export function activate(ctx: vscode.ExtensionContext) {
                 { id: 'VIEW', pattern: 'VIEW',  cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 0, max: 7 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
                 { id: 'VS', pattern: 'VS',  cmdname:'stdcmd'  ,args: [{ kind: 'numeric', min: 0, max: 7 }], expectEnd: true },
                 // add other specs here; use '\\$' in pattern for names ending with $
+                // illegal keywords ASSEM|AUTO|EDIT|FRE|LIST|LLIST|PANEL|VERIFY
                 ];
 
                 // build generic validators from specs and confirm MTX BASIC line and commands/functions are correctly formatted
                 const validators: Validator[] = specs.map((spec) => {
 
                 //const re = new RegExp(`\\b(?:${spec.pattern})\\s*([^:']*)`, 'gi'); 
-                const re = new RegExp(`\\b(?:${spec.pattern})\\b\\s*(.*)`, ''); // case-sensitive: only uppercase keywords match specs, mixed-case caught by MIXED_CASE_KEYWORD validator
+                //const re = new RegExp(`\\b(?:${spec.pattern})\\b\\s*(.*)`, ''); // case-sensitive: only uppercase keywords match specs, mixed-case caught by MIXED_CASE_KEYWORD validator
+                const hasDollarSuffix = /\\\$$/.test(spec.pattern);
+                const trailingGuard = hasDollarSuffix ? `(?=$|[^A-Za-z0-9_])` : `\\b`;
+                const re = new RegExp(`\\b(?:${spec.pattern})${trailingGuard}\\s*(.*)`, ''); // case-sensitive: only uppercase keywords match specs, mixed-case caught by MIXED_CASE_KEYWORD validator
+
                 //colon and single quote handling moved to stripTrailingCommentUnquoted function, 
                 // although single quotes are not allowed in MTX BASIC unless within a double quotation string literal
                 // capture args up to comment/colon Also needs to be \\b not \b as before. 
@@ -1220,11 +1242,592 @@ export function activate(ctx: vscode.ExtensionContext) {
                         'ABS', 'ASC', 'ATN', 'COS', 'EXP', 'INT', 'LN', 'RND', 'SGN', 'SIN', 'SQR', 'TAN', 'VAL',
                         'CHR$', 'LEFT$', 'MID$', 'RIGHT$', 'STR$', 'LEN', 'INKEY$', 'TIME$', 'SPK$', 'GR$',
                         'PEEK', 'POKE', 'OUT', 'INP', 'USR', 'AND', 'OR', 'NOT', 'MOD', 'ON',
-                        'SAVE', 'LOAD', 'VERIFY', 'RUN', 'LIST', 'NEW', 'AUTO', 'EDIT', 'PI', 'PHI',
+                        'SAVE', 'LOAD', 'RUN', 'NEW', 'PI', 'PHI',
                         'ADJSPR', 'ANGLE', 'ARC', 'ATTR', 'BAUD', 'CLOCK', 'CRVS', 'CSR', 'CTLSPR',
-                        'DSI', 'EDITOR', 'GENPAT', 'LLIST', 'MVSPR', 'NODDY', 'PAUSE', 'PLOD', 'RAND',
+                        'DSI', 'EDITOR', 'GENPAT', 'MVSPR', 'NODDY', 'PAUSE', 'PLOD', 'RAND',
                         'RESTORE', 'ROM', 'SBUF', 'SPRITE', 'USER', 'VIEW', 'VS'
                 ];
+
+                const unsupportedEditorKeywords = ['ASSEM', 'AUTO', 'EDIT', 'FRE', 'LIST', 'LLIST', 'PANEL', 'VERIFY'];
+                const allKnownKeywords = [...knownKeywords, ...unsupportedEditorKeywords];
+                const knownKeywordSet = new Set(allKnownKeywords.map(k => k.toUpperCase()));
+                const unsupportedEditorKeywordSet = new Set(unsupportedEditorKeywords.map(k => k.toUpperCase()));
+                const standaloneFunctionNames = specs
+                        .filter(spec => spec.cmdname === 'numfn' || spec.cmdname === 'strfn')
+                        .map(spec => spec.id.toUpperCase())
+                        .sort((left, right) => right.length - left.length);
+
+                function escapeRegex(text: string): string {
+                return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                }
+
+                function getBaseIdentifier(name: string): string {
+                return name
+                        .trim()
+                        .replace(/\(.*\)$/, '') // remove array suffix
+                        .toUpperCase();
+                }
+
+                function isReservedKeyword(name: string): boolean {
+                const baseIdentifier = getBaseIdentifier(name);
+                return knownKeywordSet.has(baseIdentifier) || knownKeywordSet.has(baseIdentifier.replace(/\$$/, ''));
+                }
+
+                function isRemCommentSegment(text: string): boolean {
+                return /^\s*(?:\d+\s+)?REM(?:\s|$|=)/.test(text);
+                }
+
+                function getStandaloneFunctionDiagnostic(text: string, lineNum: number, absStart: number): vscode.Diagnostic | null {
+                const stripped = stripTrailingCommentUnquoted(text);
+                const leadingTrim = stripped.length - stripped.trimStart().length;
+                const trimmed = stripped.trimStart();
+                const upperTrimmed = trimmed.toUpperCase();
+
+                for (const functionName of standaloneFunctionNames) {
+                        const trailingGuard = functionName.endsWith('$') ? '(?=$|[^A-Z0-9_])' : '\\b';
+                        const functionRe = new RegExp(`^(${escapeRegex(functionName)})${trailingGuard}(.*)$`);
+                        const match = functionRe.exec(upperTrimmed);
+                        if (!match) {
+                                continue;
+                        }
+
+                        const startChar = absStart + leadingTrim;
+                        const endChar = startChar + functionName.length;
+                        return new vscode.Diagnostic(
+                                new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                `Function ${functionName} cannot be used as a standalone statement; use it within LET, PRINT, IF, or another command`,
+                                vscode.DiagnosticSeverity.Error
+                        );
+                }
+
+                return null;
+                }
+
+                function addUnsupportedKeywordWarnings(text: string, lineNum: number, absStart: number): void {
+                if (!text || isRemCommentSegment(text)) {
+                        return;
+                }
+
+                const keywordRe = /\b([A-Z][A-Z0-9$]*)\b/g;
+                let match: RegExpExecArray | null;
+                while ((match = keywordRe.exec(text)) !== null) {
+                        const keyword = match[1] || '';
+                        if (!unsupportedEditorKeywordSet.has(keyword.toUpperCase())) {
+                                continue;
+                        }
+
+                        const startChar = absStart + match.index;
+                        if (isInQuotedStringAt(doc.lineAt(lineNum).text, startChar)) {
+                                continue;
+                        }
+
+                        const endChar = startChar + keyword.length;
+                        diags.push(new vscode.Diagnostic(
+                                new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                `This keyword ${keyword} is not required by the VS code editor`,
+                                vscode.DiagnosticSeverity.Warning
+                        ));
+                }
+                }
+
+                function getMissingLetDiagnostic(text: string, lineNum: number, absStart: number): vscode.Diagnostic | null {
+                const bareAss = /^\s*(?!LET\b)([A-Z][A-Z0-9]*\$?)\s*=/.exec(text);
+                if (!bareAss) {
+                        return null;
+                }
+
+                const varName = bareAss[1] || '';
+                const varOffset = text.search(/[A-Z][A-Z0-9]*\$?/);
+                const startChar = absStart + Math.max(0, varOffset);
+                const endChar = startChar + Math.max(1, varName.length);
+                const range = new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar));
+
+                if (isRemCommentSegment(text)) {
+                        return null;
+                }
+
+                if (isReservedKeyword(varName)) {
+                        return new vscode.Diagnostic(
+                                range,
+                                `Keywords cannot be used as variable names: "${varName}"`,
+                                vscode.DiagnosticSeverity.Error
+                        );
+                }
+
+                const builtInVars = new Set([ 'INKEY$', 'SPK$', 'TIME$']);
+                if (builtInVars.has(varName.toUpperCase())) {
+                        return null;
+                }
+
+                return new vscode.Diagnostic(
+                        range,
+                        `Assignment requires LET command - use 'LET ${varName}='`,
+                        vscode.DiagnosticSeverity.Error
+                );
+                }
+
+                function getImplicitBranchTargetDiagnostic(text: string, lineNum: number, absStart: number, branchName: string): vscode.Diagnostic | null {
+                const bareLineTarget = /^\s*(\d{1,5})\s*$/.exec(text);
+                if (!bareLineTarget) {
+                        return null;
+                }
+
+                const target = bareLineTarget[1] || '';
+                const startChar = absStart + (text.indexOf(target) >= 0 ? text.indexOf(target) : 0);
+                const endChar = startChar + target.length;
+                return new vscode.Diagnostic(
+                        new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                        `${branchName} requires explicit GOTO or GOSUB before line number ${target}`,
+                        vscode.DiagnosticSeverity.Error
+                );
+                }
+
+                function getUnknownLeadingTokenDiagnostic(text: string, lineNum: number, absStart: number, branchName: string): vscode.Diagnostic | null {
+                const trimmed = text.trimStart();
+                const firstWordMatch = /^([A-Za-z_][A-Za-z0-9_]*\$?)/.exec(trimmed);
+                if (!firstWordMatch) {
+                        return null;
+                }
+
+                const token = firstWordMatch[1] || '';
+                const upperToken = token.toUpperCase();
+                if (knownKeywordSet.has(upperToken)) {
+                        return null;
+                }
+
+                const startChar = absStart + (text.indexOf(token) >= 0 ? text.indexOf(token) : 0);
+                const endChar = startChar + token.length;
+                return new vscode.Diagnostic(
+                        new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                        `${branchName} contains invalid MTX BASIC keyword or command: "${token}"`,
+                        vscode.DiagnosticSeverity.Error
+                );
+                }
+
+                function isInQuotedStringAt(lineText: string, column: number | undefined): boolean {
+                if (typeof column !== 'number' || column < 0) {
+                        return false;
+                }
+
+                let inString = false;
+                let stringStart = -1;
+                for (let idx = 0; idx < lineText.length; idx++) {
+                        if (lineText[idx] !== '"') {
+                                continue;
+                        }
+                        if (!inString) {
+                                inString = true;
+                                stringStart = idx;
+                                continue;
+                        }
+                        if (column >= stringStart && column < idx + 1) {
+                                return true;
+                        }
+                        inString = false;
+                        stringStart = -1;
+                }
+
+                return false;
+                }
+
+                function isSingleAdjacentTransposition(a: string, b: string): boolean {
+                if (a.length !== b.length || a.length < 2) {
+                        return false;
+                }
+
+                for (let idx = 0; idx < a.length - 1; idx++) {
+                        if (a[idx] === b[idx]) {
+                                continue;
+                        }
+
+                        return (
+                                a[idx] === b[idx + 1]
+                                && a[idx + 1] === b[idx]
+                                && a.slice(0, idx) === b.slice(0, idx)
+                                && a.slice(idx + 2) === b.slice(idx + 2)
+                        );
+                }
+
+                return false;
+                }
+
+                function levenshteinDistance(a: string, b: string): number {
+                const rows = a.length + 1;
+                const cols = b.length + 1;
+                const dp: number[][] = Array.from({ length: rows }, () => Array<number>(cols).fill(0));
+
+                for (let row = 0; row < rows; row++) dp[row][0] = row;
+                for (let col = 0; col < cols; col++) dp[0][col] = col;
+
+                for (let row = 1; row < rows; row++) {
+                        for (let col = 1; col < cols; col++) {
+                                const cost = a[row - 1] === b[col - 1] ? 0 : 1;
+                                dp[row][col] = Math.min(
+                                        dp[row - 1][col] + 1,
+                                        dp[row][col - 1] + 1,
+                                        dp[row - 1][col - 1] + cost
+                                );
+                        }
+                }
+
+                return dp[a.length][b.length];
+                }
+
+                function getKeywordTypoScore(token: string, expected: string): number | null {
+                const upperToken = token.toUpperCase();
+                const upperExpected = expected.toUpperCase();
+
+                if (upperToken === upperExpected) {
+                        return null;
+                }
+                if (upperToken.startsWith(upperExpected)) {
+                        return upperToken.length - upperExpected.length;
+                }
+                if (isSingleAdjacentTransposition(upperToken, upperExpected)) {
+                        return 1;
+                }
+
+                const distance = levenshteinDistance(upperToken, upperExpected);
+                return distance <= 1 ? distance : null;
+                }
+
+                function findLikelyKeywordTypo(
+                text: string,
+                expectedKeywords: string[]
+                ): { token: string; expected: string; index: number } | null {
+                const tokenRe = /\b([A-Z][A-Z0-9$]*)\b/g;
+                let match: RegExpExecArray | null;
+                let best: { token: string; expected: string; index: number; score: number } | null = null;
+
+                while ((match = tokenRe.exec(text.toUpperCase())) !== null) {
+                        const token = match[1] || '';
+                        for (const expected of expectedKeywords) {
+                                const score = getKeywordTypoScore(token, expected);
+                                if (score === null) {
+                                        continue;
+                                }
+                                if (!best || score < best.score) {
+                                        best = { token, expected: expected.toUpperCase(), index: match.index, score };
+                                }
+                        }
+                }
+
+                return best ? { token: best.token, expected: best.expected, index: best.index } : null;
+                }
+
+                function reportKeywordTypo(
+                text: string,
+                lineNum: number,
+                absStart: number,
+                labelPrefix: string,
+                expectedKeywords: string[],
+                defaultMessage: string
+                ): boolean {
+                const typo = findLikelyKeywordTypo(text, expectedKeywords);
+                if (typo) {
+                        const startChar = absStart + typo.index;
+                        const endChar = startChar + typo.token.length;
+                        diags.push(new vscode.Diagnostic(
+                                new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                `${labelPrefix}: expected ${typo.expected} keyword, found "${typo.token}"`,
+                                vscode.DiagnosticSeverity.Error
+                        ));
+                        return true;
+                }
+
+                const fallbackLength = expectedKeywords[0]?.length || 1;
+                diags.push(new vscode.Diagnostic(
+                        new vscode.Range(new vscode.Position(lineNum, absStart), new vscode.Position(lineNum, absStart + fallbackLength)),
+                        `${labelPrefix}: ${defaultMessage}`,
+                        vscode.DiagnosticSeverity.Error
+                ));
+                return true;
+                }
+
+                function validateOnCommand(text: string, lineNum: number, absStart: number, labelPrefix: string): boolean {
+                if (!/^\s*ON\b/.test(text)) {
+                        return false;
+                }
+
+                const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(text);
+                if (!onMatch) {
+                        const afterOn = text.replace(/^\s*ON\b\s*/, '');
+                        return reportKeywordTypo(
+                                afterOn,
+                                lineNum,
+                                absStart + (text.length - afterOn.length),
+                                labelPrefix,
+                                ['GOTO', 'GOSUB'],
+                                'ON statement requires GOTO or GOSUB followed by line numbers'
+                        );
+                }
+
+                const [, selectorExprRaw, branchKeyword, targetsRaw] = onMatch;
+                let selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
+                selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/,'$1');
+
+                const selectorType = classifyExpr(selectorExpr);
+                if (!selectorType.hasNumeric) {
+                        const idx = text.indexOf(selectorExpr, onMatch.index ?? 0);
+                        const startChar = absStart + (idx >= 0 ? idx : 0);
+                        const endChar = startChar + selectorExpr.length;
+                        diags.push(new vscode.Diagnostic(
+                                new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                `${labelPrefix} ${branchKeyword}: selector must be numeric (got "${selectorExpr}")`,
+                                vscode.DiagnosticSeverity.Error
+                        ));
+                }
+
+                const targets = splitTopLevel(targetsRaw).map(t => t.trim()).filter(Boolean);
+                if (targets.length === 0) {
+                        const idx = text.indexOf(branchKeyword, onMatch.index ?? 0);
+                        const startChar = absStart + (idx >= 0 ? idx : 0);
+                        diags.push(new vscode.Diagnostic(
+                                new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, startChar + branchKeyword.length)),
+                                `${labelPrefix} ${branchKeyword}: requires at least one line number`,
+                                vscode.DiagnosticSeverity.Error
+                        ));
+                } else {
+                        targets.forEach(target => {
+                                const n = Number(target);
+                                const valid = Number.isInteger(n) && n >= 0 && n <= 65535;
+                                if (!valid) {
+                                        const idx = text.indexOf(target, onMatch.index ?? 0);
+                                        const startChar = absStart + (idx >= 0 ? idx : 0);
+                                        const endChar = startChar + target.length;
+                                        diags.push(new vscode.Diagnostic(
+                                                new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                                `${labelPrefix} ${branchKeyword}: line numbers must be integers 0..65535 (got "${target}")`,
+                                                vscode.DiagnosticSeverity.Error
+                                        ));
+                                }
+                        });
+                }
+
+                runValidatorsOnSegment(selectorExpr, validators, (err, rawMatch, absIdx) => {
+                        if (!err || typeof absIdx !== 'number' || isInQuotedStringAt(doc.lineAt(lineNum).text, absIdx)) return;
+                        const startChar = absIdx;
+                        const endChar = startChar + Math.max(1, rawMatch.length);
+                        diags.push(new vscode.Diagnostic(
+                                new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                `${labelPrefix} ${branchKeyword} selector: ${err.message}`,
+                                vscode.DiagnosticSeverity.Error
+                        ));
+                }, absStart);
+
+                return true;
+                }
+
+                function validateForCommand(
+                text: string,
+                lineNum: number,
+                absStart: number,
+                labelPrefix: string
+                ): { matched: boolean; hasStep: boolean } {
+                if (!/^\s*FOR\b/.test(text)) {
+                        return { matched: false, hasStep: false };
+                }
+
+                const reportForError = (targetText: string, msg: string) => {
+                        const idx = targetText ? text.indexOf(targetText) : -1;
+                        const startChar = absStart + (idx >= 0 ? idx : 0);
+                        const endChar = startChar + ((targetText && targetText.length) || 1);
+                        diags.push(new vscode.Diagnostic(
+                                new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                `${labelPrefix}: ${msg}`,
+                                vscode.DiagnosticSeverity.Error
+                        ));
+                };
+
+                const forHeaderMatch = /^\s*FOR\s+([A-Z][A-Z0-9]*\$?)(.*)$/.exec(text);
+                const malformedHeaderMatch = /^\s*FOR\s+([^\s=]+)(.*)$/.exec(text);
+                if (!forHeaderMatch && !malformedHeaderMatch) {
+                        reportForError('FOR', 'malformed FOR statement');
+                        return { matched: true, hasStep: false };
+                }
+
+                const [, ctrlVarRaw, remainderRaw] = forHeaderMatch ?? malformedHeaderMatch!;
+                const ctrlVar = ctrlVarRaw ?? '';
+                const remainder = remainderRaw ?? '';
+                const ctrlIsNumeric = isValidVarName(ctrlVar);
+
+                if (!ctrlIsNumeric) {
+                        reportForError(ctrlVar, `control variable must be alphanumeric without $ (got "${ctrlVar}")`);
+                }
+
+                if (!/^\s*=/.test(remainder)) {
+                        reportForError(ctrlVar, 'FOR statement requires = after the control variable');
+                        return { matched: true, hasStep: false };
+                }
+
+                const afterEquals = remainder.replace(/^\s*=\s*/, '');
+                const rangeMatch = /^(.*?)\s+TO\s+(.+?)(?:\s+STEP\s+(.+?))?\s*$/.exec(afterEquals);
+                if (!rangeMatch) {
+                        const exactToIndex = afterEquals.search(/\bTO\b/);
+                        if (exactToIndex < 0) {
+                                const malformedToMatch = findLikelyKeywordTypo(afterEquals, ['TO']);
+                                if (malformedToMatch) {
+                                        reportForError(malformedToMatch.token, `expected TO keyword, found "${malformedToMatch.token}"`);
+                                } else {
+                                        reportForError(afterEquals || ctrlVar || 'FOR', 'FOR statement requires TO followed by an end expression');
+                                }
+                        } else {
+                                const afterTo = afterEquals.slice(exactToIndex + 2);
+                                const stepCandidateMatch = /^\s*.+?\s+([A-Z][A-Z0-9$]*)\b/.exec(afterTo);
+                                const stepCandidate = stepCandidateMatch?.[1] ?? '';
+                                const stepTypoScore = stepCandidate ? getKeywordTypoScore(stepCandidate, 'STEP') : null;
+                                if (stepCandidate && stepTypoScore !== null) {
+                                        reportForError(stepCandidate, `expected STEP keyword, found "${stepCandidate}"`);
+                                } else {
+                                        reportForError(afterTo.trim() || 'FOR', 'FOR statement has invalid text after the end expression');
+                                }
+                        }
+                        return { matched: true, hasStep: false };
+                }
+
+                const [, startExprRaw, endExprRaw, stepExprRaw] = rangeMatch;
+
+                const startExpr = stripTrailingCommentUnquoted(startExprRaw.trim());
+                const endExpr = stripTrailingCommentUnquoted(endExprRaw.trim());
+                const stepExpr = stepExprRaw ? stripTrailingCommentUnquoted(stepExprRaw.trim()) : undefined;
+
+                const startType = classifyExpr(startExpr);
+                const endType = classifyExpr(endExpr);
+                if (!startType.hasNumeric) {
+                        reportForError(startExpr, `start expression must be numeric (got "${startExpr}")`);
+                }
+                if (!endType.hasNumeric) {
+                        reportForError(endExpr, `end expression must be numeric (got "${endExpr}")`);
+                }
+                if (stepExpr) {
+                        const stepType = classifyExpr(stepExpr);
+                        if (!stepType.hasNumeric) {
+                                reportForError(stepExpr, `STEP expression must be numeric (got "${stepExpr}")`);
+                        }
+                }
+
+                const validateChunk = (expr: string, label: string) => {
+                        runValidatorsOnSegment(expr, validators, (err, rawMatch, absIdx) => {
+                                if (!err || typeof absIdx !== 'number') return;
+                                const startChar = absIdx;
+                                const endChar = startChar + Math.max(1, rawMatch.length);
+                                if (isInQuotedStringAt(doc.lineAt(lineNum).text, startChar)) return;
+                                diags.push(new vscode.Diagnostic(
+                                        new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                        `${label}: ${err.message}`,
+                                        vscode.DiagnosticSeverity.Error
+                                ));
+                        }, absStart);
+                };
+
+                validateChunk(startExpr, `${labelPrefix} start`);
+                validateChunk(endExpr, `${labelPrefix} end`);
+                if (stepExpr) validateChunk(stepExpr, `${labelPrefix} step`);
+
+                return { matched: true, hasStep: !!stepExpr };
+                }
+
+                function validateBasicCommandSequence(text: string, lineNum: number, absStart: number, branchName: string): void {
+                const segments = splitLineSegments(text);
+
+                for (const commandSeg of segments) {
+                        const segText = stripTrailingCommentUnquoted(commandSeg.text).trim();
+                        if (!segText || /^".*"$/.test(segText)) {
+                                continue;
+                        }
+
+                        const segAbsStart = absStart + commandSeg.start;
+                        const segRange = new vscode.Range(new vscode.Position(lineNum, segAbsStart), new vscode.Position(lineNum, segAbsStart + segText.length));
+
+                        const letM = /^\s*LET\s+([A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?))\s*=\s*(.+)$/.exec(segText);
+                        if (letM) {
+                                const [, lhs, rhsText] = letM;
+                                const rhsParts = letCheck(lhs ?? '', rhsText ?? '', segRange, diags);
+                                if (!rhsParts || rhsParts.length === 0) {
+                                        diags.push(new vscode.Diagnostic(segRange, `${branchName}: invalid LET statement`, vscode.DiagnosticSeverity.Error));
+                                } else {
+                                        rhsParts.forEach(itemInRhs => {
+                                                const rhsPart = typeof itemInRhs === 'string' ? itemInRhs : (itemInRhs[0] ?? '');
+                                                if (!rhsPart.trim() || isParenthesisedBooleanExpression(rhsPart)) return;
+                                                runValidatorsOnSegment(rhsPart, validators, (err, rawMatch2) => {
+                                                        if (!err) return;
+                                                        const innerIdx = segText.indexOf(rawMatch2);
+                                                        const startChar = segAbsStart + (innerIdx >= 0 ? innerIdx : 0);
+                                                        const endChar = startChar + (rawMatch2.length || 1);
+                                                        diags.push(new vscode.Diagnostic(
+                                                                new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                                                `${branchName}->LET RHS: ${err.message}`,
+                                                                vscode.DiagnosticSeverity.Error
+                                                        ));
+                                                });
+                                        });
+                                }
+                                continue;
+                        }
+
+                        if (/^\s*(?:PRINT|LPRINT)\b/.test(segText)) {
+                                const args = segText.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
+                                const perr = printCheck(args, validators);
+                                perr.forEach(e => {
+                                        if (!e) return;
+                                        diags.push(new vscode.Diagnostic(
+                                                new vscode.Range(new vscode.Position(lineNum, segAbsStart), new vscode.Position(lineNum, segAbsStart + Math.min(segText.length, 1))),
+                                                `${branchName}->PRINT: ${e.message}`,
+                                                vscode.DiagnosticSeverity.Error
+                                        ));
+                                });
+                                continue;
+                        }
+
+                        if (validateOnCommand(segText, lineNum, segAbsStart, `${branchName}->ON`)) {
+                                continue;
+                        }
+
+                        const forValidation = validateForCommand(segText, lineNum, segAbsStart, `${branchName}->FOR`);
+                        if (forValidation.matched) {
+                                continue;
+                        }
+
+                        const implicitBranchDiag = getImplicitBranchTargetDiagnostic(segText, lineNum, segAbsStart, branchName);
+                        const missingLetDiag = getMissingLetDiagnostic(segText, lineNum, segAbsStart);
+                        const unknownTokenDiag = getUnknownLeadingTokenDiagnostic(segText, lineNum, segAbsStart, branchName);
+                        if (implicitBranchDiag) {
+                                diags.push(implicitBranchDiag);
+                                continue;
+                        }
+                        if (missingLetDiag) {
+                                diags.push(missingLetDiag);
+                                continue;
+                        }
+                        if (unknownTokenDiag) {
+                                diags.push(unknownTokenDiag);
+                                continue;
+                        }
+
+                        runValidatorsOnSegment(segText, validators, (err, rawMatch, absoluteIdx, matchArray) => {
+                                if (!err || typeof absoluteIdx !== 'number') return;
+                                if (isInQuotedStringAt(doc.lineAt(lineNum).text, absoluteIdx)) return;
+
+                                let capture = rawMatch;
+                                if (matchArray && typeof err.groupIndex === 'number') {
+                                        const idx = err.groupIndex;
+                                        capture = matchArray[idx] ?? matchArray[idx + 1] ?? matchArray[1] ?? rawMatch;
+                                }
+
+                                let startChar = absoluteIdx;
+                                if (matchArray && matchArray[0] && capture) {
+                                        const inner = matchArray[0].indexOf(capture);
+                                        if (inner >= 0) startChar = absoluteIdx + inner;
+                                }
+                                const endChar = startChar + Math.max(1, capture.length);
+                                diags.push(new vscode.Diagnostic(
+                                        new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                                        `${branchName} part: ${err.message}`,
+                                        vscode.DiagnosticSeverity.Error
+                                ));
+                        }, segAbsStart, true);
+                }
+                }
 
                 // Shared helper: check if a word is a mixed-case MTX BASIC keyword
                 // Returns the uppercase version if it's a keyword, null otherwise
@@ -1233,7 +1836,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         if (word === word.toUpperCase()) return null;
                         
                         const upperCase = word.toUpperCase();
-                        return knownKeywords.includes(upperCase) ? upperCase : null;
+                        return allKnownKeywords.includes(upperCase) ? upperCase : null;
                 };
 
                 // Catch mixed-case keywords at the start of commands
@@ -1251,7 +1854,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                                         const withoutUnderscore = keyword.replace(/_/g, '');
                                         const upperWithoutUnderscore = withoutUnderscore.toUpperCase();
                                         
-                                        if (knownKeywords.includes(upperWithoutUnderscore)) {
+                                        if (allKnownKeywords.includes(upperWithoutUnderscore)) {
                                                 return [{
                                                         groupIndex: 1,
                                                         message: `Keywords cannot contain underscores: "${keyword}" should be "${upperWithoutUnderscore}"`
@@ -1276,25 +1879,34 @@ export function activate(ctx: vscode.ExtensionContext) {
 
                 
 
-                // Catch mixed-case keywords used as variable names in LET statements
+                // Catch mixed-case keywords, reserved keywords, and invalid variable names in LET statements
                 validators.push({
                         name: 'INVALID_LET_VARIABLE',
                         re: /^\s*LET\s+([^=\s]+)\s*=/,
                         expectEnd: false,
                         validate: (groups: string[], rawMatch: string) => {
-                                const varName = groups[1] || '';
+                                const varName = (groups[0] || '').trim();
+                                if (!varName) {
+                                        return [];
+                                }
+
+                                const upperCase = checkMixedCaseKeyword(varName);
+                                if (upperCase) {
+                                        return [{
+                                                groupIndex: 1,
+                                                message: `Keywords must be uppercase: "${varName}" should be "${upperCase}"`
+                                        }];
+                                }
+
+                                if (isReservedKeyword(varName)) {
+                                        return [{
+                                                groupIndex: 1,
+                                                message: `Keywords cannot be used as variable names: "${varName}"`
+                                        }];
+                                }
                                 
                                 // Check if it's NOT a valid variable name pattern [A-Z][A-Z0-9]*(\$|())
                                 if (!/^[A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?)$/.test(varName)) {
-                                        // Check if it's a mixed-case keyword
-                                        const upperCase = checkMixedCaseKeyword(varName);
-                                        if (upperCase) {
-                                                return [{
-                                                        groupIndex: 1,
-                                                        message: `Keywords must be uppercase: "${varName}" should be "${upperCase}"`
-                                                }];
-                                        }
-                                        
                                         // Not a keyword, so it's an invalid variable name
                                         return [{
                                                 groupIndex: 1,
@@ -1540,6 +2152,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                                 //return stringRanges.every(r => pos >= r[0] && pos < r[1]);
                                 return stringRanges.some(r => pos >= r[0] && pos < r[1]);
                         };
+                addUnsupportedKeywordWarnings(seg.text, i, seg.start);
                 // --- end quoted-string helper ---  
                 // simple scan to flag any numeric literal over 9 significant digits
                 // this runs once per BASIC segment and skips CODE/NODDY lines so we
@@ -1601,12 +2214,20 @@ export function activate(ctx: vscode.ExtensionContext) {
                 if (bareAss){
                         const varName = bareAss[1] || '';
 
-                        // Skip built-in variables - not sure the validity of these builtInVars exceptions
-                        const builtInVars = new Set([ 'INKEY$', 'SPK$', 'TIME$']); //removed GR$ as this is a string function
-                        if (!builtInVars.has(varName.toUpperCase())) {
+                        if (isRemCommentSegment(seg.text)) {
+                                // REM = and REM == are valid comment text, not assignments.
+                        } else if (isReservedKeyword(varName)) {
                                 diags.push(new vscode.Diagnostic(brange,
-                                `Assignment requires LET command - use 'LET ${varName}='`,
+                                `Keywords cannot be used as variable names: "${varName}"`,
                         vscode.DiagnosticSeverity.Error));
+                        } else {
+                                // Skip built-in variables - not sure the validity of these builtInVars exceptions
+                                const builtInVars = new Set([ 'INKEY$', 'SPK$', 'TIME$']); //removed GR$ as this is a string function
+                                if (!builtInVars.has(varName.toUpperCase())) {
+                                        diags.push(new vscode.Diagnostic(brange,
+                                        `Assignment requires LET command - use 'LET ${varName}='`,
+                                vscode.DiagnosticSeverity.Error));
+                                }
                         }
                 } // END of BareAssignment validator
 
@@ -1627,7 +2248,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 const range = new vscode.Range(new vscode.Position(i, start), new vscode.Position(i, start + seg.text.length));
                 diags.push(new vscode.Diagnostic(
                         range,
-                        'REM must be followed by a space before comment text',
+                        'REM must now be followed by a space before comment text',
                         vscode.DiagnosticSeverity.Error
                 ));
                 }
@@ -1884,7 +2505,21 @@ export function activate(ctx: vscode.ExtensionContext) {
                 all must be on the same line. If separated over multiple lines, throw a syntax error as required by MTX BASIC
                 Consider return indices and substrings: {condStart,condEnd,thenStart,thenEnd,elseStart,elseEnd,cond,then,else}.
 */
+                const ifStarts = /^\s*IF\b/.test(seg.text);
                 const ifMatch = /^\s*IF\s+(.+?)\s+THEN\s+(.+?)(?:\s+ELSE\s+(.+?))?\s*$/.exec(seg.text);
+                if (ifStarts && !ifMatch && !/\bTHEN\b/.test(seg.text)) {
+                const afterIf = seg.text.replace(/^\s*IF\b\s*/, '');
+                reportKeywordTypo(
+                        afterIf,
+                        i,
+                        seg.start + (seg.text.length - afterIf.length),
+                        'IF',
+                        ['THEN'],
+                        'IF statement requires THEN before the command sequence'
+                );
+                ifFlag = true;
+                segHandled = true;
+                }
                 if (ifMatch) {
                 const cond = ifMatch[1] ?? '';
                 const thenPart = (ifMatch[2] ?? '').trim();
@@ -2029,52 +2664,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 if (thenText && !/^".*"$/.test(thenText)) {
                         const chunkIdx = chunkStartIndex(thenText);
                         const chunkStart = seg.start + (chunkIdx >= 0 ? chunkIdx : 0);
-                        const chunkRange = new vscode.Range(new vscode.Position(i, chunkStart), new vscode.Position(i, chunkStart + thenText.length));
-
-                        // Allow array subscripts in THEN: LET Y(I,J)=10, F$(1)="text"
-                        const letM = /^\s*LET\s+([A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?))\s*=\s*(.+)$/.exec(thenText);
-                        if (letM) {
-                        const [, lhs, rhsText] = letM;
-                        const rhsParts = letCheck(lhs ?? '', rhsText ?? '', chunkRange, diags);
-                        if (!rhsParts || rhsParts.length === 0) {
-                                diags.push(new vscode.Diagnostic(chunkRange, `THEN: invalid LET statement`, vscode.DiagnosticSeverity.Error));
-                        } else {
-                                rhsParts.forEach(itemInRhs => {
-                                const rhsPart = typeof itemInRhs === 'string' ? itemInRhs : (itemInRhs[0] ?? '');
-                                if (!rhsPart.trim() || isParenthesisedBooleanExpression(rhsPart)) return;
-                                runValidatorsOnSegment(rhsPart, validators, (err, rawMatch2) => {
-                                        if (!err) return;
-                                        const innerIdx = thenText.indexOf(rawMatch2);
-                                        const globalIdx = (innerIdx >= 0 && chunkIdx >= 0) ? seg.start + chunkIdx + innerIdx : seg.text.indexOf(rawMatch2, (ifMatch.index ?? 0));
-                                        if (isInString(globalIdx)) return;
-                                        const startChar = globalIdx >= 0 ? globalIdx : chunkStart;
-                                        const endChar = startChar + (rawMatch2.length || 1);
-                                        diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), `THEN->LET RHS: ${err.message}`, vscode.DiagnosticSeverity.Error));
-                                });
-                                });
-                        }
-                        } else if (/^\s*(?:PRINT|LPRINT)\b/.test(thenText)) {
-                        const args = thenText.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
-                        const perr = printCheck(args, validators);
-                        perr.forEach(e => {
-                                if (!e) return;  // Skip null entries
-                                diags.push(new vscode.Diagnostic(
-                                new vscode.Range(new vscode.Position(i, chunkStart), new vscode.Position(i, chunkStart + Math.min(thenText.length, 1))),
-                                `THEN->PRINT: ${e.message}`,
-                                vscode.DiagnosticSeverity.Error
-                                ));
-                        });
-                        } else {
-                        runValidatorsOnSegment(thenText, validators, (err, rawMatch) => {
-                                if (!err) return;
-                                const innerIdx = thenText.indexOf(rawMatch);
-                                const globalIdx = (innerIdx >= 0 && chunkIdx >= 0) ? seg.start + chunkIdx + innerIdx : seg.text.indexOf(rawMatch, (ifMatch.index ?? 0));
-                                if (isInString(globalIdx)) return;
-                                const startChar = globalIdx >= 0 ? globalIdx : chunkStart;
-                                const endChar = startChar + (rawMatch.length || 1);
-                                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), `THEN part: ${err.message}`, vscode.DiagnosticSeverity.Error));
-                        });
-                        }
+                        validateBasicCommandSequence(thenText, i, chunkStart, 'THEN');
                 }
                 }
 
@@ -2083,51 +2673,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 if (elseText && !/^".*"$/.test(elseText)) {
                         const chunkIdx = chunkStartIndex(elseText);
                         const chunkStart = seg.start + (chunkIdx >= 0 ? chunkIdx : 0);
-                        const chunkRange = new vscode.Range(new vscode.Position(i, chunkStart), new vscode.Position(i, chunkStart + elseText.length));
-
-                        const letM2 = /^\s*LET\s+([A-Z][A-Z0-9]*\$?(?:\([^)]+\))?)\s*=\s*(.+)$/.exec(elseText);
-                        if (letM2) {
-                        const [, lhs, rhsText] = letM2;
-                        const rhsParts = letCheck(lhs ?? '', rhsText ?? '', chunkRange, diags);
-                        if (!rhsParts || rhsParts.length === 0) {
-                                diags.push(new vscode.Diagnostic(chunkRange, `ELSE: invalid LET statement`, vscode.DiagnosticSeverity.Error));
-                        } else {
-                                rhsParts.forEach(itemInRhs => {
-                                const rhsPart = typeof itemInRhs === 'string' ? itemInRhs : (itemInRhs[0] ?? '');
-                                if (!rhsPart.trim() || isParenthesisedBooleanExpression(rhsPart)) return;
-                                runValidatorsOnSegment(rhsPart, validators, (err, rawMatch2) => {
-                                        if (!err) return;
-                                        const innerIdx = elseText.indexOf(rawMatch2);
-                                        const globalIdx = (innerIdx >= 0 && chunkIdx >= 0) ? seg.start + chunkIdx + innerIdx : seg.text.indexOf(rawMatch2, (ifMatch.index ?? 0));
-                                        if (isInString(globalIdx)) return;
-                                        const startChar = globalIdx >= 0 ? globalIdx : chunkStart;
-                                        const endChar = startChar + (rawMatch2.length || 1);
-                                        diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), `ELSE->LET RHS: ${err.message}`, vscode.DiagnosticSeverity.Error));
-                                });
-                                });
-                        }
-                        } else if (/^\s*(?:PRINT|LPRINT)\b/.test(elseText)) {
-                        const args = elseText.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
-                        const perr = printCheck(args, validators);
-                        perr.forEach(e => {
-                                if (!e) return;  // Skip null entries
-                                diags.push(new vscode.Diagnostic(
-                                new vscode.Range(new vscode.Position(i, chunkStart), new vscode.Position(i, chunkStart + Math.min(elseText.length, 1))),
-                                `ELSE->PRINT: ${e.message}`,
-                                vscode.DiagnosticSeverity.Error
-                                ));
-                        });
-                        } else {
-                        runValidatorsOnSegment(elseText, validators, (err, rawMatch) => {
-                                if (!err) return;
-                                const innerIdx = elseText.indexOf(rawMatch);
-                                const globalIdx = (innerIdx >= 0 && chunkIdx >= 0) ? seg.start + chunkIdx + innerIdx : seg.text.indexOf(rawMatch, (ifMatch.index ?? 0));
-                                if (isInString(globalIdx)) return;
-                                const startChar = globalIdx >= 0 ? globalIdx : chunkStart;
-                                const endChar = startChar + (rawMatch.length || 1);
-                                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)), `ELSE part: ${err.message}`, vscode.DiagnosticSeverity.Error));
-                        });
-                        }
+                        validateBasicCommandSequence(elseText, i, chunkStart, 'ELSE');
                 }
                 }
 
@@ -2145,64 +2691,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 
                 if (elseContent) {
                         const elseStart = seg.start + seg.text.indexOf(elseContent);
-                        const elseRange = new vscode.Range(
-                        new vscode.Position(i, elseStart),
-                        new vscode.Position(i, elseStart + elseContent.length)
-                        );
-
-                        // Check for LET in ELSE
-                        const letM = /^\s*LET\s+([A-Z][A-Z0-9]*\$?(?:\([^)]+\))?)\s*=\s*(.+)$/.exec(elseContent);
-                        if (letM) {
-                        const [, lhs, rhsText] = letM;
-                        const rhsParts = letCheck(lhs ?? '', rhsText ?? '', elseRange, diags);
-                        if (rhsParts && rhsParts.length > 0) {
-                                rhsParts.forEach(itemInRhs => {
-                                const rhsPart = typeof itemInRhs === 'string' ? itemInRhs : (itemInRhs[0] ?? '');
-                                if (!rhsPart.trim() || isParenthesisedBooleanExpression(rhsPart)) return;
-                                runValidatorsOnSegment(rhsPart, validators, (err, rawMatch2) => {
-                                        if (!err) return;
-                                        const innerIdx = elseContent.indexOf(rawMatch2);
-                                        const globalIdx = innerIdx >= 0 ? elseStart + innerIdx : elseStart;
-                                        if (isInString(globalIdx)) return;
-                                        const startChar = globalIdx;
-                                        const endChar = startChar + (rawMatch2.length || 1);
-                                        diags.push(new vscode.Diagnostic(
-                                        new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)),
-                                        `ELSE->LET RHS: ${err.message}`,
-                                        vscode.DiagnosticSeverity.Error
-                                        ));
-                                });
-                                });
-                        }
-                        }
-                        // Check for PRINT/LPRINT in ELSE
-                        else if (/^\s*(?:PRINT|LPRINT)\b/.test(elseContent)) {
-                        const args = elseContent.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
-                        const perr = printCheck(args, validators);
-                        perr.forEach(e => {
-                                diags.push(new vscode.Diagnostic(
-                                elseRange,
-                                `ELSE->PRINT: ${e?.message}`,
-                                vscode.DiagnosticSeverity.Error
-                                ));
-                        });
-                        }
-                        // Generic validation for other commands in ELSE
-                        else {
-                        runValidatorsOnSegment(elseContent, validators, (err, rawMatch, absIdx) => {
-                                if (!err) return;
-                                const innerIdx = elseContent.indexOf(rawMatch);
-                                const globalIdx = innerIdx >= 0 ? elseStart + innerIdx : elseStart;
-                                if (isInString(globalIdx)) return;
-                                const startChar = globalIdx;
-                                const endChar = startChar + (rawMatch.length || 1);
-                                diags.push(new vscode.Diagnostic(
-                                new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)),
-                                `ELSE part: ${err.message}`,
-                                vscode.DiagnosticSeverity.Error
-                                ));
-                        }, elseStart);
-                        }
+                        validateBasicCommandSequence(elseContent, i, elseStart, 'ELSE');
                 }
                 
                 // Set flag to skip further processing of this segment
@@ -2220,67 +2709,11 @@ export function activate(ctx: vscode.ExtensionContext) {
                 FOR I = 1 TO 10 STEP 1
                 FOR A = B to C STEP D
 */
-                const forMatch = /^\s*FOR\s+([A-Z][A-Z0-9]*)\s*=\s*(.+?)\s+TO\s+(.+?)(?:\s+STEP\s+(.+?))?\s*$/.exec(seg.text);
-                if (forMatch) {
-                    const [, ctrlVar, startExprRaw, endExprRaw, stepExprRaw] = forMatch;
-                    const ctrlIsNumeric = !!ctrlVar && isValidVarName(ctrlVar);
-                    const segBase = seg.start + (forMatch.index ?? 0);
-
-                    const reportForError = (text: string, msg: string) => {
-                        const idx = seg.text.indexOf(text, forMatch.index ?? 0);
-                        const startChar = seg.start + (idx >= 0 ? idx : 0);
-                        const endChar = startChar + (text.length || 1);
-                        diags.push(new vscode.Diagnostic(
-                            new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)),
-                            `FOR: ${msg}`,
-                            vscode.DiagnosticSeverity.Error
-                        ));
-                    };
-
-                    if (!ctrlIsNumeric) {
-                        reportForError(ctrlVar ?? '', `control variable must be alphanumeric without $ (got "${ctrlVar ?? ''}")`);
-                    }
-
-                    const startExpr = stripTrailingCommentUnquoted(startExprRaw.trim());
-                    const endExpr = stripTrailingCommentUnquoted(endExprRaw.trim());
-                    const stepExpr = stepExprRaw ? stripTrailingCommentUnquoted(stepExprRaw.trim()) : undefined;
-
-                    const startType = classifyExpr(startExpr);
-                    const endType = classifyExpr(endExpr);
-                    if (!startType.hasNumeric) {
-                        reportForError(startExpr, `start expression must be numeric (got "${startExpr}")`);
-                    }
-                    if (!endType.hasNumeric) {
-                        reportForError(endExpr, `end expression must be numeric (got "${endExpr}")`);
-                    }
-                    if (stepExpr) {
-                        const stepType = classifyExpr(stepExpr);
-                        if (!stepType.hasNumeric) {
-                            reportForError(stepExpr, `STEP expression must be numeric (got "${stepExpr}")`);
-                        }
-                    }
-
-                    const validateChunk = (expr: string, label: string) => {
-                        runValidatorsOnSegment(expr, validators, (err, rawMatch, absIdx) => {
-                            if (!err || typeof absIdx !== 'number') return;
-                            const startChar = absIdx;
-                            const endChar = startChar + Math.max(1, rawMatch.length);
-                            if (isInString(startChar)) return;
-                            diags.push(new vscode.Diagnostic(
-                                new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)),
-                                `${label}: ${err.message}`,
-                                vscode.DiagnosticSeverity.Error
-                            ));
-                        }, seg.start);
-                    };
-
-                    validateChunk(startExpr, 'FOR start');
-                    validateChunk(endExpr, 'FOR end');
-                    if (stepExpr) validateChunk(stepExpr, 'FOR step');
-
-                                        forFlag = true;
-                                        toFlag = true;
-                                        if (stepExpr) stepFlag = true;
+                const forValidation = validateForCommand(seg.text, i, seg.start, 'FOR');
+                if (forValidation.matched) {
+                                                                                forFlag = true;
+                                                                                toFlag = true;
+                                                                                if (forValidation.hasStep) stepFlag = true;
                 } // end of FOR handling
 
                 
@@ -2292,67 +2725,14 @@ export function activate(ctx: vscode.ExtensionContext) {
                 Should CmdSpecs have expectEnd = true removed as the ON case allows multiple linenumbers?
 */
 
-                const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);
-                if (onMatch) {
-                    const [, selectorExprRaw, branchKeyword, targetsRaw] = onMatch;
-                    //parenthesis caused an issue with ON MOD(Z(1),2) not detecting the inner comma resulting insufficient arguments 
-                    //const selectorExpr = stripOuterParentheses(stripTrailingCommentUnquoted(selectorExprRaw.trim())); //didn't work
-                    let selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
-                    // drop the function name and its parentheses, leaving just the contents
-                        selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/,'$1');
-
-                    const selectorType = classifyExpr(selectorExpr);
-                    if (!selectorType.hasNumeric) {
-                        const idx = seg.text.indexOf(selectorExpr, onMatch.index ?? 0);
-                        const startChar = seg.start + (idx >= 0 ? idx : 0);
-                        const endChar = startChar + selectorExpr.length;
-                        diags.push(new vscode.Diagnostic(
-                            new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)),
-                            `ON ${branchKeyword}: selector must be numeric (got "${selectorExpr}")`,
-                            vscode.DiagnosticSeverity.Error
-                        ));
-                    }
-
-                    const targets = splitTopLevel(targetsRaw).map(t => t.trim()).filter(Boolean);
-                    if (targets.length === 0) {
-                        const idx = seg.text.indexOf(branchKeyword, onMatch.index ?? 0);
-                        const startChar = seg.start + (idx >= 0 ? idx : 0);
-                        diags.push(new vscode.Diagnostic(
-                            new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + branchKeyword.length)),
-                            `ON ${branchKeyword}: requires at least one line number`,
-                            vscode.DiagnosticSeverity.Error
-                        ));
-                    } else {
-                        targets.forEach(target => {
-                            const n = Number(target);
-                            const valid = Number.isInteger(n) && n >= 0 && n <= 65535;
-                            if (!valid) {
-                                const idx = seg.text.indexOf(target, onMatch.index ?? 0);
-                                const startChar = seg.start + (idx >= 0 ? idx : 0);
-                                const endChar = startChar + target.length;
-                                diags.push(new vscode.Diagnostic(
-                                    new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)),
-                                    `ON ${branchKeyword}: line numbers must be integers 0..65535 (got "${target}")`,
-                                    vscode.DiagnosticSeverity.Error
-                                ));
-                            }
-                        });
-                    }
-
-                    runValidatorsOnSegment(selectorExpr, validators, (err, rawMatch, absIdx) => {
-                        if (!err || typeof absIdx !== 'number' || isInString(absIdx)) return;
-                        const startChar = absIdx;
-                        const endChar = startChar + Math.max(1, rawMatch.length);
-                        diags.push(new vscode.Diagnostic(
-                            new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)),
-                            `ON ${branchKeyword} selector: ${err.message}`,
-                            vscode.DiagnosticSeverity.Error
-                        ));
-                    }, seg.start);
-
-                                        onFlag = true;
-                                        if (branchKeyword.toUpperCase() === 'GOTO') gotoFlag = true;
-                                        if (branchKeyword.toUpperCase() === 'GOSUB') gosubFlag = true;
+                                const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);
+                                if (/^\s*ON\b/.test(seg.text)) {
+                                                                                const onHandled = validateOnCommand(seg.text, i, seg.start, 'ON');
+                                                                                if (onHandled) {
+                                                                                                onFlag = true;
+                                                                                                if (onMatch && onMatch[2].toUpperCase() === 'GOTO') gotoFlag = true;
+                                                                                                if (onMatch && onMatch[2].toUpperCase() === 'GOSUB') gosubFlag = true;
+                                                                                }
                 } // end of ON handling
 
 /**               Special
@@ -2589,7 +2969,12 @@ export function activate(ctx: vscode.ExtensionContext) {
                 }
                 }
 
-                                      
+                const standaloneFunctionDiag = getStandaloneFunctionDiagnostic(seg.text, i, seg.start);
+                if (standaloneFunctionDiag) {
+                        diags.push(standaloneFunctionDiag);
+                        segHandled = true;
+                }
+
                 // Segments.length is based on multicommands on 1 line. If commands separated by say spaces then doesn't register
                 // Does this mean that validator.name will fail?
                 // Only run the generic validators when we haven't already handled LET/PRINT/IF
@@ -2628,7 +3013,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                     `${rawMatch}: ${err.message}`,
                     vscode.DiagnosticSeverity.Error
                 ));
-            }, seg.start);
+                        }, seg.start, true);
         
 
         
@@ -2640,7 +3025,8 @@ export function activate(ctx: vscode.ExtensionContext) {
         (function finalStrayTextCheck() {
             // Build known commands set
             const knownCmds = new Set(specs.map(s => s.id.toUpperCase()));
-
+            //const knownCmdsByLength = [...knownCmds].sort((left, right) => right.length - left.length);
+            const knownCmdsByLength = Array.from(knownCmds).sort((left, right) => right.length - left.length);
             // Skip if this segment was already handled by earlier checks/validators
             if (typeof segHandled !== 'undefined' && segHandled) return;
 
@@ -2648,6 +3034,37 @@ export function activate(ctx: vscode.ExtensionContext) {
             const segTrimStart = seg.text.trimStart();
             const firstWordMatch = /^([A-Za-z_][A-Za-z0-9_]*\$?)/.exec(segTrimStart);
             if (firstWordMatch && knownCmds.has(firstWordMatch[1].toUpperCase())) return;
+
+            // Fallback for attempted commands with a missing space after the keyword.
+            // Keep the main validator regex unchanged and only claim obvious
+            // "keyword + first argument" cases here.
+            const missingSpaceCommand = knownCmdsByLength.find(kw => {
+                if (!isSpaceNeeded(kw)) return false;
+                if (!segTrimStart.toUpperCase().startsWith(kw)) return false;
+                if (segTrimStart.length <= kw.length) return false;
+
+                const nextChar = segTrimStart[kw.length];
+                if (/\s/.test(nextChar)) return false;
+
+                // Only claim plausible first-argument starts so unrelated junk
+                // still falls through to the stray-text warning.
+                return /[A-Z0-9\"#£(+\-.]/.test(nextChar);
+            });
+
+            if (missingSpaceCommand) {
+                const leadingTrim = seg.text.length - segTrimStart.length;
+                const absStart = seg.start + leadingTrim;
+                const { spaceMissingYes, msg0 } = isNoSpaceFound('');
+                if (spaceMissingYes) {
+                    diags.push(new vscode.Diagnostic(
+                        new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + missingSpaceCommand.length)),
+                        msg0,
+                        vscode.DiagnosticSeverity.Error
+                    ));
+                    segHandled = true;
+                    return;
+                }
+            }
 
             // Helper to detect if an index is inside any quoted string ranges
             const isIdxInStringRanges = (pos: number) => {
@@ -2667,9 +3084,16 @@ export function activate(ctx: vscode.ExtensionContext) {
                 // detect bare assignment LHS followed by '=' (e.g. NV=19 but with a leading token like fhien)
                 const rest = seg.text.slice(startIdx + tok.length).trimStart();
                 if (/^[A-Za-z_][A-Za-z0-9_]*\$?$/.test(tok) && rest.startsWith('=')) {
+                        if (up === 'REM' && /^=+/.test(rest)) {
+                                return;
+                        }
                         const startCol = seg.start + startIdx;
                         const rng = new vscode.Range(new vscode.Position(i, startCol), new vscode.Position(i, startCol + tok.length));
-                        diags.push(new vscode.Diagnostic(rng, `Assignment requires LET command - use 'LET ${tok}='`, vscode.DiagnosticSeverity.Error));
+                        if (isReservedKeyword(tok)) {
+                                diags.push(new vscode.Diagnostic(rng, `Keywords cannot be used as variable names: "${tok}"`, vscode.DiagnosticSeverity.Error));
+                        } else {
+                                diags.push(new vscode.Diagnostic(rng, `Assignment requires LET command - use 'LET ${tok}='`, vscode.DiagnosticSeverity.Error));
+                        }
                         return;
                 }
                 // If token looks like ordinary text (not a command/label/assignment), warn the user
@@ -3067,7 +3491,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `The angle parameter, theta in radians determines the curvature of the arc by specifying what angle is subtended.\n\n` +
                     `In other words the larger the angle, the tighter the curve.\n\n` + 
                     `If the angle is greater than 360º or 2*pi radians, the arc will retrace its path.\n\n` +
-                    `Must be in graphics mode (VS 4) for command to exexute without an error` );
+                    `Must be in graphics mode (VS 4) for command to execute without an error` );
             }
             if (word === 'ASC') {
 		return new vscode.Hover(`**ASC**:  Returns the ASCII code of the first character of the string.\n\n` +
@@ -3136,7 +3560,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `X: X coordinate of the centre of a circle.\n\n` + 
                     `Y: Y coordinate of the centre of a circle.\n\n` + 
                     `R: radius of a circle.\n\n` +
-                    `Must be in graphics mode (VS 4) for command to exexute without an error` );
+                    `Must be in graphics mode (VS 4) for command to execute without an error` );
             }
             if (word === 'CLEAR') {
 		return new vscode.Hover(`**CLEAR**:  CLEAR removes all of the variables.\n\n` +
@@ -3180,13 +3604,13 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `P: The value of p selects which areas of the screen the colour refers to.\n\n` + 
                     `Two sets of colours are defined. The print colours refer to Colours that will be used when colours are printed.\n\n` +  
                     `The non-print or PLOT colours refer to colours that will be used when colours are plotted or when screen functions are used.\n\n` + 
-                    `P=0, print paper.\n\n` +  
-		    `P=1, print ink.\n\n` + 
-		    `P=2, non-print (plot) paper.\n\n` + 
-		    `P=3, non-print ink.\n\n` +  
-		    `P=4, border colour.\n\n` + 
+                    `P=0, print (text) paper.\n\n` +  
+		    `P=1, print (text) ink.\n\n` + 
+		    `P=2, non-print (graphics) paper.\n\n` + 
+		    `P=3, non-print (graphics) ink.\n\n` +  
+		    `P=4, border colour (graphics).\n\n` + 
 		    `N: Selects the colour (see colour table in the appendix 7). (0 to 15)\n\n` +
-                    `Must be in graphics mode (VS 4) for command to exexute without an error` );                
+                    `Must be in graphics mode (VS 4) for command to execute without an error` )
 	   }
             if (word === 'CONT') {
 		return new vscode.Hover(`**CONT**:  Used to restart a program after a STOP instruction or BRK kety pressed.\n\n` +
@@ -3261,7 +3685,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**DRAW**:  Draws a simple line with the specified parameter.\n\n` +
                     `Usage: DRAW x \n\n` +                   
                     `Draws a line of length X from the current plot position in the current direction The plot position is updated to the end of the line.\n\n` +
-                    `Must be in graphics mode (VS 4) for command to exexute without an error, see LINE`);
+                    `Must be in graphics mode (VS 4) for command to execute without an error, see LINE`);
             }  
             if (word === 'DSI') {
 		return new vscode.Hover(`**AA**:  Direct Screen Input.\n\n` +
@@ -3438,7 +3862,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**LINE**:  Draws a line between 2 sets of coordinates. See also DRAW\n\n` +
                     `Usage: LINE X1,Y1,X2,Y2 \n\n` + 
                     `Draws a line from coordinates (X1,Y1) to (X2,Y2)\n\n` +
-                    `Must be in graphics mode (VS 4) for command to exexute without an error, see LINE`);
+                    `Must be in graphics mode (VS 4) for command to execute without an error, see LINE`);
             } 
             if (word === 'LIST') {
 		return new vscode.Hover(`**LIST**:  List a program to the screen.\n\n` +
@@ -3633,7 +4057,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
 		return new vscode.Hover(`**PLOT**:  Plots a point on the graphics screen.\n\n` +
                     `Usage: PLOT X,Y \n\n` +
                     `Plots a point in the graphics screen at the graphics coordinates (X,Y)\n\n` + 
-                    `Must be in graphics mode (VS 4) for command to exexute without an error, see LINE, see COLOUR and ATTR`);
+                    `Must be in graphics mode (VS 4) for command to execute without an error, see LINE, see COLOUR and ATTR`);
             }   
             if (word === 'POKE') {
 		return new vscode.Hover(`**POKE**:  Stores a specified value in the computer memory.\n\n` +
@@ -3703,7 +4127,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: RIGHT$(string,number) \n\n` +
                     `The string is truncated after the specified number of characters from the right. \n\n` + 
                     `EXAMPLE:\n\n` + 
-                    `10 PRINT RIGHT$("abcdef",3)\n\n` +                   
+                    `10 PRINT RIGHT$("abcdef",3)\n\n` +
                     `Returns "def"`);
             } 
             if (word === 'RND') {
@@ -3725,7 +4149,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `RUN tells the computer to start running the program from beginning.\n\n` + 
                     `All variables will be cleared.\n\n` + 
                     `A program can also be run by using a GOTO statement as a direct command. In this case the variables will be unaltered.\n\n` +
-                    `NOTE: The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ROM.`);
+                    `NOTE: The VS CODE extension for MTX-BASIC does not execute RUN.`);
             } 
             if (word === 'SAVE') {
 		return new vscode.Hover(`**SAVE**:  Saves a program from memory to cassete tape. (see USER DISC for disc save options).\n\n` +  

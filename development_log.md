@@ -598,66 +598,100 @@ FIXED incorrect operands not flagging as errors
 removal of debugging code
 Active Console Debug Logs (in-use files)
 
-out/mtxtokens.ts:628
-out/mtxtokens.ts:632
-out/mtxtokens.ts:642
-out/mtxtokens.ts:643
-out/mtxtokens.ts:644
-out/mtxtokens.ts:645
-out/mtxtokens.ts:655
-out/mtxtokens.ts:1007
-out/mtxtokens.ts:1018
-out/mtxtokens.ts:1044
-out/mtxtokens.ts:1143
-out/mtxtokens.ts:1146
-out/mtxtokens.ts:1165
-out/mtxtokens.ts:1169
-out/mtxtokens.ts:1465
-out/mtxtokens.ts:1614
-out/mtxtokens.ts:1615
-out/mtxstdfns.ts:266
-out/mtxstdfns.ts:268
-out/mtxstdfns.ts:272
-out/mtxstdfns.ts:297
-out/mtxstdfns.ts:300
-out/mtxstdfns.ts:304
-
 Likely Debug/Trace But Could Be Intentional Error Reporting
-
-out/mtxtokens.ts:1210
-out/mtxtokens.ts:1211
-out/mtxtokens.ts:1212
-out/mtxtokens.ts:1217
-out/mtxtokens.ts:1224
-out/mtxtokens.ts:1622
-out/mtxtokens.ts:1677
 
 Commented-Out Debug Console Lines (cleanup only)
 
-out/extension.ts:367
-out/extension.ts:369
-out/extension.ts:375
-out/extension.ts:1031
-out/mtxstdfns.ts:85
-out/mtxstdfns.ts:88
-out/mtxstdfns.ts:193
-out/mtxstdfns.ts:213
-out/mtxstdfns.ts:215
-out/mtxstdfns.ts:219
-out/mtxstdfns.ts:259
-out/mtxstdfns.ts:279
-out/mtxstdfns.ts:281
-out/mtxstdfns.ts:285
-out/mtxstdfns.ts:312
-out/mtxstdfns.ts:315
-out/mtxstdfns.ts:319
-out/mtxstdfns.ts:327
-out/mtxstdfns.ts:330
-out/mtxstdfns.ts:334
-out/mtxstdfns.ts:387
-out/mtxstdfns.ts:619
-out/mtxstdfns.ts:622
-out/mtxstdfns.ts:670
-out/mtxstdfns.ts:672
-
 to test code after changes. will do this as part of wider checking.
+
+24-Mar-2026
+REM ====== is showing the following error Assignment requires LET command - use 'LET REM='.
+this needs to be excepted as all Keywords cannot be used as variable names and REM = etc is allowed.
+REM ... with a colon is flagged as a warning not an error. Its good practice to avoid using colons in REM statements.
+If the “assignment without LET” check is regex-based, keep it restricted to real identifiers only. A safe form is:If the “assignment without LET” check is regex-based, keep it restricted to real identifiers only. A safe form is:
+re: /^\s*([A-Z][A-Z0-9]*\$?(?:\([^)]+\))?)\s*=/
+
+const knownKeywordSet = new Set(knownKeywords.map(k => k.toUpperCase()));
+
+function getBaseIdentifier(name: string): string {
+    return name
+        .trim()
+        .replace(/\(.*\)$/, '') // remove array suffix
+        .replace(/\$$/, '')     // remove string suffix
+        .toUpperCase();
+}
+
+function isReservedKeyword(name: string): boolean {
+    return knownKeywordSet.has(getBaseIdentifier(name));
+}
+
+Update the INVALID_LET_VARIABLE validator so keywords are rejected as variable names. Also use groups[0], not groups[1], because the regex only has one capture group.
+
+
+Find the validator or check that produces:
+Assignment requires LET command
+use 'LET ...='
+and change it so it does not fire for REM comments, and so it reports reserved keywords correctly.
+
+repeat of the ON MODE... error from 26th Feb.
+The generic top-level validator pass over a full BASIC segment was still letting nested function validators fire before the segment’s leading command validator.
+For LINE INT(XL),Y,INT(XR),Y, the INT validator was being treated as if it were validating a standalone command, which produced the false unexpected extra argument(s) error.
+What changed
+
+runValidatorsOnSegment now supports a top-level mode that prefers the command starting the segment at extension.ts:476.
+The main segment validation call now uses that mode at extension.ts:2642.
+Nested-expression validation paths such as LET, IF, ON, and selector expressions were left unchanged, so expressions like MOD(Z(1),2) can still be validated inside larger statements.
+
+a new commandMatchedAtStart && !preferSegmentStartCommand logic
+
+no errors for misisng LET after THEN and ELSE 
+IF Y1 = Y0 THEN XL = X0 ELSE XL = X0 + (Y-Y0)*(X1-X0)/(Y1-Y0)
+
+Also, updated to address misspelt keywords like GTO instead of GOTO.
+Also, flagged FOR after THEN and ELSE as being valid, as currently was showing an error. The valid keywords list was extended.
+Need to ensure that specials outside the normal validator are tested for validity.#
+
+Updated code to generate a warning message if illegal (MTX editor keywords are used but not typically part of MTX BASIC code.) Exception, added RUN to the legal list as I used this in BSHIPS_84.bas
+
+STILL TO CODE FOR SDX (&/or FDXB) DISC BASIC commands.
+
+26-Mar-2026
+Testing against example_BOMBER.BAs which has a range of added errors for testing purposes.
+CIRCLE10,10,10 is returning the following error message Unrecognised or stray text: 'CIRCLE10,'. Did you mean to add 'REM'?
+Previously, it would have generated the same error message as for CLOCK"1221056"
+CLOCK"1221056": MTX Command requires a single space (got none) between the command and the first argument/parameter
+What is the reason for this discrepency?
+
+retain 
+new RegExp(`\\b(?:${spec.pattern})\\b\\s*(.*)`, '') to prevents partial matches from claiming text they should not own
+
+
+Build a helper such as getMissingSpaceAfterKeywordDiagnostic(segText, lineNum, segStart).
+Check the segment start against known command IDs, longest-first.
+Only consider commands where isSpaceNeeded(keyword) is true.
+Require the next character after the keyword to be a plausible argument starter, for example:
+digit
+"
+#
+£
+(
+letter
+sign like + or -
+If matched, return the same missing-space diagnostic the main validator already uses.
+Call this helper before the final stray-text checker.
+That gives you:
+
+stable main regex behavior, consistent diagnostics, minimal blast radius
+
+\b works for normal keywords like SIN, CLOCK, CIRCLE
+it fails for $-suffixed tokens when followed by ( because $ and ( are both non-word characters, so there is no word boundary
+(?=$|[^A-Za-z0-9_]) is the right trailing check for $-suffixed names:
+matches CHR$(1555)
+matches TIME$
+does not wrongly match longer identifiers like TIME$X
+What this patch fixes:
+
+CHR$(1555) will again be claimed by the generic validator, so the 0..255 range check can fire
+other $-suffixed functions/variables in CmdSpec become reliably matchable again
+
+Helper patch required for flagging standalone numeric/string functions used outside LET, PRINT, IF, etc.

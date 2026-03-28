@@ -2572,7 +2572,7 @@ def convert_mtx_to_txt():
     RES_code="" #build up the code output
     #open('workfile', 'w', encoding="utf-8") not applicable to ytes
     #print("get file to convert (*.mtx)")
-    GV_fname_r = askopenfilename(title="Binary (Program) input filename",defaultextension=GC_extn_r, filetypes=[("MTX Program (Binary) files", GC_extn_r),("FDXB COM files", "*.com"),("EXE files", "*.exe"),("All files","*.*")])
+    GV_fname_r = askopenfilename(title="Binary (Program) input filename",defaultextension=GC_extn_r, filetypes=[("MTX Program (Binary) files", GC_extn_r),("All files","*.*")])
     #print("write conversion out as a text BASIC file (*.bas)")
     GV_fname_w = asksaveasfilename(title="BASIC (text) output filename",defaultextension=GC_extn_w, filetypes=[("MTX BASIC text files", "*.bas"),("TEXT files", "*.txt"),("All files","*.*")]) 
     VSC_flag=False #Not required by VS Code as can view/edit a greater proportion of the listing and CTRL F to find than for the current 4 MTX editor.
