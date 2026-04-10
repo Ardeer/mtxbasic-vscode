@@ -695,3 +695,104 @@ CHR$(1555) will again be claimed by the generic validator, so the 0..255 range c
 other $-suffixed functions/variables in CmdSpec become reliably matchable again
 
 Helper patch required for flagging standalone numeric/string functions used outside LET, PRINT, IF, etc.
+
+31-Mar-2026
+REM flagging code error
+<linenumber> CODE must be on a line by itself (e.g. "57 CODE"). CODE found in this context is invalid.
+add a if (isRemCommentSegment(seg.text)) elseif CODE  else block
+
+renumber removes the tab/spacing 
+         const edits: { line: number; newText: string }[] = [];
+         
+         for (let i = codeStartLine + 1; i <= codeEndLine; i++) {
+                 const line = doc.lineAt(i).text;
+-                const match = /^(\s+)([0-9A-Fa-f]{4}\s+)(.*)$/.exec(line);
++                const match = /^(\s+)([0-9A-Fa-f]{4})(\s+)(.*)$/.exec(line);
+                 
+                 if (match) {
+                         const indent = match[1];
+-                        const instruction = match[3].trim();
++                        const gapAfterAddress = match[3];
++                        const instruction = match[4];
+                         
+                         // Calculate new address
+                         const newAddr = currentAddress.toString(16).toUpperCase().padStart(4, '0');
+-                        const newLine = `${indent}${newAddr} ${instruction}`;
++                        const newLine = `${indent}${newAddr}${gapAfterAddress}${instruction}`;
+                         
+                         // Only add edit if address changed
+                         if (newLine !== line) {
+                                 edits.push({ line: i, newText: newLine });
+                         }
+                         
+                         // Calculate instruction length for next address
+                         try {
+-                                const parsed = parseZ80Line(`${newAddr} ${instruction}`, i);
++                                const parsed = parseZ80Line(`${newAddr} ${instruction.trimStart()}`, i);
+                                 if (parsed) {
+                                         let instrLength = 1;
+                                         if (parsed.isDirective) {
+                                                 instrLength = getDirectiveLength(parsed);
+
+lowercase hexadecimals not resulting in a warning or error
+added a new warning mesaages in DB, DS and DW sections of z80codes.ts
+
+1-Apr-2026
+DW causing MTX programs to crash with command not found. Word count started at 1 not 2
+<word count> (1 word gives a count of 2 (e.g. DW 16384). 2 words would give a count of 4 (e.g. DW 16384,17000))
+mtxtokens.ts updated
+    } else if (dir.directiveType === 'DW') {
+      // <0x04> <offset> <word byte-count> <ascii length> <ascii chars>
+      // Spec: <number ... as ASCII characters, last character has bit 7 set>
+      mtxDirectiveBytes.push(0x04); // DW marker
+      const relOffset = (dir._offset || 0) - offsetBase;
+      mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
+
+      const val = dir.directiveValue || '';
+      const dwPayload = buildDbDirectivePayload(val);
+
+      //mtxDirectiveBytes.push(dwPayload.itemCount & 0xff);
+      const dwByteCount = dwPayload.itemCount * 2;
+      mtxDirectiveBytes.push(dwByteCount & 0xff);
+      mtxDirectiveBytes.push(dwPayload.ascii.length & 0xff);
+      mtxDirectiveBytes.push(...dwPayload.ascii);
+
+VSC crashes if press CTRL SH H when there is an error present. The following code was added to prevent this
+
+                        const collectionDiagnostics = diagCollection.get(doc.uri) || [];
+                        const publishedDiagnostics = vscode.languages.getDiagnostics(doc.uri) || [];
+                        const allDiagnostics = [...collectionDiagnostics, ...publishedDiagnostics];
+                        const errorCount = allDiagnostics.filter(d => d.severity === vscode.DiagnosticSeverity.Error).length;
+                        if (errorCount > 0) {
+                                vscode.window.showErrorMessage(`Cannot generate HEX while the file contains ${errorCount} error${errorCount === 1 ? '' : 's'}. Fix the errors first.`);
+                                return;
+                        }
+
+NOTE: Warnings are not blocked by the new save guard. It only stops CTRL SHIFT H when the file has DiagnosticSeverity.Error.
+
+The warnings I can see in the current code are:
+
+Unsupported editor keywords such as the grammar-only ones handled by addUnsupportedKeywordWarnings(...), which produce This keyword X is not required by the VS code editor in extension.ts:1314.
+Stray text warnings like Unrecognised or stray text: '...' . Did you mean to add 'REM'? in extension.ts:3112.
+NODDY warnings for undefined PLOD targets, NODDY: PLOD references undefined program "...", in extension.ts:3207.
+Any Z80 diagnostics that come through with severity "warning" are also mapped to VS Code warnings in extension.ts:3312.
+So the current behavior is:
+
+Errors: save is blocked
+Warnings: save is allowed
+If you want, I can tighten this so saveHex is blocked only for BASIC/Z80 compile-risk errors and still ignores harmless warnings.
+
+7-Apr-2026
+Still an issue with mtx directives. for example
+LD HL,#4094
+is generating the following hexdump leading to crashes when run or edited on MTX PC. The hexdump confirms that the offset for the number is not taking into account the opcode.
+21 94 40 (LD HL,#4094) would generate a mtx directive of
+00 23 34 30 39 B4 00 01 00 00 00
+when it should be
+00 23 34 30 39 B4 00 01 01 00 00
+generate recommended patches to address this failing.
+
+10-Apr-2026
+DW hexadecimally addressing returns 2 instead of 2 if 1 word or 4 if 2 words.So
+return 2 changed to
+return Math.max(1, splitDirectiveValues(parsed.directiveValue).length) * 2;

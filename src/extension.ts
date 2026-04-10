@@ -150,6 +150,15 @@ export function activate(ctx: vscode.ExtensionContext) {
                 const doc = editor.document;
                 const text = doc.getText();
                 try {
+                        const collectionDiagnostics = diagCollection.get(doc.uri) || [];
+                        const publishedDiagnostics = vscode.languages.getDiagnostics(doc.uri) || [];
+                        const allDiagnostics = [...collectionDiagnostics, ...publishedDiagnostics];
+                        const errorCount = allDiagnostics.filter(d => d.severity === vscode.DiagnosticSeverity.Error).length;
+                        if (errorCount > 0) {
+                                vscode.window.showErrorMessage(`Cannot generate HEX while the file contains ${errorCount} error${errorCount === 1 ? '' : 's'}. Fix the errors first.`);
+                                return;
+                        }
+
                         initCreateHdr(); //initialize the createHdr array before populating it with updated values
                         const { noddyStartLine } = validateLineNumbers(doc);
                         //const noddyLengthForDoc = computeNoddyAsciiLength(doc, noddyStartLine);
@@ -2848,7 +2857,9 @@ export function activate(ctx: vscode.ExtensionContext) {
                 and to increase the hexadecimal addresss counter by <x> bytes,either 1, 2, 3 or 4.
                 the assembler has specials, like labels, reserves for DB, DW and DS, etc.
 */                
-                { if (/^\s*(?:\d+\s+)?CODE\s*$/.test(seg.text)) {
+                { if (isRemCommentSegment(seg.text)) {
+                        // REM comment text is free-form; do not scan it for CODE usage.
+                } else if (/^\s*(?:\d+\s+)?CODE\s*$/.test(seg.text)) {
                         /* valid; nothing to do */
                         codeFlag=true; // set flag so generic validator block skips this segment
                 } else {
@@ -3270,7 +3281,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         for (let i = block.start; i <= block.end; i++) {
                                 const line = doc.lineAt(i).text;
                                 // either drop the address part…
-                                const trimmed = line.replace(/^\s*[0-9A-Fa-f]{1,4}\s+/, '');
+                                const trimmed = line.replace(/^\s*[0-9A-F]{1,4}\s+/, '');
                                 const m = /^([A-Z][A-Z0-9]*):/.exec(trimmed);
 
                                 // …or use a single regex that allows for the prefix:
@@ -4338,9 +4349,9 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
             const lineText = document.lineAt(position.line).text;
 
             // Check if this looks like a Z80 assembly line (starts with hex address after whitespace)
-            if (/^\s+[0-9A-Fa-f]{4}\s/.test(lineText)) {
+            if (/^\s+[0-9A-F]{4}\s/.test(lineText)) {
                 // Check if cursor is positioned within the hex address itself (skip register hover for hex addresses)
-                const hexMatch = /^\s+([0-9A-Fa-f]{4})\s/.exec(lineText);
+                const hexMatch = /^\s+([0-9A-F]{4})\s/.exec(lineText);
                 const isInHexAddress = hexMatch && 
                     position.character >= lineText.indexOf(hexMatch[1]) && 
                     position.character < lineText.indexOf(hexMatch[1]) + 4;
@@ -4577,16 +4588,20 @@ const renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', a
         
         for (let i = codeStartLine + 1; i <= codeEndLine; i++) {
                 const line = doc.lineAt(i).text;
-                const match = /^(\s+)([0-9A-Fa-f]{4}\s+)(.*)$/.exec(line);
+                //const match = /^(\s+)([0-9A-Fa-f]{4}\s+)(.*)$/.exec(line);
+                const match = /^(\s+)([0-9A-F]{4})(\s+)(.*)$/.exec(line);
                 
                 if (match) {
                         const indent = match[1];
-                        const instruction = match[3].trim();
+                        //const instruction = match[3].trim();
+                        const gapAfterAddress = match[3];
+                        const instruction = match[4];
                         
                         // Calculate new address
                         const newAddr = currentAddress.toString(16).toUpperCase().padStart(4, '0');
-                        const newLine = `${indent}${newAddr} ${instruction}`;
-                        
+                        //const newLine = `${indent}${newAddr} ${instruction}`;
+                        const newLine = `${indent}${newAddr}${gapAfterAddress}${instruction}`;
+
                         // Only add edit if address changed
                         if (newLine !== line) {
                                 edits.push({ line: i, newText: newLine });
@@ -4594,7 +4609,8 @@ const renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', a
                         
                         // Calculate instruction length for next address
                         try {
-                                const parsed = parseZ80Line(`${newAddr} ${instruction}`, i);
+                                //const parsed = parseZ80Line(`${newAddr} ${instruction}`, i);
+                                const parsed = parseZ80Line(`${newAddr} ${instruction.trimStart()}`, i);
                                 if (parsed) {
                                         let instrLength = 1;
                                         if (parsed.isDirective) {

@@ -74,7 +74,7 @@ Once a CODE block is defined as above, pressing <return> moves the line down 1 r
 20 CODE<return>
      4014 START: LD A,#0F ; START of the z80 code<return>
 
-The user can still enter hex addresses manually, if out of sequence, the system will flag and error. You can renumber the hex addresses containing an incorrect hex address, typically caused by inserting a BASIC line before it or a z80 assembly line before it. Renumbering can be done in one of two ways in a code block by clicking on the hex address in the code block and 
+The user can still enter hex addresses manually, if out of sequence, the system will flag and error. You can renumber the hex addresses containing an incorrect hex address, typically caused by inserting a BASIC line before it or a z80 assembly line before it. Renumbering can be done in one of two ways in a code block by clicking on the hex address in EACH code block and 
 a) either pressing "CTRL SHIFT r" 
 b) or from "CTRL SHIFT p" and select "MTX: Renumber Z80 addresses in CODE block". 
 
@@ -89,6 +89,7 @@ A quirk of the assembler and to keep consistency with the original, the hexadeci
      401B LD HL,16412 ;decimal address
      401E RET ;ensure there is 1 RET in your code to avoid the program from crashing if you want to return to BASIC.
 
+One quirk not applied in this implementation is the frustrating way the built in assembler dealt with changes after an assembly instruction was entered. For example, if you changed LD DE,#7000 to LD DE,#9000 the total length of the code increases by 9 bytes in this example. It leaves a residue of 00 23 39 30 30 b0 00 00 00 behind. Working with VS code does not generate this. Note: if you make changes during a MEMU session, this may result in code positional changes if hard coded, like moving a block of code.
 
 The NODDY editor is not accessible in VS code using NODDY<return>. However, the workaround is this free form text version is at the very end of a BASIC listing and the very last entry, is to use REM NODDY as the placeholder trigger to allow NODDY programs and text pages to be constructed. 
 
@@ -136,7 +137,7 @@ SAVING is a 2 step process.
 
 i) Once you have created your MTX BASIC masterpiece, save the VS code text file, using VS Code SAVE AS to save the program listing as a text based file (.bas or .txt).
 
-ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h.  This will bring up MTX save window, enter the filename.mtx (yes use the .mtx extension as preferred for MEMU emulator). A second prompt at the top of the VS code screen will ask if you want to auto-run or not. If auto-run is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator).
+ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h.  This will bring up MTX save window, enter the filename.mtx (yes use the .mtx extension as preferred for MEMU emulator). A second prompt at the top middle of the VS code screen will ask if you want to auto-run or not. If auto-run is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator). If there are any errors, the binary file (.mtx) will not save, error message(s) will appear at the bottom left hand corner of the VS code screen.
 
 The .mtx code generated for use on the Memotech MEMU emulator only uses minimal changes to the standard system variables that are normally saved to tape. In this version, the MTX header block including MTX tape based system variables is equivalent to 619 bytes.
 

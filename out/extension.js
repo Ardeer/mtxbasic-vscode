@@ -86,7 +86,7 @@ function activate(ctx) {
     var noddyLength = 0; // Tracks ASCII characters in the current document's NODDY section
     // Command: save converted HEX bytes from active editor to a file
     var saveHexCmd = vscode.commands.registerCommand('mtxbasic.saveHex', function () { return __awaiter(_this, void 0, void 0, function () {
-        var editor, doc, text, noddyStartLine, noddyByteCount, bytes, totalBytelength, LSTPGsize, BASBOTaddr, BASTOPaddr, NODTOPaddr, ARRTOPdispl, maxBasicAddr, maxCode_noBasicAddr, BASELINaddr, sysVarStart_1, setSysVar, defaultFileName, uri, fileName, lastDotIdx, nameOnly, extension, headerName, i, DESAVEaddr, desavePrompt, input, trimmed, addr, lineNum, addr, data, e_1;
+        var editor, doc, text, collectionDiagnostics, publishedDiagnostics, allDiagnostics, errorCount, noddyStartLine, noddyByteCount, bytes, totalBytelength, LSTPGsize, BASBOTaddr, BASTOPaddr, NODTOPaddr, ARRTOPdispl, maxBasicAddr, maxCode_noBasicAddr, BASELINaddr, sysVarStart_1, setSysVar, defaultFileName, uri, fileName, lastDotIdx, nameOnly, extension, headerName, i, DESAVEaddr, desavePrompt, input, trimmed, addr, lineNum, addr, data, e_1;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -100,6 +100,14 @@ function activate(ctx) {
                     _a.label = 1;
                 case 1:
                     _a.trys.push([1, 8, , 9]);
+                    collectionDiagnostics = diagCollection.get(doc.uri) || [];
+                    publishedDiagnostics = vscode.languages.getDiagnostics(doc.uri) || [];
+                    allDiagnostics = __spreadArray(__spreadArray([], collectionDiagnostics, true), publishedDiagnostics, true);
+                    errorCount = allDiagnostics.filter(function (d) { return d.severity === vscode.DiagnosticSeverity.Error; }).length;
+                    if (errorCount > 0) {
+                        vscode.window.showErrorMessage("Cannot generate HEX while the file contains ".concat(errorCount, " error").concat(errorCount === 1 ? '' : 's', ". Fix the errors first."));
+                        return [2 /*return*/];
+                    }
                     (0, mtxsavehdr_js_1.initCreateHdr)(); //initialize the createHdr array before populating it with updated values
                     noddyStartLine = validateLineNumbers(doc).noddyStartLine;
                     noddyByteCount = computeNoddyByteLength(doc, noddyStartLine);
@@ -2424,7 +2432,10 @@ function activate(ctx) {
                                 the assembler has specials, like labels, reserves for DB, DW and DS, etc.
                 */
                 {
-                    if (/^\s*(?:\d+\s+)?CODE\s*$/.test(seg.text)) {
+                    if (isRemCommentSegment(seg.text)) {
+                        // REM comment text is free-form; do not scan it for CODE usage.
+                    }
+                    else if (/^\s*(?:\d+\s+)?CODE\s*$/.test(seg.text)) {
                         /* valid; nothing to do */
                         codeFlag = true; // set flag so generic validator block skips this segment
                     }
@@ -2806,7 +2817,7 @@ function activate(ctx) {
                 for (var i = block.start; i <= block.end; i++) {
                     var line = doc.lineAt(i).text;
                     // either drop the address part…
-                    var trimmed = line.replace(/^\s*[0-9A-Fa-f]{1,4}\s+/, '');
+                    var trimmed = line.replace(/^\s*[0-9A-F]{1,4}\s+/, '');
                     var m = /^([A-Z][A-Z0-9]*):/.exec(trimmed);
                     // …or use a single regex that allows for the prefix:
                     // const m = /^\s*(?:[0-9A-Fa-f]{1,4}\s+)?([A-Z][A-Z0-9]*):/.exec(line);
@@ -3848,9 +3859,9 @@ function activate(ctx) {
             // Check if we're inside a CODE block and provide Z80 hover info
             var lineText = document.lineAt(position.line).text;
             // Check if this looks like a Z80 assembly line (starts with hex address after whitespace)
-            if (/^\s+[0-9A-Fa-f]{4}\s/.test(lineText)) {
+            if (/^\s+[0-9A-F]{4}\s/.test(lineText)) {
                 // Check if cursor is positioned within the hex address itself (skip register hover for hex addresses)
-                var hexMatch = /^\s+([0-9A-Fa-f]{4})\s/.exec(lineText);
+                var hexMatch = /^\s+([0-9A-F]{4})\s/.exec(lineText);
                 var isInHexAddress = hexMatch &&
                     position.character >= lineText.indexOf(hexMatch[1]) &&
                     position.character < lineText.indexOf(hexMatch[1]) + 4;
@@ -3990,7 +4001,7 @@ function activate(ctx) {
     )); // This closes registerCompletionItemProvider
     // Command: Renumber Z80 addresses in CODE block at cursor
     var renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', function () { return __awaiter(_this, void 0, void 0, function () {
-        var editor, doc, position, codeStartLine, codeEndLine, i, line, i, line, codeStartText, codeLineMatch, codeLineNumber, currentAddress, docBytes, codeLineAddress, edits, i, line, match, indent, instruction, newAddr, newLine, parsed, instrLength;
+        var editor, doc, position, codeStartLine, codeEndLine, i, line, i, line, codeStartText, codeLineMatch, codeLineNumber, currentAddress, docBytes, codeLineAddress, edits, i, line, match, indent, gapAfterAddress, instruction, newAddr, newLine, parsed, instrLength;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -4053,19 +4064,20 @@ function activate(ctx) {
                     edits = [];
                     for (i = codeStartLine + 1; i <= codeEndLine; i++) {
                         line = doc.lineAt(i).text;
-                        match = /^(\s+)([0-9A-Fa-f]{4}\s+)(.*)$/.exec(line);
+                        match = /^(\s+)([0-9A-F]{4})(\s+)(.*)$/.exec(line);
                         if (match) {
                             indent = match[1];
-                            instruction = match[3].trim();
+                            gapAfterAddress = match[3];
+                            instruction = match[4];
                             newAddr = currentAddress.toString(16).toUpperCase().padStart(4, '0');
-                            newLine = "".concat(indent).concat(newAddr, " ").concat(instruction);
+                            newLine = "".concat(indent).concat(newAddr).concat(gapAfterAddress).concat(instruction);
                             // Only add edit if address changed
                             if (newLine !== line) {
                                 edits.push({ line: i, newText: newLine });
                             }
                             // Calculate instruction length for next address
                             try {
-                                parsed = (0, z80codes_js_1.parseZ80Line)("".concat(newAddr, " ").concat(instruction), i);
+                                parsed = (0, z80codes_js_1.parseZ80Line)("".concat(newAddr, " ").concat(instruction.trimStart()), i);
                                 if (parsed) {
                                     instrLength = 1;
                                     if (parsed.isDirective) {

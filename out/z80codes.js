@@ -1241,6 +1241,10 @@ function validateDirectiveOperands(parsed) {
             return parseInt(t, 10);
         return null;
     };
+    var hasLowercaseHexDigits = function (token) {
+        var t = token.trim();
+        return /^#[0-9A-Fa-f]+$/.test(t) && /[a-f]/.test(t);
+    };
     if (parsed.directiveType === 'DB') {
         for (var _i = 0, values_1 = values; _i < values_1.length; _i++) {
             var value = values_1[_i];
@@ -1248,6 +1252,10 @@ function validateDirectiveOperands(parsed) {
                 continue;
             if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
                 issues.push({ token: value, message: "Invalid hex byte \"".concat(value, "\" in DB (expected #00 to #FF)") });
+                continue;
+            }
+            if (hasLowercaseHexDigits(value)) {
+                issues.push({ token: value, message: "Hex value must be uppercase: \"".concat(value, "\" should be \"").concat(value.trim().toUpperCase(), "\"") });
                 continue;
             }
             var num = parseNumeric(value);
@@ -1265,6 +1273,10 @@ function validateDirectiveOperands(parsed) {
             var value = values_2[_a];
             if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
                 issues.push({ token: value, message: "Invalid hex word \"".concat(value, "\" in DW (expected #0000 to #FFFF)") });
+                continue;
+            }
+            if (hasLowercaseHexDigits(value)) {
+                issues.push({ token: value, message: "Hex value must be uppercase: \"".concat(value, "\" should be \"").concat(value.trim().toUpperCase(), "\"") });
                 continue;
             }
             var num = parseNumeric(value);
@@ -1287,6 +1299,10 @@ function validateDirectiveOperands(parsed) {
         var value = values[0];
         if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
             issues.push({ token: value, message: "Invalid hex size \"".concat(value, "\" in DS (expected #00 to #FE)") });
+            return issues;
+        }
+        if (hasLowercaseHexDigits(value)) {
+            issues.push({ token: value, message: "Hex value must be uppercase: \"".concat(value, "\" should be \"").concat(value.trim().toUpperCase(), "\"") });
             return issues;
         }
         var num = parseNumeric(value);
@@ -1989,7 +2005,7 @@ function getDirectiveLength(parsed) {
             }
             return totalBytes || 1;
         case 'DW':
-            return 2;
+            return Math.max(1, splitDirectiveValues(parsed.directiveValue).length) * 2;
         case 'DS':
             return parseInt(parsed.directiveValue, 10) || 1;
         default:

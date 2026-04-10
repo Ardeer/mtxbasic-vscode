@@ -1330,6 +1330,10 @@ function validateDirectiveOperands(parsed: Z80ParsedLine): DirectiveIssue[] {
         if (/^\d+$/.test(t)) return parseInt(t, 10);
         return null;
     };
+        const hasLowercaseHexDigits = (token: string): boolean => {
+        const t = token.trim();
+        return /^#[0-9A-Fa-f]+$/.test(t) && /[a-f]/.test(t);
+    };
 
     if (parsed.directiveType === 'DB') {
         for (const value of values) {
@@ -1339,7 +1343,10 @@ function validateDirectiveOperands(parsed: Z80ParsedLine): DirectiveIssue[] {
                 issues.push({ token: value, message: `Invalid hex byte "${value}" in DB (expected #00 to #FF)` });
                 continue;
             }
-
+            if (hasLowercaseHexDigits(value)) {
+                issues.push({ token: value, message: `Hex value must be uppercase: "${value}" should be "${value.trim().toUpperCase()}"` });
+                continue;
+            }
             const num = parseNumeric(value);
             if (num === null) {
                 issues.push({ token: value, message: `Invalid DB value "${value}" (expected byte, decimal, or quoted string)` });
@@ -1353,6 +1360,10 @@ function validateDirectiveOperands(parsed: Z80ParsedLine): DirectiveIssue[] {
         for (const value of values) {
             if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
                 issues.push({ token: value, message: `Invalid hex word "${value}" in DW (expected #0000 to #FFFF)` });
+                continue;
+            }
+            if (hasLowercaseHexDigits(value)) {
+                issues.push({ token: value, message: `Hex value must be uppercase: "${value}" should be "${value.trim().toUpperCase()}"` });
                 continue;
             }
 
@@ -1376,6 +1387,10 @@ function validateDirectiveOperands(parsed: Z80ParsedLine): DirectiveIssue[] {
         const value = values[0];
         if (value.trim().startsWith('#') && !/^#[0-9A-Fa-f]+$/.test(value.trim())) {
             issues.push({ token: value, message: `Invalid hex size "${value}" in DS (expected #00 to #FE)` });
+            return issues;
+        }
+        if (hasLowercaseHexDigits(value)) {
+            issues.push({ token: value, message: `Hex value must be uppercase: "${value}" should be "${value.trim().toUpperCase()}"` });
             return issues;
         }
 
@@ -2130,7 +2145,7 @@ function getDirectiveLength(parsed: Z80ParsedLine): number {
             
             return totalBytes || 1;
         case 'DW':
-            return 2;
+            return Math.max(1, splitDirectiveValues(parsed.directiveValue).length) * 2;
         case 'DS':
             return parseInt(parsed.directiveValue, 10) || 1;
         default:

@@ -1056,14 +1056,16 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
             mtxDirectiveBytes, dbPayload.ascii); // ascii bytes with bit7 set on last char of each item
         }
         else if (dir.directiveType === 'DW') {
-            // <0x04> <offset> <word count> <ascii length> <ascii chars>
+            // <0x04> <offset> <word byte-count> <ascii length> <ascii chars>
             // Spec: <number ... as ASCII characters, last character has bit 7 set>
             mtxDirectiveBytes.push(0x04); // DW marker
             var relOffset = (dir._offset || 0) - offsetBase;
             mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
             var val = dir.directiveValue || '';
             var dwPayload = buildDbDirectivePayload(val);
-            mtxDirectiveBytes.push(dwPayload.itemCount & 0xff);
+            //mtxDirectiveBytes.push(dwPayload.itemCount & 0xff);
+            var dwByteCount = dwPayload.itemCount * 2;
+            mtxDirectiveBytes.push(dwByteCount & 0xff);
             mtxDirectiveBytes.push(dwPayload.ascii.length & 0xff);
             mtxDirectiveBytes.push.apply(mtxDirectiveBytes, dwPayload.ascii);
         }

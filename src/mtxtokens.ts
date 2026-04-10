@@ -370,7 +370,7 @@ const mtxTokens: {tokenDec: number, tokenHex: number, token: string}[] = [
         9e) Define Word (DW) syntax <label:>DW <hex/dec> an/or <label>
         <0x04>
         <offset (2bytes)>
-        <word count>
+        <word count> (1 word gives a count of 2 (e.g. DW 16384). 2 words would give a count of 4 (e.g. DW 16384,17000))
         <length>
         <number (decimal or hexadecimal) represented as ASCII characters, last character has bit 7 set to indicate end of number/label>
         
@@ -1287,7 +1287,7 @@ function parseCodeBlockPhase3(
       mtxDirectiveBytes.push(dbPayload.ascii.length & 0xff); // ascii length excluding commas
       mtxDirectiveBytes.push(...dbPayload.ascii); // ascii bytes with bit7 set on last char of each item
     } else if (dir.directiveType === 'DW') {
-      // <0x04> <offset> <word count> <ascii length> <ascii chars>
+      // <0x04> <offset> <word byte-count> <ascii length> <ascii chars>
       // Spec: <number ... as ASCII characters, last character has bit 7 set>
       mtxDirectiveBytes.push(0x04); // DW marker
       const relOffset = (dir._offset || 0) - offsetBase;
@@ -1296,7 +1296,9 @@ function parseCodeBlockPhase3(
       const val = dir.directiveValue || '';
       const dwPayload = buildDbDirectivePayload(val);
 
-      mtxDirectiveBytes.push(dwPayload.itemCount & 0xff);
+      //mtxDirectiveBytes.push(dwPayload.itemCount & 0xff);
+      const dwByteCount = dwPayload.itemCount * 2;
+      mtxDirectiveBytes.push(dwByteCount & 0xff);
       mtxDirectiveBytes.push(dwPayload.ascii.length & 0xff);
       mtxDirectiveBytes.push(...dwPayload.ascii);
 
