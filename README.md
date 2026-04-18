@@ -12,27 +12,24 @@ This extension provides support for the MTX BASIC programming language in Visual
 ## Installation
 
 1. Clone the repository or download and unzip the ZIP file. NOTE: in future hoping to have this available in the VS Code extension marketplace for download.
-2. In linux, move the folder to .vscode\extensions\  . You should now have a folder 
+2. In linux, ensure hidden folders are visible, move the folder to .vscode/extensions/ (the dot in front of vscode is required). You should now have a folder 
    .vscode\extensions\mtxbasic-extension
-   In Windows this will be found at, remember to change the USERNAME to that in your system.
+   In Windows this will be found at, remember to change the USERNAME to that in your system. Note: Linux uses (/) and windows uses (\) for file/directory paths.
    C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\resources\app\extensions 
    Apologies, I don't have a mac.
-3. Exit and reload VS Code
-4. Either press `F5` to run the extension in a new Extension Development Host window or use "CTRL SHIFT p", select <Developer: Restart Host Extension> within the existing workspace window.
+3. Exit and reload VS Code. This should update extension.json file in folder .vscode/extensions. It should look like the following (example from raspberry pi5 PiOS, replace $USER with your username)
+{"id":"ardeer.mtxbasic-extension"},"version":"0.0.1","location":{"$mid":1,"fsPath":"/home/$USER/.vscode/extensions/mtxbasic-extension","external":"file:///home/$USER/.vscode/extensions/mtxbasic-extension","path":"/home/$USER/.vscode/extensions/mtxbasic-extension","scheme":"file"},"relativeLocation":"mtxbasic-extension"}
+4. Either press "CTRL SHIFT p", select <Developer: Restart Host Extension> within the existing workspace window (recommended) or `F5` to run the extension in a new Extension Development Host window.
 5. package.json has been configured to to ensure Hover is switched on and autofill is off as invariably it gets it wrong. If that   
    doesn't work, you can also configure VS code File->Preferences->Settings then select USER tab and search for Hover, and tick
    enabled.
    Alternatively, to set manually, in VS Code, keypress: "CTRL SHIFT p" and select Preferences: OPEN USER SETTINGS (JSON). 
    or if you want to access the user settings outside of VS code, in linux this can be found at ~/.config/Code/User/settings.json
-   "[mtxbasic]": {
          //Hover is probably better for novices to the language or as a refresher. Experienced users may find it annoying, setting to false switches it off.
         "editor.hover.enabled": true,
-        //avoids colour swatches appearing in front of #hex addresses - well sometimes!!
+        //avoids CSS colour swatches appearing in front of #hex addresses like a dark red square in front of #401B 
         "editor.colorDecorators": false,
-        //intellisense from showing suggestions from other files or documents which might be erroneous
-        "editor.suggest.showWords": false
-    }
-    package.json in this extension, includes all the setting changes that are applied as standard, not just the example above.
+   Additional specific VS Code setting changes for mtxbasic are found in package.json in this extension.
 6. Once the extension is installed, Create a new file or text file. Then click on the {} shown on the bottom left hand corner of VS code main. Click on this and scroll down until you find 
    MTX-BASIC. You are now in the MTX-BASIC environment. You cannot open historical .mtx, .com or .BAS files, these will be in the original MTX binary format. Use mtxdisassembly.py (ref 5.) to 
    convert these into .bas files, Use the lowercase .bas extension as this will be in VS code MTX-BASIC text format and you will be able to edit them in VS code editor, save as .bas and to 
@@ -89,7 +86,7 @@ A quirk of the assembler and to keep consistency with the original, the hexadeci
      401B LD HL,16412 ;decimal address
      401E RET ;ensure there is 1 RET in your code to avoid the program from crashing if you want to return to BASIC.
 
-One quirk not applied in this implementation is the frustrating way the built in assembler dealt with changes after an assembly instruction was entered. For example, if you changed LD DE,#7000 to LD DE,#9000 the total length of the code increases by 9 bytes in this example. It leaves a residue of 00 23 39 30 30 b0 00 00 00 behind. Working with VS code does not generate this. Note: if you make changes during a MEMU session, this may result in code positional changes if hard coded, like moving a block of code.
+One quirk not applied in this implementation is the frustrating way the built in assembler dealt with changes after an assembly instruction was entered. For example, if you changed LD DE,#7000 to LD DE,#9000 the total length of the code increases by 9 bytes in this example. It leaves a residue of 00 23 39 30 30 b0 00 00 00 behind. Working with VS code does not generate this. Note: mtxdisassembly will strip out these reminants resulting in modified code lengths and if the coder had used fixed memory addresses, these strip outs could result in positional changes that may affect execution after recompiling in this extension. So bewary.
 
 The NODDY editor is not accessible in VS code using NODDY<return>. However, the workaround is this free form text version is at the very end of a BASIC listing and the very last entry, is to use REM NODDY as the placeholder trigger to allow NODDY programs and text pages to be constructed. 
 
@@ -151,7 +148,7 @@ This project is licensed under the GNU License. See the LICENSE file for more de
 
 ## Creation
 
-This extension was developed on a raspberry pi5 running Ubuntu 25.10 (ARM64). VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I decided to use a combination of Microsoft copilot which is integrated into VS code, where a user can select a range of non-Microsoft A.I. Models (from Q4 20026 to Q1 2026) and a range of browser A.I. tools (like duck.ai) to assist in the development of this MTX BASIC extension. The building blocks of the extension were taken from my own python MTX disassembly and hexdump programs. The majority of the underlying MTX BASIC (z80) building blocks were in place, but the one thing that I needed to get started, was a suitable JSON schema. I used https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension. Coding using A.I. tools needs a LOT  of patience and perseverance to get to a workable end result, even for the simplest of tasks. A lot of time is spent re-defining followed by extensive testing of any recommended code. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech MTX computer.
+This extension was developed on a raspberry pi5 running Ubuntu 25.10 (ARM64) and on piOS. VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I decided to use a combination of Microsoft copilot which is integrated into VS code, where a user can select a range of non-Microsoft A.I. Models (from Q4 20026 to Q1 2026) and a range of browser A.I. tools (like duck.ai) to assist in the development of this MTX BASIC extension. The building blocks of the extension were taken from my own python MTX disassembly and hexdump programs. The majority of the underlying MTX BASIC (z80) building blocks were in place, but the one thing that I needed to get started, was a suitable JSON schema. I used https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension. Coding using A.I. tools needs a LOT  of patience and perseverance to get to a workable end result, even for the simplest of tasks. A lot of time is spent re-defining followed by extensive testing of any recommended code. Different A.I. models also have different approaches, this has lead to unfortunate duplication or fallback fragility even when specifying "avoid complexity and duplication". Each new iteration of the A.I. models has improved over time. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech MTX computer.
 
 ## For more information
 
@@ -161,7 +158,7 @@ Mac users replace CMD for CTRL.
 2. "The Memotech Operator's Manual" by Spencer Bateson.
 3. "Mastering TypeScript 3" by Nathan Rozentals.
 4. http://www.primrosebank.net/computers/mtx/mtx512.htm
-5. MTX DISASSEMBLY utility (python) will take an existing binary (Program) file (e.g. .BAS or .mtx or .COM) and convert it to a .bas text file (BASIC listing).
+5. MTX DISASSEMBLY utility (python) will take an existing binary (Program) file (e.g. .BAS or .mtx) and convert it to a .bas text file (BASIC listing).
 6. MTX HEXDUMP utility (python) will generate a hexadecimal byte and ASCII character text file output of the binary (program) input file to assist in debugging (same as the utility "MTX PANEL COPY" which outputted PANEL to a dot matrix printer).
 
 

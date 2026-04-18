@@ -75,7 +75,7 @@
             "match": "-?\\b((([0-9]+\\.?[0-9]*)|(\\.[0-9]+))((e|E)(\\+|-)?[0-9]+)?)\\b"
           },
           { "name": "constant.hexadecimal.mtxbasic",
-            "match": "\\b(#[0-9A-Fa-f_]+|£[0-9A-Fa-f_]+)\\b"
+            "match": "\\b(#[0-9A-Fa-f_]+)\\b"
           },
           {
             "name": "keyword.control.mtxbasic",

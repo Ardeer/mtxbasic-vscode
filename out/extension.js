@@ -260,6 +260,13 @@ function activate(ctx) {
                 return [];
             }
             var rhsNonNull = rhsCheck !== null && rhsCheck !== void 0 ? rhsCheck : ''; // ensure a string for downstream validators
+            var rhsIssues = findExpressionIssues(rhsNonNull);
+            if (rhsIssues.length > 0) {
+                rhsIssues.forEach(function (issue) {
+                    vsDiags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(vsRange.start.line, vsRange.start.character + issue.index), new vscode.Position(vsRange.start.line, vsRange.start.character + issue.index + issue.length)), issue.message, vscode.DiagnosticSeverity.Error));
+                });
+                return [];
+            }
             var rhsIsString = (0, mtxstdfns_js_1.stringExprParts)(rhsNonNull);
             var rhsIsNumeric = (0, mtxstdfns_js_1.varExprParts)(rhsNonNull); //checks for numeric variables and numeric expressions
             // Treat parenthesised boolean/comparison expressions (e.g. "(PX=31)") as numeric subparts
@@ -316,6 +323,75 @@ function activate(ctx) {
         }
         return inString;
     } //END of isIndexInQuotedString function
+    function getUppercaseIdentifierMessage(token) {
+        if (!/[a-z]/.test(token)) {
+            return null;
+        }
+        return "Identifiers and keywords must be uppercase: \"".concat(token, "\" should be \"").concat(token.toUpperCase(), "\"");
+    }
+    function findExpressionCaseIssues(text) {
+        var issues = [];
+        if (!text)
+            return issues;
+        var inString = false;
+        for (var idx = 0; idx < text.length; idx++) {
+            var ch = text[idx];
+            if (ch === '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (!/[A-Za-z]/.test(ch)) {
+                continue;
+            }
+            if (idx > 0 && /[A-Za-z0-9$#]/.test(text[idx - 1])) {
+                continue;
+            }
+            var end = idx + 1;
+            while (end < text.length && /[A-Za-z0-9$]/.test(text[end])) {
+                end++;
+            }
+            var token = text.slice(idx, end);
+            var message = getUppercaseIdentifierMessage(token);
+            if (message) {
+                issues.push({ index: idx, length: token.length, message: message });
+            }
+            idx = end - 1;
+        }
+        return issues;
+    }
+    function findMistypedExpressionBuiltins(text) {
+        var issues = [];
+        if (!text)
+            return issues;
+        var pushIssue = function (index, token, message) {
+            if (isIndexInQuotedString(text, index))
+                return;
+            issues.push({ index: index, length: token.length, message: message });
+        };
+        var missingDollarFnRe = /\b(CHRS?|LEFT|MID|RIGHT|GR)\s*\(/gi;
+        var match;
+        while ((match = missingDollarFnRe.exec(text)) !== null) {
+            var token = (match[1] || '').toUpperCase();
+            var expected = token === 'CHR' || token === 'CHRS' ? 'CHR$(' : "".concat(token, "$(");
+            pushIssue(match.index, token, "Likely mistyped built-in function \"".concat(token, "\": use \"").concat(expected, "\""));
+        }
+        var nonFunctionStringRe = /\b(SPK\$|TIME\$|INKEY\$)\s*\(/gi;
+        while ((match = nonFunctionStringRe.exec(text)) !== null) {
+            var token = (match[1] || '').toUpperCase();
+            pushIssue(match.index, token, "Built-in string \"".concat(token, "\" is not a function; use \"").concat(token, "\" without parentheses"));
+        }
+        return issues;
+    }
+    function findExpressionIssues(text) {
+        var caseIssues = findExpressionCaseIssues(text);
+        if (caseIssues.length > 0) {
+            return caseIssues;
+        }
+        return findMistypedExpressionBuiltins(text);
+    }
     // Simple check: does the token look like a numeric literal (decimal, sci, or hex '#xxxx')?
     function isNumericLiteral(tok) {
         if (!tok)
@@ -498,6 +574,13 @@ function activate(ctx) {
             }
             if (/^".*"$/.test(text))
                 return "continue";
+            var expressionIssues = findExpressionIssues(text);
+            if (expressionIssues.length > 0) {
+                expressionIssues.forEach(function (issue) {
+                    res.push({ groupIndex: 1, message: issue.message });
+                });
+                return "continue";
+            }
             var candidate = (0, mtxstdfns_js_1.isParenthesisedBooleanExpression)(text) ? text.slice(1, -1) : text;
             var boolSpacing = (0, mtxstdfns_js_1.findBooleanOperatorSpacingIssues)(candidate);
             boolSpacing.forEach(function (issue) {
@@ -684,137 +767,210 @@ function activate(ctx) {
         return { errors: errors, noddyStartLine: noddyStartLine, codeBlockRanges: codeBlockRanges };
     } // END of validateLineNumbers function 
     function refreshDiagnostics(doc) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u;
         if (doc.languageId !== 'mtxbasic') {
             return;
         }
         // fresh diagnostics for this document run
         var diags = []; //needs to be here to avoid accumalation across multiple calls
+        function getSpecSignatures(spec) {
+            if (spec.signatures && spec.signatures.length > 0) {
+                return spec.signatures;
+            }
+            return [{ args: spec.args || [] }];
+        }
+        function formatSignatureCounts(signatures) {
+            var counts = signatures.map(function (signature) {
+                var requiredCount = signature.args.filter(function (arg) { return arg.required !== false; }).length;
+                var totalCount = signature.args.length;
+                return requiredCount === totalCount ? "".concat(totalCount) : "".concat(requiredCount, "-").concat(totalCount);
+            });
+            return counts.join(' or ');
+        }
+        function resolveSpecArgs(spec, providedCount) {
+            var signatures = getSpecSignatures(spec);
+            if (signatures.length === 1) {
+                return { args: signatures[0].args };
+            }
+            var exact = signatures.find(function (signature) { return signature.args.length === providedCount; });
+            if (exact) {
+                return { args: exact.args };
+            }
+            var optionalMatch = signatures.find(function (signature) {
+                var requiredCount = signature.args.filter(function (arg) { return arg.required !== false; }).length;
+                return providedCount >= requiredCount && providedCount <= signature.args.length;
+            });
+            if (optionalMatch) {
+                return { args: optionalMatch.args };
+            }
+            return {
+                args: signatures[0].args,
+                error: "".concat(spec.id, " requires ").concat(formatSignatureCounts(signatures), " argument(s)")
+            };
+        }
         // use batticks instead of single quotes for patterns used in regex expressions. with batticks `CHR\$` rather than 'CHR\\$'. Example below uses quotes and works
         //numfn's ASC() and VAL() uses a string to return a number. strfn's CHR$ uses a number to return a string
         // , expectEnd: true  is needed for standalone commands with no arguments to avoid false positives. Still to decide if needed for AND, NOT, OR and PI
         //use args[] as an alternative to commenting out commands to retain position in the list where validation is handled by a special block.
         var specs = [
-            { id: 'ABS', pattern: 'ABS', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-39, significantDigits: 9 }], expectEnd: true }, //float number range +/- 1.7014118E+38 and smallest positive 9.9999999E-39
-            { id: 'ADJSPR', pattern: 'ADJSPR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 5 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
-            { id: 'AND', pattern: 'AND', cmdname: 'stdcmd', args: [] }, //removed , expectEnd: true so that A AND B is valid
-            { id: 'ANGLE', pattern: 'ANGLE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: Math.PI * 2 }], expectEnd: true }, //float number, angle in radians
-            { id: 'ARC', pattern: 'ARC', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0 }], expectEnd: true }, //1st param is integer, 2nd param is float radians
-            { id: 'ASC', pattern: 'ASC', cmdname: 'numfn', args: [{ kind: 'expr', min: 0, max: 255 }], expectEnd: true }, // string expression. LET A=ASC(CHR$(I)) or PRINT ASC(CHR$(I)) are allowed
-            { id: 'ATN', pattern: 'ATN', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1E+9, max: 1E+9, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true }, //float number, range set to avoid div by 0 overflow
-            { id: 'ATTR', pattern: 'ATTR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 3 }, { kind: 'numeric', min: 0, max: 1 }], expectEnd: true },
-            { id: 'BAUD', pattern: 'BAUD', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 1 }, { kind: 'numeric', min: 75, max: 19200 }], expectEnd: true }, //BAUD allowable values 75, 110, 150, 300, 600, 1200, 2400, 4800, 9600, 19200
-            { id: 'CHR$', pattern: 'CHR\\$', cmdname: 'strfn', args: [{ kind: 'expr', min: 0, max: 255 }], expectEnd: true },
-            { id: 'CIRCLE', pattern: 'CIRCLE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }, { kind: 'numeric', min: 0.1, max: 255.0 }], expectEnd: true },
-            { id: 'CLEAR', pattern: 'CLEAR', cmdname: 'stdcmd', args: [], expectEnd: true },
-            { id: 'CLOCK', pattern: 'CLOCK', cmdname: 'strcmd', args: [{ kind: 'string', min: 0, max: 999999 }], expectEnd: true },
-            { id: 'CLS', pattern: 'CLS', cmdname: 'stdcmd', args: [], expectEnd: true },
-            { id: 'CODE', pattern: 'CODE', cmdname: 'stdcmd', args: [], expectEnd: true },
-            { id: 'COLOUR', pattern: 'COLOUR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 4 }, { kind: 'numeric', min: 0, max: 15 }], expectEnd: true },
-            { id: 'CONT', pattern: 'CONT', cmdname: 'stdcmd', args: [], expectEnd: true },
-            { id: 'COS', pattern: 'COS', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1E+9, max: 1E+9, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true }, //float number, range set to avoid div by 0 overflow
-            { id: 'CRVS', pattern: 'CRVS', cmdname: 'stdcmd',
+            { id: 'ABS', pattern: 'ABS', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-39, significantDigits: 9 }], expectEnd: true }, //float number range +/- 1.7014118E+38 and smallest positive 9.9999999E-39
+            { id: 'ADJSPR', pattern: 'ADJSPR', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 5 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
+            { id: 'AND', pattern: 'AND', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [] }, //removed , expectEnd: true so that A AND B is valid
+            { id: 'ANGLE', pattern: 'ANGLE', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: Math.PI * 2 }], expectEnd: true }, //float number, angle in radians
+            { id: 'ARC', pattern: 'ARC', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0 }], expectEnd: true }, //1st param is integer, 2nd param is float radians
+            { id: 'ASC', pattern: 'ASC', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'expr', min: 0, max: 255 }], expectEnd: true }, // string expression. LET A=ASC(CHR$(I)) or PRINT ASC(CHR$(I)) are allowed
+            { id: 'ATN', pattern: 'ATN', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -1E+9, max: 1E+9, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true }, //float number, range set to avoid div by 0 overflow
+            { id: 'ATTR', pattern: 'ATTR', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 3 }, { kind: 'numeric', min: 0, max: 1 }], expectEnd: true },
+            { id: 'BAUD',
+                pattern: 'BAUD',
+                cmdname: 'stdcmd',
+                syntaxForm: 'statement',
+                spacing: 'required',
+                resultKind: 'none',
+                validInExpression: false,
+                validAsStatement: true,
+                args: [
+                    { kind: 'numeric', min: 0, max: 1 },
+                    { kind: 'numeric', allowedValues: [75, 110, 150, 300, 600, 1200, 2400, 4800, 9600, 19200] }
+                ],
+                expectEnd: true
+            },
+            { id: 'CHR$', pattern: 'CHR\\$', cmdname: 'strfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'string', validInExpression: true, validAsStatement: false, args: [{ kind: 'expr', min: 0, max: 255 }], expectEnd: true },
+            { id: 'CIRCLE', pattern: 'CIRCLE', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }, { kind: 'numeric', min: 0.1, max: 255.0 }], expectEnd: true },
+            { id: 'CLEAR', pattern: 'CLEAR', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true },
+            { id: 'CLOCK', pattern: 'CLOCK', cmdname: 'strcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'string', min: 0, max: 999999 }], expectEnd: true },
+            { id: 'CLS', pattern: 'CLS', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true },
+            { id: 'CODE', pattern: 'CODE', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true },
+            { id: 'COLOUR', pattern: 'COLOUR', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 4 }, { kind: 'numeric', min: 0, max: 15 }], expectEnd: true },
+            { id: 'CONT', pattern: 'CONT', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true },
+            { id: 'COS', pattern: 'COS', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -1E+9, max: 1E+9, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true }, //float number, range set to avoid div by 0 overflow
+            { id: 'CRVS', pattern: 'CRVS', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true,
                 args: [{ kind: 'numeric', min: 0, max: 7 }, { kind: 'numeric', min: 0, max: 1 },
                     { kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 },
                     { kind: 'numeric', min: 1, max: 40 }, { kind: 'numeric', min: 1, max: 24 },
-                    { kind: 'numeric', min: 32, max: 40 }] // either 32 or 40 not a range. Maybe add a new flag to detect is Discrete (True) or is Continuous rage (False)
-                ,
-                expectEnd: true },
-            { id: 'CTLSPR', pattern: 'CTLSPR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 6 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
-            { id: 'CSR', pattern: 'CSR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 39 }, { kind: 'numeric', min: 0, max: 23 }], expectEnd: true }, //if VS 5 (0to39) if VS 4 (0to31)
-            { id: 'DATA', pattern: 'DATA', cmdname: 'stdcmd', args: [], expectEnd: false }, //requires at least one value or expr. no error checking as data can be anything but it must match up with the READ statements (typically a run time error)     
+                    { kind: 'numeric', min: 32, max: 40 }], expectEnd: true },
+            { id: 'CTLSPR', pattern: 'CTLSPR', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 6 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
+            { id: 'CSR', pattern: 'CSR', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 39 }, { kind: 'numeric', min: 0, max: 23 }], expectEnd: true }, //if VS 5 (0to39) if VS 4 (0to31)
+            { id: 'DATA', pattern: 'DATA', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: false }, //requires at least one value or expr. no error checking as data can be anything but it must match up with the READ statements (typically a run time error)     
             //{ id: 'DIM', pattern: 'DIM',  cmdname:'stdcmd'  ,args: [{ kind: 'expr', min: 1}], expectEnd: true }, // size ofthe array is dependent on RAM available. So DIM A(1000) is OK and DIM A(100,100) is OK but difficult to be specific.
-            { id: 'DRAW', pattern: 'DRAW', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
-            { id: 'DSI', pattern: 'DSI', cmdname: 'strcmd', args: [], expectEnd: true },
-            { id: 'EDITOR', pattern: 'EDITOR', cmdname: 'strcmd', args: [{ kind: 'strexpr' }], expectEnd: true }, //typically A$ format
+            { id: 'DRAW', pattern: 'DRAW', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
+            { id: 'DSI', pattern: 'DSI', cmdname: 'strcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true },
+            { id: 'EDITOR', pattern: 'EDITOR', cmdname: 'strcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'strexpr' }], expectEnd: true }, //typically A$ format
             //{ id: 'ELSE', pattern: 'ELSE', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE e.g. ELSE LET B=20
-            { id: 'EXP', pattern: 'EXP', cmdname: 'numfn', args: [{ kind: 'numeric', min: -88.0, max: 88.0, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
+            { id: 'EXP', pattern: 'EXP', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -88.0, max: 88.0, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
             //{ id: 'FOR', pattern: 'FOR', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE SPECIAL
-            { id: 'GENPAT', pattern: 'GENPAT', cmdname: 'stdcmd',
+            { id: 'GENPAT', pattern: 'GENPAT', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true,
                 args: [{ kind: 'numeric', min: 0, max: 7 }, { kind: 'numeric', min: 0, max: 255 },
                     { kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 255 },
                     { kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 255 },
                     { kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 255 },
                     { kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 255 }],
                 expectEnd: true },
-            { id: 'GOSUB', pattern: 'GOSUB', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }] }, //CONTROL STRUCTURE range based on line number. Cannot be an expression. Can be a list of linenumbers associated with ON..GOTO
-            { id: 'GOTO', pattern: 'GOTO', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }] }, //CONTROL STRUCTURE  range based on line number. Cannot be an expression. Can be a list of linenumbers associated with ON..GOTO
-            { id: 'GR$', pattern: 'GR\\$', cmdname: 'strfn', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }, { kind: 'numeric', min: 0, max: 7 }], expectEnd: true },
+            { id: 'GOSUB', pattern: 'GOSUB', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 65535 }] }, //CONTROL STRUCTURE range based on line number. Cannot be an expression. Can be a list of linenumbers associated with ON..GOTO
+            { id: 'GOTO', pattern: 'GOTO', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 65535 }] }, //CONTROL STRUCTURE  range based on line number. Cannot be an expression. Can be a list of linenumbers associated with ON..GOTO
+            { id: 'GR$', pattern: 'GR\\$', cmdname: 'strfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'string', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }, { kind: 'numeric', min: 0, max: 7 }], expectEnd: true },
             //{ id: 'IF', pattern: 'IF', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE e.g. IF A>=0 A followed by relational operator <>|<=|>=|=|<|> and can use AND,OR, NOT
-            { id: 'INK', pattern: 'INK', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 15 }], expectEnd: true }, //CONTROL STRUCTURE  
-            { id: 'INKEY$', pattern: 'INKEY\\$', cmdname: 'strcmd', args: [], expectEnd: true },
-            { id: 'INP', pattern: 'INP', cmdname: 'numfn', args: [{ kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
+            { id: 'INK', pattern: 'INK', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 15 }], expectEnd: true }, //CONTROL STRUCTURE  
+            { id: 'INKEY$', pattern: 'INKEY\\$', cmdname: 'strcmd', syntaxForm: 'bare-value', spacing: 'none', resultKind: 'string', validInExpression: true, validAsStatement: false, args: [], expectEnd: true },
+            { id: 'INP', pattern: 'INP', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
             //{ id: 'INPUT', pattern: 'INPUT',  cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, // Can have string before a variable list. allows comma and semicolon between exprs and at end of line. Only allows ; or , before a : if another command after it (common to all)
-            { id: 'INT', pattern: 'INT', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
-            { id: 'LEFT$', pattern: 'LEFT\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=LEFT$("str..",num) = 28chars or more 
-            { id: 'LEN', pattern: 'LEN', cmdname: 'numfn', args: [{ kind: 'expr' }], expectEnd: true }, // string expression. must have a space after LEN not to confuse with an array which has no space
+            { id: 'INT', pattern: 'INT', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
+            { id: 'LEFT$', pattern: 'LEFT\\$', cmdname: 'strfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'string', validInExpression: true, validAsStatement: false, args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=LEFT$("str..",num) = 28chars or more 
+            { id: 'LEN', pattern: 'LEN', cmdname: 'numfn', syntaxForm: 'spaced-call', spacing: 'required', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'expr' }], expectEnd: true }, // string expression. must have a space after LEN not to confuse with an array which has no space
             //{ id: 'LET', pattern: 'LET',  cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true },
-            { id: 'LINE', pattern: 'LINE', cmdname: 'stdcmd',
+            { id: 'LINE', pattern: 'LINE', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true,
                 args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 },
                     { kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 },] // either 32 or 40 not a range
                 ,
                 expectEnd: true },
             //{ id: 'LPRINT', pattern: 'LPRINT',  cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, // Can have string before a variable list. allows comma and semicolon between exprs and at end of line. Only allows ; or , before a : if another command after it (common to all)
-            { id: 'LN', pattern: 'LN', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
-            { id: 'LOAD', pattern: 'LOAD', cmdname: 'strcmd', args: [{ kind: 'string', min: 0, max: 14 }], expectEnd: true },
-            { id: 'MID$', pattern: 'MID\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=MID$("str..",num,num) = 28chars or more 
-            { id: 'MOD', pattern: 'MOD', cmdname: 'numfn', args: [{ kind: 'numeric' }, { kind: 'numeric' }], expectEnd: true }, //range to be confirmed
-            { id: 'MVSPR', pattern: 'MVSPR', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 8 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true }, //3rd param needs for detail
-            { id: 'NEXT', pattern: 'NEXT', cmdname: 'stdcmd', args: [{ kind: 'expr', required: false }], expectEnd: true }, //CONTROL STRUCTURE MUST BE Alphanumeric expr. No expr is also valid
-            { id: 'NEW', pattern: 'NEW', cmdname: 'stdcmd', args: [], expectEnd: true },
-            { id: 'NODDY', pattern: 'NODDY', cmdname: 'stdcmd', args: [], expectEnd: true, description: 'Marks the start of NODDY text language section' }, //setup similar to CODE
-            { id: 'NOT', pattern: 'NOT', cmdname: 'stdcmd', args: [] }, // removed , expectEnd: true so that A=NOT*5 is valid
+            { id: 'LN', pattern: 'LN', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
+            { id: 'LOAD', pattern: 'LOAD', cmdname: 'strcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'string', min: 0, max: 14 }], expectEnd: true },
+            { id: 'MID$', pattern: 'MID\\$', cmdname: 'strfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'string', validInExpression: true, validAsStatement: false, args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=MID$("str..",num,num) = 28chars or more 
+            { id: 'MOD', pattern: 'MOD', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric' }, { kind: 'numeric' }], expectEnd: true }, //range to be confirmed
+            { id: 'MVSPR', pattern: 'MVSPR', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 1, max: 8 }, { kind: 'numeric', min: 0, max: 32 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true }, //3rd param needs for detail
+            { id: 'NEXT', pattern: 'NEXT', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'expr', required: false }], expectEnd: true }, //CONTROL STRUCTURE MUST BE Alphanumeric expr. No expr is also valid
+            { id: 'NEW', pattern: 'NEW', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true },
+            { id: 'NODDY', pattern: 'NODDY', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true, description: 'Marks the start of NODDY text language section' }, //setup similar to CODE
+            { id: 'NOT', pattern: 'NOT', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [] }, // removed , expectEnd: true so that A=NOT*5 is valid
             //{ id: 'ON', pattern: 'ON', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}] }, //CONTROL STRUCTURE and associated with GOTO or GOSUB
-            { id: 'OR', pattern: 'OR', cmdname: 'stdcmd', args: [] }, // removed , expectEnd: true so that A=OR*5 is valid
-            { id: 'OUT', pattern: 'OUT', cmdname: 'numfn', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
-            { id: 'PAPER', pattern: 'PAPER', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 15 }], expectEnd: true },
-            { id: 'PAUSE', pattern: 'PAUSE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 100000 }], expectEnd: true }, //range to be confirmed
-            { id: 'PEEK', pattern: 'PEEK', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true },
-            { id: 'PHI', pattern: 'PHI', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0 }], expectEnd: true }, //float number, angle in radians
-            { id: 'PI', pattern: 'PI', cmdname: 'stdcmd', args: [] }, //removed , expectEnd: true so that A=PI*5 is valid
-            { id: 'PLOD', pattern: 'PLOD', cmdname: 'strcmd', args: [{ kind: 'string' }], expectEnd: true, description: 'Execute a NODDY program' },
-            { id: 'PLOT', pattern: 'PLOT', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }], expectEnd: true },
-            { id: 'POKE', pattern: 'POKE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
+            { id: 'OR', pattern: 'OR', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [] }, // removed , expectEnd: true so that A=OR*5 is valid
+            { id: 'OUT', pattern: 'OUT', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
+            { id: 'PAPER', pattern: 'PAPER', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 15 }], expectEnd: true },
+            { id: 'PAUSE', pattern: 'PAUSE', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 100000 }], expectEnd: true }, //range to be confirmed
+            { id: 'PEEK', pattern: 'PEEK', cmdname: 'stdcmd', syntaxForm: 'spaced-call', spacing: 'required', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true },
+            { id: 'PHI', pattern: 'PHI', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0 }], expectEnd: true }, //float number, angle in radians
+            { id: 'PI', pattern: 'PI', cmdname: 'stdcmd', syntaxForm: 'bare-value', spacing: 'none', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [] }, //removed , expectEnd: true so that A=PI*5 is valid
+            { id: 'PLOD', pattern: 'PLOD', cmdname: 'strcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'string' }], expectEnd: true, description: 'Execute a NODDY program' },
+            { id: 'PLOT', pattern: 'PLOT', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 255 }, { kind: 'numeric', min: 0, max: 191 }], expectEnd: true },
+            { id: 'POKE', pattern: 'POKE', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 65535 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
             //{ id: 'PRINT', pattern: 'PRINT',  cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, // allows comma and semicolon between exprs and at end of line. Only allows ; or , before a : if another command after it (common to all)
-            { id: 'RAND', pattern: 'RAND', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-39, significantDigits: 9 }], expectEnd: true },
-            { id: 'READ', pattern: 'READ', cmdname: 'stdcmd', args: [], expectEnd: false }, //requires at least one value or expr. no error checking as data can be anything but it must match up with the DATA statements (typically a run time error)     
-            { id: 'REM', pattern: 'REM', cmdname: 'strcmd', args: [{ kind: 'string' }], expectEnd: true }, // can be anything - how do we avoid false positives like REM valid information where code determines that valid or Valid or VALID is part of VAL!
-            { id: 'RESTORE', pattern: 'RESTORE', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true },
-            { id: 'RETURN', pattern: 'RETURN', cmdname: 'stdcmd', args: [], expectEnd: true },
-            { id: 'RIGHT$', pattern: 'RIGHT\\$', cmdname: 'strfn', args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=RIGHT$("str..",num) = 28chars or more 
-            { id: 'RND', pattern: 'RND', cmdname: 'stdcmd', args: [] }, //removed , expectEnd: true so that A=RND*5 is valid
-            { id: 'ROM', pattern: 'ROM', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 255 }], expectEnd: true }, //range to be confirmed
-            { id: 'RUN', pattern: 'RUN', cmdname: 'stdcmd', args: [], expectEnd: true },
-            { id: 'SAVE', pattern: 'SAVE', cmdname: 'strcmd', args: [{ kind: 'string', min: 0, max: 14 }], expectEnd: true },
-            { id: 'SBUF', pattern: 'SBUF', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 1, max: 8160 }], expectEnd: true }, //range confirmed, see appendix 8
-            { id: 'SGN', pattern: 'SGN', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1, max: 1 }], expectEnd: true }, //-1 if -ve 0 if 0 and +1 if +ve
-            { id: 'SIN', pattern: 'SIN', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1E+9, max: 1E+9, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true }, //float number, range set to avoid div by 0 overflow
-            { id: 'SOUND', pattern: 'SOUND', cmdname: 'stdcmd', // 3 (direct sound) or 7 parameter continuous sound, more flexible options allowed
-                args: [{ kind: 'numeric', min: 0, max: 4 }, { kind: 'numeric', min: 0, max: 8192 }, //0-1023 for direct and 0 to 8192 for continuous sound
-                    { kind: 'numeric', min: 0, max: 1023 }, { kind: 'numeric', min: -8192, max: 8192 }, //vol 0-15 for direct sound, 0-1023 for continuous sound. Frequency change +/-8192
-                    { kind: 'numeric', min: -1023, max: 1023 }, { kind: 'numeric', min: 0, max: 65536 }, //vol change +/- 32767 but recommend +/-1023. For time, measured in 1/64ths of a second, max duration of 1024s over 17mins
-                    { kind: 'numeric', min: 0, max: 1 }],
-                expectEnd: true },
-            { id: 'SPK$', pattern: 'SPK\\$', cmdname: 'strcmd', args: [], expectEnd: true },
-            { id: 'SPRITE', pattern: 'SPRITE', cmdname: 'stdcmd',
+            { id: 'RAND', pattern: 'RAND', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-39, significantDigits: 9 }], expectEnd: true },
+            { id: 'READ', pattern: 'READ', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: false }, //requires at least one value or expr. no error checking as data can be anything but it must match up with the DATA statements (typically a run time error)     
+            { id: 'REM', pattern: 'REM', cmdname: 'strcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'string' }], expectEnd: true }, // can be anything - how do we avoid false positives like REM valid information where code determines that valid or Valid or VALID is part of VAL!
+            { id: 'RESTORE', pattern: 'RESTORE', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true },
+            { id: 'RETURN', pattern: 'RETURN', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true },
+            { id: 'RIGHT$', pattern: 'RIGHT\\$', cmdname: 'strfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'string', validInExpression: true, validAsStatement: false, args: [{ kind: 'string' }, { kind: 'numeric', min: 0, max: 120 }], expectEnd: true }, // editor is 158 chars minus the strcmd, so limit to say 120 chars based on lnum LET NAME$=RIGHT$("str..",num) = 28chars or more 
+            { id: 'RND', pattern: 'RND', cmdname: 'stdcmd', syntaxForm: 'bare-value', spacing: 'none', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [] }, //removed , expectEnd: true so that A=RND*5 is valid
+            { id: 'ROM', pattern: 'ROM', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 1, max: 255 }], expectEnd: true }, //range to be confirmed
+            { id: 'RUN', pattern: 'RUN', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true },
+            { id: 'SAVE', pattern: 'SAVE', cmdname: 'strcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'string', min: 0, max: 14 }], expectEnd: true },
+            { id: 'SBUF', pattern: 'SBUF', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 1, max: 8160 }], expectEnd: true }, //range confirmed, see appendix 8
+            { id: 'SGN', pattern: 'SGN', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -1, max: 1 }], expectEnd: true }, //-1 if -ve 0 if 0 and +1 if +ve
+            { id: 'SIN', pattern: 'SIN', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -1E+9, max: 1E+9, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true }, //float number, range set to avoid div by 0 overflow
+            // SOUND command with signatures for 3 or 7 arguments
+            {
+                id: 'SOUND',
+                pattern: 'SOUND',
+                cmdname: 'stdcmd',
+                syntaxForm: 'statement',
+                spacing: 'required',
+                resultKind: 'none',
+                validInExpression: false,
+                validAsStatement: true,
+                // Define argument specs for signatures
+                signatures: [
+                    {
+                        args: [
+                            { kind: 'numeric', min: 0, max: 4 },
+                            { kind: 'numeric', min: 0, max: 8192 },
+                            { kind: 'numeric', min: 0, max: 1023 }
+                        ]
+                    },
+                    {
+                        args: [
+                            { kind: 'numeric', min: 0, max: 4 },
+                            { kind: 'numeric', min: 0, max: 8192 },
+                            { kind: 'numeric', min: 0, max: 1023 },
+                            { kind: 'numeric', min: -8192, max: 8192 },
+                            { kind: 'numeric', min: -1023, max: 1023 },
+                            { kind: 'numeric', min: 0, max: 65536 },
+                            { kind: 'numeric', min: 0, max: 1 }
+                        ]
+                    }
+                ],
+                expectEnd: true
+            },
+            { id: 'SPK$', pattern: 'SPK\\$', cmdname: 'strcmd', syntaxForm: 'bare-value', spacing: 'none', resultKind: 'string', validInExpression: true, validAsStatement: false, args: [], expectEnd: true },
+            { id: 'SPRITE', pattern: 'SPRITE', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true,
                 args: [{ kind: 'numeric', min: 1, max: 32 }, { kind: 'numeric', min: 0, max: 127 }, // size 0 = 0 to 127 and size 1 = 0 to 31
                     { kind: 'numeric', min: -4095, max: 4095 }, { kind: 'numeric', min: -4095, max: 4095 },
                     { kind: 'numeric', min: -128, max: 127 }, { kind: 'numeric', min: -128, max: 127 }, //maxs to be confirmed
                     { kind: 'numeric', min: 0, max: 15 }],
                 expectEnd: true },
-            { id: 'SQR', pattern: 'SQR', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
+            { id: 'SQR', pattern: 'SQR', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true },
             //{ id: 'STEP', pattern: 'STEP', cmdname:'stdcmd'  ,args: [{ kind: 'numeric'}], expectEnd: true }, //CONTROL STRUCTURE . Float number, e.g. 0.1
-            { id: 'STOP', pattern: 'STOP', cmdname: 'stdcmd', args: [], expectEnd: true },
-            { id: 'STR$', pattern: 'STR\\$', cmdname: 'strfn', args: [{ kind: 'expr', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-39, significantDigits: 9 }], expectEnd: true }, // e.g. STR(2+2) returns 4 as a string "4"
-            { id: 'TAN', pattern: 'TAN', cmdname: 'numfn', args: [{ kind: 'numeric', min: -1E+9, max: 1E+9, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true }, //float number, range set to avoid div by 0 overflow
+            { id: 'STOP', pattern: 'STOP', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'none', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [], expectEnd: true },
+            { id: 'STR$', pattern: 'STR\\$', cmdname: 'strfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'string', validInExpression: true, validAsStatement: false, args: [{ kind: 'expr', min: -1.7014118E+38, max: 1.7014118E+38, absMin: 9.9999999E-39, significantDigits: 9 }], expectEnd: true }, // e.g. STR(2+2) returns 4 as a string "4"
+            { id: 'TAN', pattern: 'TAN', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: -1E+9, max: 1E+9, absMin: 9.9999999E-9, significantDigits: 9 }], expectEnd: true }, //float number, range set to avoid div by 0 overflow
             //{ id: 'THEN', pattern: 'THEN', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE e.g. THEN LET B=10
-            { id: 'TIME$', pattern: 'TIME\\$', cmdname: 'strcmd', args: [], expectEnd: true },
+            { id: 'TIME$', pattern: 'TIME\\$', cmdname: 'strcmd', syntaxForm: 'bare-value', spacing: 'none', resultKind: 'string', validInExpression: true, validAsStatement: false, args: [], expectEnd: true },
             //{ id: 'TO', pattern: 'TO', cmdname:'stdcmd'  ,args: [{ kind: 'expr'}], expectEnd: true }, //CONTROL STRUCTURE
-            { id: 'USER', pattern: 'USER', cmdname: 'stdcmd', args: [{ kind: 'string' }], }, //to be confirmed, a bit like LET
-            { id: 'USR', pattern: 'USR', cmdname: 'numfn', args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true }, // typically starts at user free memory at 16384 or 32768 as before is ROM code
-            { id: 'VAL', pattern: 'VAL', cmdname: 'numfn', args: [{ kind: 'expr' }], expectEnd: true }, // string expression. range to be confirmed
-            { id: 'VIEW', pattern: 'VIEW', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 7 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
-            { id: 'VS', pattern: 'VS', cmdname: 'stdcmd', args: [{ kind: 'numeric', min: 0, max: 7 }], expectEnd: true },
+            { id: 'USER', pattern: 'USER', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'string' }] }, //to be confirmed, a bit like LET
+            { id: 'USR', pattern: 'USR', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: 0, max: 65535 }], expectEnd: true }, // typically starts at user free memory at 16384 or 32768 as before is ROM code
+            { id: 'VAL', pattern: 'VAL', cmdname: 'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'expr' }], expectEnd: true }, // string expression. range to be confirmed
+            { id: 'VIEW', pattern: 'VIEW', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 7 }, { kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
+            { id: 'VS', pattern: 'VS', cmdname: 'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 7 }], expectEnd: true },
             // add other specs here; use '\\$' in pattern for names ending with $
             // illegal keywords ASSEM|AUTO|EDIT|FRE|LIST|LLIST|PANEL|VERIFY
         ];
@@ -834,7 +990,7 @@ function activate(ctx) {
                 re: re,
                 expectEnd: spec.expectEnd,
                 validate: function (groups, rawMatch) {
-                    var _a, _b, _c, _d;
+                    var _a, _b, _c, _d, _e, _f;
                     var res = [];
                     /**                 BEFORE the for loop (spacing and argument count errors):
                                         groupIndex: 0  // Command-level errors (spacing, unexpected args)
@@ -857,14 +1013,16 @@ function activate(ctx) {
                         var trimRawMatch = rawMatch.trimStart(); //trim leading spaces to get accurate position
                         var avoidArgs = trimRawMatch.toUpperCase().indexOf(spec.id) + spec.id.length; //find first space after command name                 
                         var argText = (_b = groups[0]) !== null && _b !== void 0 ? _b : '';
-                        var hasArgsSpec = !!(spec.args && spec.args.length > 0);
+                        var specSignatures = getSpecSignatures(spec);
+                        var defaultArgs = ((_c = specSignatures[0]) === null || _c === void 0 ? void 0 : _c.args) || [];
+                        var hasArgsSpec = specSignatures.some(function (signature) { return signature.args.length > 0; });
                         // No-arg commands: flag multiple spaces before any following token (e.g. RETURN  ELSE)
                         if (!hasArgsSpec) {
                             var tail = trimRawMatch.slice(avoidArgs);
                             var mSpace = /^(\s+)(\S+)?/.exec(tail);
-                            var space = (_c = mSpace === null || mSpace === void 0 ? void 0 : mSpace[1]) !== null && _c !== void 0 ? _c : '';
+                            var space = (_d = mSpace === null || mSpace === void 0 ? void 0 : mSpace[1]) !== null && _d !== void 0 ? _d : '';
                             var hasFollowing = !!(mSpace && mSpace[2]);
-                            var _e = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _e.multiSpaceYes, msg2 = _e.msg2;
+                            var _g = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _g.multiSpaceYes, msg2 = _g.msg2;
                             if (multiSpaceYes && hasFollowing && spec.id !== 'REM') {
                                 res.push({ groupIndex: 0, message: msg2 });
                             }
@@ -872,8 +1030,9 @@ function activate(ctx) {
                         var argPos = argText ? trimRawMatch.indexOf(argText, avoidArgs) : -1;
                         // extract space between COMMAND and first argument/parameter
                         // Check if this command has optional arguments
-                        var isOptionalArg = spec.args && spec.args.length > 0 && spec.args[0].required === false;
+                        var isOptionalArg = defaultArgs.length > 0 && defaultArgs[0].required === false;
                         var hasNoArgument = !argText || argText.trim() === '';
+                        var spacingRule = (_e = spec.spacing) !== null && _e !== void 0 ? _e : ((0, mtxstdfns_js_1.isSpaceNeeded)(spec.id) ? 'required' : 'forbidden');
                         // Special handling for commands with optional arguments (like NEXT)
                         if (isOptionalArg && hasNoArgument) {
                             // No argument provided for optional parameter - only check for multiple spaces
@@ -881,7 +1040,7 @@ function activate(ctx) {
                             var spaceMatch = /^(\s+)/.exec(tailAfterCmd);
                             if (spaceMatch) {
                                 var space = spaceMatch[1];
-                                var _f = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _f.multiSpaceYes, msg2 = _f.msg2;
+                                var _h = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _h.multiSpaceYes, msg2 = _h.msg2;
                                 if (multiSpaceYes) {
                                     res.push({ groupIndex: 0, message: msg2 });
                                 }
@@ -891,17 +1050,16 @@ function activate(ctx) {
                         else if (argText && argText.trim() && argPos >= 0) {
                             // Argument provided - check all spacing rules
                             var space = trimRawMatch.slice(avoidArgs, argPos);
-                            var spaceYes = (0, mtxstdfns_js_1.isSpaceNeeded)(spec.id); //true needs space. false then no space
-                            var _g = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _g.spaceMissingYes, msg0 = _g.msg0;
-                            var _h = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _h.multiSpaceYes, msg2 = _h.msg2;
+                            var _j = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _j.spaceMissingYes, msg0 = _j.msg0;
+                            var _k = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _k.multiSpaceYes, msg2 = _k.msg2;
                             var msg1 = "Remove the space(s) after the command or between the function and parenthesis";
-                            if (spaceMissingYes && spaceYes) {
+                            if (spaceMissingYes && spacingRule === 'required') {
                                 res.push({ groupIndex: 0, message: msg0 });
                             } // option to delete this and return result with other results later
-                            if (!spaceMissingYes && !spaceYes) {
+                            if (!spaceMissingYes && spacingRule === 'forbidden') {
                                 res.push({ groupIndex: 0, message: msg1 });
                             } // option to delete this and return result with other results later           
-                            if ((multiSpaceYes && spaceYes) && spec.id !== 'REM') {
+                            if ((multiSpaceYes && spacingRule === 'required') && spec.id !== 'REM') {
                                 res.push({ groupIndex: 0, message: msg2 });
                             } // option to delete this and return result with other results later
                         }
@@ -911,7 +1069,7 @@ function activate(ctx) {
                             var spaceMatch = /^(\s+)/.exec(tailAfterCmd);
                             if (spaceMatch) {
                                 var space = spaceMatch[1];
-                                var _j = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _j.multiSpaceYes, msg2 = _j.msg2;
+                                var _l = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _l.multiSpaceYes, msg2 = _l.msg2;
                                 if (multiSpaceYes) {
                                     res.push({ groupIndex: 0, message: msg2 });
                                 }
@@ -926,22 +1084,15 @@ function activate(ctx) {
                         var s = (0, mtxstdfns_js_1.stripOuterParentheses)(groups[0] || '');
                         groups[0] = s;
                     }
-                    // Use splitTopLevel so commas inside parentheses or quoted strings are ignored
-                    var splitGroups = (0, mtxstdfns_js_1.splitTopLevel)(groups[0] || '') || []; // replaces code below
                     var argsText = (groups[0] || '').trim();
-                    var want = spec.args || [];
                     var parts = (0, mtxstdfns_js_1.splitTopLevel)(argsText); //why is this not splitting when args are present within function calls?
-                    // special case as SOUND with 1st 3 params is also OK as well as the long 7 params version
-                    if (spec.id === "SOUND") {
-                        if (splitGroups.length === 3) { //7 args is normal, 3 args is the shortened version
-                            //skip additonal arguments
-                            argsText = (0, mtxstdfns_js_1.trimCommaList)(argsText, 3);
-                            want = (0, mtxstdfns_js_1.trimArray)(want, 3);
-                        }
-                        else if (parts.length !== 7) {
-                            res.push({ groupIndex: 1, message: "".concat(spec.id, " requires either 3 or 7 argument(s)") });
-                        }
-                    } //END of SOUND argument check
+                    var providedCount = argsText ? parts.length : 0;
+                    var resolvedArgs = resolveSpecArgs(spec, providedCount);
+                    if (resolvedArgs.error) {
+                        res.push({ groupIndex: 1, message: resolvedArgs.error });
+                        return res;
+                    }
+                    var want = resolvedArgs.args;
                     if (want.length === 0) {
                         if (argsText && spec.expectEnd) {
                             res.push({ groupIndex: 1, message: "".concat(spec.id, ": unexpected argument(s): ").concat(argsText) });
@@ -966,13 +1117,20 @@ function activate(ctx) {
                     }
                     for (var i = 0; i < want.length; i++) {
                         var a = want[i];
-                        var text = (_d = parts[i]) !== null && _d !== void 0 ? _d : '';
+                        var text = (_f = parts[i]) !== null && _f !== void 0 ? _f : '';
                         // Skip validation if argument is optional and empty
                         if (a.required === false && !text.trim()) {
                             continue;
                         }
                         if (a.required && !text) {
                             res.push({ groupIndex: 1, message: "argument ".concat(i + 1, " required") });
+                            continue;
+                        }
+                        var expressionIssues = findExpressionIssues(text);
+                        if (expressionIssues.length > 0) {
+                            expressionIssues.forEach(function (issue) {
+                                res.push({ groupIndex: 1, message: issue.message });
+                            });
                             continue;
                         }
                         var isNumExprValid = (0, mtxstdfns_js_1.isValidVarExprArithmetic)(text); //Note isValidVarExprArithmetic tests without any parentheses
@@ -1003,6 +1161,14 @@ function activate(ctx) {
                                         res.push({ groupIndex: 1, message: "argument ".concat(i + 1, " is not a valid number (got ").concat(text, ")") });
                                     }
                                     else {
+                                        if (a.allowedValues && a.allowedValues.length > 0) {
+                                            if (!a.allowedValues.includes(nval)) {
+                                                res.push({
+                                                    groupIndex: 1,
+                                                    message: "argument ".concat(i + 1, " must be one of ").concat(a.allowedValues.join(', '), " (got ").concat(text, ")")
+                                                });
+                                            }
+                                        }
                                         // existing min/max checks using nval
                                         if (a.min !== undefined && a.max !== undefined && Number.isSafeInteger(a.min) && Number.isSafeInteger(a.max)) {
                                             if (!Number.isInteger(nval) || nval < a.min || nval > a.max) {
@@ -1126,7 +1292,7 @@ function activate(ctx) {
         var knownKeywordSet = new Set(allKnownKeywords.map(function (k) { return k.toUpperCase(); }));
         var unsupportedEditorKeywordSet = new Set(unsupportedEditorKeywords.map(function (k) { return k.toUpperCase(); }));
         var standaloneFunctionNames = specs
-            .filter(function (spec) { return spec.cmdname === 'numfn' || spec.cmdname === 'strfn'; })
+            .filter(function (spec) { return spec.validAsStatement === false && spec.resultKind !== 'none'; })
             .map(function (spec) { return spec.id.toUpperCase(); })
             .sort(function (left, right) { return right.length - left.length; });
         function escapeRegex(text) {
@@ -1149,12 +1315,11 @@ function activate(ctx) {
             var stripped = stripTrailingCommentUnquoted(text);
             var leadingTrim = stripped.length - stripped.trimStart().length;
             var trimmed = stripped.trimStart();
-            var upperTrimmed = trimmed.toUpperCase();
             for (var _i = 0, standaloneFunctionNames_1 = standaloneFunctionNames; _i < standaloneFunctionNames_1.length; _i++) {
                 var functionName = standaloneFunctionNames_1[_i];
                 var trailingGuard = functionName.endsWith('$') ? '(?=$|[^A-Z0-9_])' : '\\b';
                 var functionRe = new RegExp("^(".concat(escapeRegex(functionName), ")").concat(trailingGuard, "(.*)$"));
-                var match = functionRe.exec(upperTrimmed);
+                var match = functionRe.exec(trimmed);
                 if (!match) {
                     continue;
                 }
@@ -1200,7 +1365,7 @@ function activate(ctx) {
                 return new vscode.Diagnostic(range, "Keywords cannot be used as variable names: \"".concat(varName, "\""), vscode.DiagnosticSeverity.Error);
             }
             var builtInVars = new Set(['INKEY$', 'SPK$', 'TIME$']);
-            if (builtInVars.has(varName.toUpperCase())) {
+            if (builtInVars.has(varName)) {
                 return null;
             }
             return new vscode.Diagnostic(range, "Assignment requires LET command - use 'LET ".concat(varName, "='"), vscode.DiagnosticSeverity.Error);
@@ -1222,6 +1387,12 @@ function activate(ctx) {
                 return null;
             }
             var token = firstWordMatch[1] || '';
+            var tokenCaseMessage = getUppercaseIdentifierMessage(token);
+            if (tokenCaseMessage) {
+                var startChar_1 = absStart + (text.indexOf(token) >= 0 ? text.indexOf(token) : 0);
+                var endChar_1 = startChar_1 + token.length;
+                return new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar_1), new vscode.Position(lineNum, endChar_1)), tokenCaseMessage, vscode.DiagnosticSeverity.Error);
+            }
             var upperToken = token.toUpperCase();
             if (knownKeywordSet.has(upperToken)) {
                 return null;
@@ -1344,8 +1515,16 @@ function activate(ctx) {
             var selectorExprRaw = onMatch[1], branchKeyword = onMatch[2], targetsRaw = onMatch[3];
             var selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
             selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/, '$1');
+            var selectorIssues = findExpressionIssues(selectorExpr);
+            selectorIssues.forEach(function (issue) {
+                var _a;
+                var idx = text.indexOf(selectorExpr, (_a = onMatch.index) !== null && _a !== void 0 ? _a : 0);
+                var startChar = absStart + (idx >= 0 ? idx : 0) + issue.index;
+                var endChar = startChar + issue.length;
+                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(labelPrefix, " ").concat(branchKeyword, ": ").concat(issue.message), vscode.DiagnosticSeverity.Error));
+            });
             var selectorType = (0, mtxstdfns_js_1.classifyExpr)(selectorExpr);
-            if (!selectorType.hasNumeric) {
+            if (selectorIssues.length === 0 && !selectorType.hasNumeric) {
                 var idx = text.indexOf(selectorExpr, (_a = onMatch.index) !== null && _a !== void 0 ? _a : 0);
                 var startChar = absStart + (idx >= 0 ? idx : 0);
                 var endChar = startChar + selectorExpr.length;
@@ -1370,13 +1549,15 @@ function activate(ctx) {
                     }
                 });
             }
-            runValidatorsOnSegment(selectorExpr, validators, function (err, rawMatch, absIdx) {
-                if (!err || typeof absIdx !== 'number' || isInQuotedStringAt(doc.lineAt(lineNum).text, absIdx))
-                    return;
-                var startChar = absIdx;
-                var endChar = startChar + Math.max(1, rawMatch.length);
-                diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(labelPrefix, " ").concat(branchKeyword, " selector: ").concat(err.message), vscode.DiagnosticSeverity.Error));
-            }, absStart);
+            if (selectorIssues.length === 0) {
+                runValidatorsOnSegment(selectorExpr, validators, function (err, rawMatch, absIdx) {
+                    if (!err || typeof absIdx !== 'number' || isInQuotedStringAt(doc.lineAt(lineNum).text, absIdx))
+                        return;
+                    var startChar = absIdx;
+                    var endChar = startChar + Math.max(1, rawMatch.length);
+                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(labelPrefix, " ").concat(branchKeyword, " selector: ").concat(err.message), vscode.DiagnosticSeverity.Error));
+                }, absStart);
+            }
             return true;
         }
         function validateForCommand(text, lineNum, absStart, labelPrefix) {
@@ -1438,21 +1619,37 @@ function activate(ctx) {
             var startExpr = stripTrailingCommentUnquoted(startExprRaw.trim());
             var endExpr = stripTrailingCommentUnquoted(endExprRaw.trim());
             var stepExpr = stepExprRaw ? stripTrailingCommentUnquoted(stepExprRaw.trim()) : undefined;
+            var reportExpressionIssues = function (expr, label) {
+                var issues = findExpressionIssues(expr);
+                var exprIdx = text.indexOf(expr);
+                issues.forEach(function (issue) {
+                    var startChar = absStart + (exprIdx >= 0 ? exprIdx : 0) + issue.index;
+                    var endChar = startChar + issue.length;
+                    diags.push(new vscode.Diagnostic(new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)), "".concat(labelPrefix, " ").concat(label, ": ").concat(issue.message), vscode.DiagnosticSeverity.Error));
+                });
+                return issues.length > 0;
+            };
+            var startHasExpressionIssue = reportExpressionIssues(startExpr, 'FOR');
+            var endHasExpressionIssue = reportExpressionIssues(endExpr, 'FOR');
+            var stepHasExpressionIssue = stepExpr ? reportExpressionIssues(stepExpr, 'STEP') : false;
             var startType = (0, mtxstdfns_js_1.classifyExpr)(startExpr);
             var endType = (0, mtxstdfns_js_1.classifyExpr)(endExpr);
-            if (!startType.hasNumeric) {
+            if (!startHasExpressionIssue && !startType.hasNumeric) {
                 reportForError(startExpr, "start expression must be numeric (got \"".concat(startExpr, "\")"));
             }
-            if (!endType.hasNumeric) {
+            if (!endHasExpressionIssue && !endType.hasNumeric) {
                 reportForError(endExpr, "end expression must be numeric (got \"".concat(endExpr, "\")"));
             }
             if (stepExpr) {
                 var stepType = (0, mtxstdfns_js_1.classifyExpr)(stepExpr);
-                if (!stepType.hasNumeric) {
+                if (!stepHasExpressionIssue && !stepType.hasNumeric) {
                     reportForError(stepExpr, "STEP expression must be numeric (got \"".concat(stepExpr, "\")"));
                 }
             }
             var validateChunk = function (expr, label) {
+                if (findExpressionIssues(expr).length > 0) {
+                    return;
+                }
                 runValidatorsOnSegment(expr, validators, function (err, rawMatch, absIdx) {
                     if (!err || typeof absIdx !== 'number')
                         return;
@@ -1638,7 +1835,7 @@ function activate(ctx) {
         });
         // Check line numbers first and suppress NODDY lines
         // Check line numbers first - also detects NODDY trigger line AND CODE block ranges
-        var _t = validateLineNumbers(doc), lineNumErrors = _t.errors, noddyStartLine = _t.noddyStartLine, codeBlockRanges = _t.codeBlockRanges;
+        var _v = validateLineNumbers(doc), lineNumErrors = _v.errors, noddyStartLine = _v.noddyStartLine, codeBlockRanges = _v.codeBlockRanges;
         for (var _i = 0, lineNumErrors_1 = lineNumErrors; _i < lineNumErrors_1.length; _i++) {
             var err = lineNumErrors_1[_i];
             var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
@@ -1658,8 +1855,8 @@ function activate(ctx) {
         // Z80 CODE BLOCK VALIDATION - PART 1
         // Validate assembly lines BEFORE the main BASIC loop
         // ============================================
-        for (var _u = 0, codeBlockRanges_2 = codeBlockRanges; _u < codeBlockRanges_2.length; _u++) {
-            var block = codeBlockRanges_2[_u];
+        for (var _w = 0, codeBlockRanges_2 = codeBlockRanges; _w < codeBlockRanges_2.length; _w++) {
+            var block = codeBlockRanges_2[_w];
             for (var i = block.start; i <= block.end; i++) {
                 var lineText = doc.lineAt(i).text;
                 var trimmed = lineText.trim();
@@ -1981,8 +2178,8 @@ function activate(ctx) {
                     //special handling for LET as could be complex expression on RHS
                     if (rhs.length !== 0) {
                         // process each part of RHS further
-                        for (var _7 = 0, rhs_1 = rhs; _7 < rhs_1.length; _7++) {
-                            var itemInRhs = rhs_1[_7];
+                        for (var _9 = 0, rhs_1 = rhs; _9 < rhs_1.length; _9++) {
+                            var itemInRhs = rhs_1[_9];
                             var rhsPart = typeof itemInRhs === 'string' ? itemInRhs : ((_a = itemInRhs[0]) !== null && _a !== void 0 ? _a : '');
                             var t = rhsPart.trim();
                             // skip standalone arithmetic operator tokens
@@ -2072,8 +2269,8 @@ function activate(ctx) {
                         var argsOffsetInSeg = Math.max(0, seg.text.indexOf(argsTextRaw, segMatchIndex));
                         var startChar = seg.start + argsOffsetInSeg;
                         var endChar = startChar + (argsTextRaw.length || 1);
-                        for (var _8 = 0, printErrors_1 = printErrors; _8 < printErrors_1.length; _8++) {
-                            var e = printErrors_1[_8];
+                        for (var _10 = 0, printErrors_1 = printErrors; _10 < printErrors_1.length; _10++) {
+                            var e = printErrors_1[_10];
                             if (!e)
                                 continue; // Skip null entries
                             var range = new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar));
@@ -2209,8 +2406,8 @@ function activate(ctx) {
                         // Check for AND/OR at word boundary
                         var slice = condUpper.slice(j);
                         var matched = false;
-                        for (var _9 = 0, _10 = [' AND ', ' OR ']; _9 < _10.length; _9++) {
-                            var op = _10[_9];
+                        for (var _11 = 0, _12 = [' AND ', ' OR ']; _11 < _12.length; _11++) {
+                            var op = _12[_11];
                             if (slice.startsWith(op)) {
                                 if (currentPart.trim()) {
                                     condParts.push({ text: currentPart.trim(), start: currentStart });
@@ -2233,9 +2430,7 @@ function activate(ctx) {
                     if (currentPart.trim()) {
                         condParts.push({ text: currentPart.trim(), start: currentStart });
                     }
-                    // Now validate each individual comparison
-                    for (var _11 = 0, condParts_1 = condParts; _11 < condParts_1.length; _11++) {
-                        var part = condParts_1[_11];
+                    var _loop_7 = function (part) {
                         // Strip leading NOT if present
                         var compText = part.text.trim();
                         var notOffset = 0;
@@ -2246,19 +2441,46 @@ function activate(ctx) {
                         }
                         var cmpRe = /([^<>=!]+?)\s*(=|<>|<=|>=|<|>)\s*([^<>=!]+)/g;
                         var cmpMatch = void 0;
-                        while ((cmpMatch = cmpRe.exec(compText)) !== null) {
-                            var lhs = ((_k = cmpMatch[1]) !== null && _k !== void 0 ? _k : '').trim();
-                            var rhs_2 = ((_l = cmpMatch[3]) !== null && _l !== void 0 ? _l : '').trim();
+                        var _loop_8 = function () {
+                            var cmpTextRaw = (_k = cmpMatch[0]) !== null && _k !== void 0 ? _k : '';
+                            var cmpIndex = (_l = cmpMatch.index) !== null && _l !== void 0 ? _l : 0;
+                            var lhs = ((_m = cmpMatch[1]) !== null && _m !== void 0 ? _m : '').trim();
+                            var rhs_2 = ((_o = cmpMatch[3]) !== null && _o !== void 0 ? _o : '').trim();
+                            var lhsIssues = findExpressionIssues(lhs);
+                            var rhsIssues = findExpressionIssues(rhs_2);
+                            lhsIssues.forEach(function (issue) {
+                                var exprOffset = lhs ? cmpTextRaw.indexOf(lhs) : 0;
+                                var absDiagStart = seg.start + condStart_1 + part.start + notOffset + cmpIndex + exprOffset + issue.index;
+                                var range = new vscode.Range(new vscode.Position(i, absDiagStart), new vscode.Position(i, absDiagStart + issue.length));
+                                diags.push(new vscode.Diagnostic(range, issue.message, vscode.DiagnosticSeverity.Error));
+                            });
+                            rhsIssues.forEach(function (issue) {
+                                var exprOffset = rhs_2 ? cmpTextRaw.lastIndexOf(rhs_2) : 0;
+                                var absDiagStart = seg.start + condStart_1 + part.start + notOffset + cmpIndex + exprOffset + issue.index;
+                                var range = new vscode.Range(new vscode.Position(i, absDiagStart), new vscode.Position(i, absDiagStart + issue.length));
+                                diags.push(new vscode.Diagnostic(range, issue.message, vscode.DiagnosticSeverity.Error));
+                            });
                             var lhsType = (0, mtxstdfns_js_1.classifyExpr)(lhs);
                             var rhsType = (0, mtxstdfns_js_1.classifyExpr)(rhs_2);
+                            if (lhsIssues.length > 0 || rhsIssues.length > 0) {
+                                return "continue";
+                            }
                             if ((lhsType.hasString && rhsType.hasNumeric) || (lhsType.hasNumeric && rhsType.hasString)) {
-                                var absStart = seg.start + condStart_1 + part.start + notOffset + ((_m = cmpMatch.index) !== null && _m !== void 0 ? _m : 0);
+                                var absStart = seg.start + condStart_1 + part.start + notOffset + ((_p = cmpMatch.index) !== null && _p !== void 0 ? _p : 0);
                                 if (isInString(absStart))
-                                    continue;
+                                    return "continue";
                                 var range = new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + cmpMatch[0].length));
                                 diags.push(new vscode.Diagnostic(range, "Type mismatch in IF comparison: ".concat(lhs, " (").concat(lhsType.hasString ? 'string' : 'numeric', ") vs ").concat(rhs_2, " (").concat(rhsType.hasString ? 'string' : 'numeric', ")"), vscode.DiagnosticSeverity.Error));
                             }
+                        };
+                        while ((cmpMatch = cmpRe.exec(compText)) !== null) {
+                            _loop_8();
                         }
+                    };
+                    // Now validate each individual comparison
+                    for (var _13 = 0, condParts_1 = condParts; _13 < condParts_1.length; _13++) {
+                        var part = condParts_1[_13];
+                        _loop_7(part);
                     }
                     // helper to compute chunk start index in seg.text (best-effort)
                     var chunkStartIndex = function (piece) {
@@ -2297,7 +2519,7 @@ function activate(ctx) {
                 // This occurs when IF...THEN...ELSE has multiple commands between the THEN and ELSE parts
                 var elseMatch = /^\s*ELSE\s+(.+)$/.exec(seg.text);
                 if (elseMatch) {
-                    var elseContent = ((_o = elseMatch[1]) !== null && _o !== void 0 ? _o : '').trim();
+                    var elseContent = ((_q = elseMatch[1]) !== null && _q !== void 0 ? _q : '').trim();
                     if (elseContent) {
                         var elseStart = seg.start + seg.text.indexOf(elseContent);
                         validateBasicCommandSequence(elseContent, i, elseStart, 'ELSE');
@@ -2444,7 +2666,7 @@ function activate(ctx) {
                         var codeWordRe = /\bCODE\b/gi;
                         var cm = void 0;
                         while ((cm = codeWordRe.exec(seg.text)) !== null) {
-                            var matchIdx = (_p = cm.index) !== null && _p !== void 0 ? _p : -1;
+                            var matchIdx = (_r = cm.index) !== null && _r !== void 0 ? _r : -1;
                             if (isInString(matchIdx))
                                 continue;
                             var start = seg.start + matchIdx;
@@ -2453,7 +2675,7 @@ function activate(ctx) {
                         // 3) also flag concatenated/malformed uses like "CODE5" or "CODEPRINT" (CODE followed immediately by word-chars)
                         var codeConcatRe = /\bCODE(?=\w)/gi;
                         while ((cm = codeConcatRe.exec(seg.text)) !== null) {
-                            var matchIdx = (_q = cm.index) !== null && _q !== void 0 ? _q : -1;
+                            var matchIdx = (_s = cm.index) !== null && _s !== void 0 ? _s : -1;
                             if (isInString(matchIdx))
                                 continue;
                             // highlight the whole token starting at matchIdx
@@ -2489,8 +2711,8 @@ function activate(ctx) {
                     { kw: 'PRINT', flag: printFlag, checkMissing: true },
                     { kw: 'LPRINT', flag: printFlag, checkMissing: true }
                 ];
-                for (var _12 = 0, spacedKeywords_1 = spacedKeywords; _12 < spacedKeywords_1.length; _12++) {
-                    var _13 = spacedKeywords_1[_12], kw = _13.kw, flag = _13.flag, checkMissing = _13.checkMissing;
+                for (var _14 = 0, spacedKeywords_1 = spacedKeywords; _14 < spacedKeywords_1.length; _14++) {
+                    var _15 = spacedKeywords_1[_14], kw = _15.kw, flag = _15.flag, checkMissing = _15.checkMissing;
                     if (!flag)
                         continue;
                     //NEXT is the only CmdSpecs that has optional arguments, so needs special handling with regards to space detection
@@ -2499,7 +2721,7 @@ function activate(ctx) {
                         : new RegExp("\\b".concat(kw, "\\b"), 'gi'); // All other keywords
                     var m = void 0;
                     while ((m = re.exec(seg.text)) !== null) {
-                        var matchIdx = (_r = m.index) !== null && _r !== void 0 ? _r : -1;
+                        var matchIdx = (_t = m.index) !== null && _t !== void 0 ? _t : -1;
                         if (matchIdx < 0)
                             continue;
                         var absStart = seg.start + matchIdx;
@@ -2507,9 +2729,9 @@ function activate(ctx) {
                             continue;
                         var after = seg.text.slice(matchIdx + kw.length);
                         var spaceMatch = /^(\s*)/.exec(after);
-                        var space = spaceMatch ? ((_s = spaceMatch[1]) !== null && _s !== void 0 ? _s : '') : '';
-                        var _14 = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _14.spaceMissingYes, msg0 = _14.msg0;
-                        var _15 = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _15.multiSpaceYes, msg2 = _15.msg2;
+                        var space = spaceMatch ? ((_u = spaceMatch[1]) !== null && _u !== void 0 ? _u : '') : '';
+                        var _16 = (0, mtxstdfns_js_1.isNoSpaceFound)(space), spaceMissingYes = _16.spaceMissingYes, msg0 = _16.msg0;
+                        var _17 = (0, mtxstdfns_js_1.isMultiSpaceFound)(space), multiSpaceYes = _17.multiSpaceYes, msg2 = _17.msg2;
                         if (checkMissing && spaceMissingYes) {
                             var range = new vscode.Range(new vscode.Position(i, absStart), new vscode.Position(i, absStart + kw.length));
                             diags.push(new vscode.Diagnostic(range, msg0, vscode.DiagnosticSeverity.Error));
@@ -2658,7 +2880,7 @@ function activate(ctx) {
                             // If token looks like ordinary text (not a command/label/assignment), warn the user
                             var startCol = seg.start + startIdx;
                             var rng = new vscode.Range(new vscode.Position(i, startCol), new vscode.Position(i, startCol + tok.length));
-                            diags.push(new vscode.Diagnostic(rng, "Unrecognised or stray text: '".concat(tok, "'. Did you mean to add 'REM'?"), vscode.DiagnosticSeverity.Warning));
+                            diags.push(new vscode.Diagnostic(rng, "Unrecognised Keyword, Typo or stray text: '".concat(tok, "'. If stray text Did you mean to add 'REM' beforehand ?"), vscode.DiagnosticSeverity.Warning));
                         };
                         for (var si = 0; si < seg.text.length; si++) {
                             var ch = seg.text[si];
@@ -2700,8 +2922,8 @@ function activate(ctx) {
                 } // END of main validator error checking block
             };
             //const segments = splitLineSegments(line.text); // each { text, start }
-            for (var _6 = 0, segments_2 = segments; _6 < segments_2.length; _6++) {
-                var seg = segments_2[_6];
+            for (var _8 = 0, segments_2 = segments; _8 < segments_2.length; _8++) {
+                var seg = segments_2[_8];
                 _loop_6(seg);
             } // END of for (const seg of segments) loop
         };
@@ -2728,20 +2950,20 @@ function activate(ctx) {
                 allLines.push(doc.lineAt(j).text);
             }
             // Parse and validate NODDY content
-            var _v = (0, mtxstdfns_js_1.parseNoddyContent)(allLines, noddyStartLine + 1), pages = _v.pages, parseErrors = _v.errors;
+            var _x = (0, mtxstdfns_js_1.parseNoddyContent)(allLines, noddyStartLine + 1), pages = _x.pages, parseErrors = _x.errors;
             // Add parse errors to diagnostics
-            for (var _w = 0, parseErrors_1 = parseErrors; _w < parseErrors_1.length; _w++) {
-                var err = parseErrors_1[_w];
+            for (var _y = 0, parseErrors_1 = parseErrors; _y < parseErrors_1.length; _y++) {
+                var err = parseErrors_1[_y];
                 var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                 diags.push(new vscode.Diagnostic(range, "NODDY: ".concat(err.message), vscode.DiagnosticSeverity.Error));
             }
             // Validate each program page
-            for (var _x = 0, pages_1 = pages; _x < pages_1.length; _x++) {
-                var page = pages_1[_x];
+            for (var _z = 0, pages_1 = pages; _z < pages_1.length; _z++) {
+                var page = pages_1[_z];
                 if (page.type === 'program') {
                     var progErrors = (0, mtxstdfns_js_1.validateNoddyProgram)(page, pages, page.lineStart);
-                    for (var _y = 0, progErrors_1 = progErrors; _y < progErrors_1.length; _y++) {
-                        var err = progErrors_1[_y];
+                    for (var _0 = 0, progErrors_1 = progErrors; _0 < progErrors_1.length; _0++) {
+                        var err = progErrors_1[_0];
                         var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                         diags.push(new vscode.Diagnostic(range, "NODDY: ".concat(err.message), vscode.DiagnosticSeverity.Error));
                     }
@@ -2765,11 +2987,11 @@ function activate(ctx) {
             }
             // Check for unused text pages
             var usedTextPages = new Set();
-            for (var _z = 0, pages_2 = pages; _z < pages_2.length; _z++) {
-                var page = pages_2[_z];
+            for (var _1 = 0, pages_2 = pages; _1 < pages_2.length; _1++) {
+                var page = pages_2[_1];
                 if (page.type === 'program') {
-                    for (var _0 = 0, _1 = page.content; _0 < _1.length; _0++) {
-                        var line = _1[_0];
+                    for (var _2 = 0, _3 = page.content; _2 < _3.length; _2++) {
+                        var line = _3[_2];
                         var displayMatch = /^\*(?:D|DISPLAY)\s+([^\s*^.]+)\./i.exec(line.trim());
                         if (displayMatch) {
                             usedTextPages.add(displayMatch[1]);
@@ -2777,8 +2999,8 @@ function activate(ctx) {
                     }
                 }
             }
-            for (var _2 = 0, pages_3 = pages; _2 < pages_3.length; _2++) {
-                var page = pages_3[_2];
+            for (var _4 = 0, pages_3 = pages; _4 < pages_3.length; _4++) {
+                var page = pages_3[_4];
                 if (page.type === 'text' && !usedTextPages.has(page.name)) {
                     var range = new vscode.Range(new vscode.Position(page.lineStart, 0), new vscode.Position(page.lineStart, 50));
                     diags.push(new vscode.Diagnostic(range, "NODDY: Text page \"".concat(page.name, "\" is never displayed"), vscode.DiagnosticSeverity.Hint));
@@ -2786,8 +3008,8 @@ function activate(ctx) {
             }
             // Check for unused program pages (not called by PLOD)
             var usedPrograms = new Set(plodRefs.map(function (r) { return r.progName; }));
-            for (var _3 = 0, pages_4 = pages; _3 < pages_4.length; _3++) {
-                var page = pages_4[_3];
+            for (var _5 = 0, pages_4 = pages; _5 < pages_4.length; _5++) {
+                var page = pages_4[_5];
                 if (page.type === 'program' && !usedPrograms.has(page.name)) {
                     var range = new vscode.Range(new vscode.Position(page.lineStart, 0), new vscode.Position(page.lineStart, 50));
                     diags.push(new vscode.Diagnostic(range, "NODDY: Program \"".concat(page.name, "\" is never called by PLOD"), vscode.DiagnosticSeverity.Hint));
@@ -2811,8 +3033,8 @@ function activate(ctx) {
             // validateCodeBlocks takes the document lines array, not CodeBlock[]
             var z80Errors = (0, z80codes_js_1.validateCodeBlocks)(allDocLines, hexBaseAddress);
             // duplicate‑label check
-            for (var _4 = 0, codeBlockRanges_3 = codeBlockRanges; _4 < codeBlockRanges_3.length; _4++) {
-                var block = codeBlockRanges_3[_4];
+            for (var _6 = 0, codeBlockRanges_3 = codeBlockRanges; _6 < codeBlockRanges_3.length; _6++) {
+                var block = codeBlockRanges_3[_6];
                 var seen = new Map();
                 for (var i = block.start; i <= block.end; i++) {
                     var line = doc.lineAt(i).text;
@@ -2837,8 +3059,8 @@ function activate(ctx) {
                     }
                 }
             }
-            for (var _5 = 0, z80Errors_1 = z80Errors; _5 < z80Errors_1.length; _5++) {
-                var err = z80Errors_1[_5];
+            for (var _7 = 0, z80Errors_1 = z80Errors; _7 < z80Errors_1.length; _7++) {
+                var err = z80Errors_1[_7];
                 var range = new vscode.Range(new vscode.Position(err.line, err.start), new vscode.Position(err.line, err.end));
                 var severity = err.severity === 'error'
                     ? vscode.DiagnosticSeverity.Error

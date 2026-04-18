@@ -439,7 +439,7 @@ function complexTokeniser(expr) {
     // Instead, delete those DIM-specific branches (or leave the narrow regex if you still need to catch the legacy pattern) and rely on the new DIM block for validation.        
     var reDim = /^DIM\s(?:[A-Z][A-Z0-9]*\([^)]*\)$)/; // DIM var(expr) or var$(expr)
     var reQuoted = /^"[^"]*"/; // "text"
-    var reNumFn = /^(?:ABS|ASC|ATN|COS|EXP|INP|INT|LEN|LN|MOD|SGN|SIN|SQR|TAN|USR|VAL)\s*/; // replaced $[^)]*$ with (?=\s*())
+    var reNumFn = /^(?:ABS|ASC|ATN|COS|EXP|INP|INT|LEN|LN|MOD|PEEK|SGN|SIN|SQR|TAN|USR|VAL)\s*/; // replaced $[^)]*$ with (?=\s*())
     var reStrFn = /^(?:CHR|GR|LEFT|MID|RIGHT|STR)\$\s*/; // replaced $[^)]*$ with (?=\s*()) didn't work with nested parentheses \([^)]*\)* kinda worked
     //const reLenFn   = /^(?:LEN)\s*/;                                     // LEN needs a space after it to be valid but handled separately
     // $‑ending identifier that is a function call (e.g. CHR$(…))
@@ -645,18 +645,21 @@ function isValidArithmetic(rawArith) {
 }
 // Used by the IF handler...
 function classifyExpr(expr) {
+    var _a;
     var trimmed = expr.trim();
     if (!trimmed)
         return { hasString: false, hasNumeric: false };
     var simpleVar = /^[A-Z][A-Z0-9]*\$?$/.test(trimmed);
     if (simpleVar)
         return { hasString: trimmed.endsWith('$'), hasNumeric: !trimmed.endsWith('$') };
+    var leadingTokenMatch = /^([A-Za-z][A-Za-z0-9]*\$?)/.exec(trimmed);
+    var leadingToken = (_a = leadingTokenMatch === null || leadingTokenMatch === void 0 ? void 0 : leadingTokenMatch[1]) !== null && _a !== void 0 ? _a : '';
     var upper = trimmed.toUpperCase();
     var stringReturningFns = /^(CHR\$|LEFT\$|MID\$|RIGHT\$|STR\$|SPK\$|TIME\$)/;
-    if (stringReturningFns.test(upper))
+    if (leadingToken && leadingToken === leadingToken.toUpperCase() && stringReturningFns.test(upper))
         return { hasString: true, hasNumeric: false };
-    var numericReturningFns = /^(ABS|ASC|ATN|COS|EXP|INP|INT|LEN|LN|MOD|PEEK|SGN|SIN|SQR|TAN|USR|VAL|PI|RND|SOUND|RND)/;
-    if (numericReturningFns.test(upper))
+    var numericReturningFns = /^(ABS|ASC|ATN|COS|EXP|INP|INT|LEN|LN|MOD|PEEK|SGN|SIN|SQR|TAN|USR|VAL|PI|RND)/;
+    if (leadingToken && leadingToken === leadingToken.toUpperCase() && numericReturningFns.test(upper))
         return { hasString: false, hasNumeric: true };
     var strParts = stringExprParts(trimmed);
     var numParts = varExprParts(trimmed);

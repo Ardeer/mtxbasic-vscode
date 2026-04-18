@@ -796,3 +796,58 @@ generate recommended patches to address this failing.
 DW hexadecimally addressing returns 2 instead of 2 if 1 word or 4 if 2 words.So
 return 2 changed to
 return Math.max(1, splitDirectiveValues(parsed.directiveValue).length) * 2;
+
+15-Apr-2026
+LET D1=PEEK (32768+I) resulted in 2 errors. This was due to LET handling of the RHS. 
+A single line change in mtxstdfn.ts resolved this. Basically PEEK was added to the list for const reNumFn.
+
+this issue has the potential to cause other problems, the LET structure can still cause similar issues, but mostly for expression-valid keywords whose syntax does not look like a plain variable or a parenthesized function call. PEEK exposed that weakness first.
+
+
+Spacing becomes a validation rule, not a regex side effect.
+The tokenizer can use metadata to decide how to consume the next token sequence.
+Avoid stopping encoding syntax rules in multiple places.
+Edge cases like LEN, PEEK, PI, and RND become declarative instead of special-cased.
+
+The practical rule is:
+
+Use regex to recognize candidate keywords.
+Use metadata to validate the spacing after the keyword.
+Use metadata again to decide whether to parse parentheses, a following expression, or nothing.
+
+RESOLVED THE ISSUE WITH MIS-SPELT STRING FUNCTION OR STRING COMMANDS not flagging as errors
+
+NOTE:
+-9007199254740991 to 9007199254740991
+Examples:
+
+Number.isSafeInteger(5) → true
+Number.isSafeInteger(9007199254740991) → true
+Number.isSafeInteger(9007199254740992) → false
+Why this matters:
+JavaScript numbers are floating-point values, so very large integers stop being exact. A value can still be an integer, but not a safe one.
+
+For your validator:
+
+Number.isInteger(nval) is the right check for MTX BASIC-style arguments like ports, line numbers, bytes, addresses, baud selectors, etc.
+Number.isSafeInteger(a.min) and Number.isSafeInteger(a.max) in your code is just being used to decide whether a constraint should be treated as an integer range rather than a floating-point range.
+
+16-Apr-2026
+PRINT CHRs(W) is not showing up as an error. bypass: the new expression typo helper only matches uppercase forms, so for CHR$(, mis-types CHRS( is caught but CHRs( is invisible to it, and the older mixed-case validator never treats CHRs as a real keyword. Fixing that at the source by making the expression typo detection case-insensitive.
+Checking for other instances
+
+classifyExpr(...) is the main remaining place where lowercase built-ins can still be accepted as semantically valid.
+getStandaloneFunctionDiagnostic(...) is another place where lowercase can be masked by a different error message.
+isSpaceNeeded(...) and the missing-space fallback also normalize case, but those are less serious because they only affect secondary diagnostics.
+
+structurally changes to extension.ts to apply the followig rules, thereby preventing issues in mtxstdfns.ts
+1) case issue
+2) built-in typo issue
+3) semantic/type validation
+
+The colour decorator settings must be in both user preferences and the mtxbasic settings to work effectively
+"editor.colorDecorators": false,
+
+17-Apr-2026
+updated Unrecognised error message to
+diags.push(new vscode.Diagnostic(rng, `Unrecognised Keyword, Typo or stray text: '${tok}'. If stray text Did you mean to add 'REM' beforehand ?`, vscode.DiagnosticSeverity.Warning));
