@@ -52,9 +52,11 @@ The length of a BASIC line is the same as for MTX BASIC (158 characters), otherw
 
 One known issue is that MTX BASIC is a bit more forgiving than how I have coded it, for example, MTX BASIC allows X,Y coordinates to be decimals when clearly they should be integers. Therefore, there is a possibility that some original programs if disaasembled and loaded into VS Code will show up as errors, e.g. CIRCLE 10.5,20,1.5 . There are some function command ranges where I have selected based the maximum-minium MTX BASIC allowed me to enter before showing an error. Further work is needed in this area.
 
-The use of colon (:) within REM statements that are not enclosed within double quotes will lead to ironically the following error "Unrecognised or stray text: 'function'. Did you mean to add 'REM'?". Avoid using a colon (:) in free form REM statements. Also, ensure there is a space after REM. Minor changes from original MTX editor to simplify the parser coding in VS code.
+The use of colon (:) within REM statements that are not enclosed within double quotes will lead to ironically the following error "Unrecognised Keyword, Typo or stray text. If stray text Did you mean to add 'REM' beforehand?". Avoid using a colon (:) in free form REM statements as this is used as a keyword separator in BASIC. Also, ensure there is a space after REM. Minor changes from original MTX editor to simplify the parser coding in VS code.
 
 The mtxbasic-extension uses regular expressions (regex) to parse the command syntax (e.g. const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);). Unfortunately, this is not without its challenges, too many to discuss here, but one area where it struggles is with nested (or depth) parentheses, for example, ON MOD(Z(1),2) GOSUB 700,800 , I had to apply an additional a strip parentheses to this syntax parser to allow it to detect the second argument in the MOD() function due to Z(1) conflict. 
+
+MTX editor tool keywords like PANEL in VS Code are specified as not valid and will generate an amber warning as signified by the file name on the top bar of VS code changing colour to Amber with the number of errors and warnings shown next to it. If an error is also present, the file name will be displayed in red). These keywords will still be converted to the appropriate BASIC tokens and saved later. Only red warnings prevent converting to a MTX binary file.
 
 MTX BASIC inline z80 assembler is handled slightly different. Inline z80 assembler (ASSEM <linenumber>) command would normally generate a <linenumber> CODE in MTX BASIC. ASSEM option is not required in VS Code as we can type <linenumber> CODE directly into the BASIC listing as a placeholder followed by return, you can then enter Z80 assembly language instructions. 
 
@@ -71,9 +73,11 @@ Once a CODE block is defined as above, pressing <return> moves the line down 1 r
 20 CODE<return>
      4014 START: LD A,#0F ; START of the z80 code<return>
 
-The user can still enter hex addresses manually, if out of sequence, the system will flag and error. You can renumber the hex addresses containing an incorrect hex address, typically caused by inserting a BASIC line before it or a z80 assembly line before it. Renumbering can be done in one of two ways in a code block by clicking on the hex address in EACH code block and 
+The user can still enter hex addresses manually, if out of sequence, the system will flag and error. You can renumber the hex addresses containing an incorrect hex address, typically caused by inserting a BASIC line before it or a z80 assembly line before it. Renumbering can be done in one of two ways, The cursor must be in a code block by clicking on any of the hexadecimal addresses 
 a) either pressing "CTRL SHIFT r" 
 b) or from "CTRL SHIFT p" and select "MTX: Renumber Z80 addresses in CODE block". 
+
+NOTE: This will update all codeblocks in the listing.
 
 Hover over a Z80 mnenomic like LD and it will list possible options, e.g. LD (HL),A . There is no Symbols Label vs address summary at the end of the code block. CTRL F (find) is more convenient to use and it made the coding slightly less cumbersome. The code will flag an error if a LABEL is duplicated.
 
@@ -85,6 +89,8 @@ A quirk of the assembler and to keep consistency with the original, the hexadeci
      4018 LD HL,#401C ;hexadecimal address
      401B LD HL,16412 ;decimal address
      401E RET ;ensure there is 1 RET in your code to avoid the program from crashing if you want to return to BASIC.
+
+Do not use blank lines or comment only lines as this will result in errors, it will treat the code after the blank or comment only line as BASIC and not part of the code block. If you need to add additional comment information, use NOP followed the comment, e.g. 4010 NOP ; additional commenting.
 
 One quirk not applied in this implementation is the frustrating way the built in assembler dealt with changes after an assembly instruction was entered. For example, if you changed LD DE,#7000 to LD DE,#9000 the total length of the code increases by 9 bytes in this example. It leaves a residue of 00 23 39 30 30 b0 00 00 00 behind. Working with VS code does not generate this. Note: mtxdisassembly will strip out these reminants resulting in modified code lengths and if the coder had used fixed memory addresses, these strip outs could result in positional changes that may affect execution after recompiling in this extension. So bewary.
 
@@ -134,7 +140,7 @@ SAVING is a 2 step process.
 
 i) Once you have created your MTX BASIC masterpiece, save the VS code text file, using VS Code SAVE AS to save the program listing as a text based file (.bas or .txt).
 
-ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h.  This will bring up MTX save window, enter the filename.mtx (yes use the .mtx extension as preferred for MEMU emulator). A second prompt at the top middle of the VS code screen will ask if you want to auto-run or not. If auto-run is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator). If there are any errors, the binary file (.mtx) will not save, error message(s) will appear at the bottom left hand corner of the VS code screen.
+ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h.  This will bring up MTX save window, enter the filename.mtx (yes use the .mtx extension as preferred for MEMU emulator). A second prompt at the top middle of the VS code screen will ask if you want to auto-run or not (NOTE: do not forget to select "yes or no" or the file will not be saved). If auto-run is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator). If there are any errors, the binary file (.mtx) will not save, error message(s) will appear at the bottom left hand corner of the VS code screen.
 
 The .mtx code generated for use on the Memotech MEMU emulator only uses minimal changes to the standard system variables that are normally saved to tape. In this version, the MTX header block including MTX tape based system variables is equivalent to 619 bytes.
 
@@ -148,7 +154,7 @@ This project is licensed under the GNU License. See the LICENSE file for more de
 
 ## Creation
 
-This extension was developed on a raspberry pi5 running Ubuntu 25.10 (ARM64) and on piOS. VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I decided to use a combination of Microsoft copilot which is integrated into VS code, where a user can select a range of non-Microsoft A.I. Models (from Q4 20026 to Q1 2026) and a range of browser A.I. tools (like duck.ai) to assist in the development of this MTX BASIC extension. The building blocks of the extension were taken from my own python MTX disassembly and hexdump programs. The majority of the underlying MTX BASIC (z80) building blocks were in place, but the one thing that I needed to get started, was a suitable JSON schema. I used https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension. Coding using A.I. tools needs a LOT  of patience and perseverance to get to a workable end result, even for the simplest of tasks. A lot of time is spent re-defining followed by extensive testing of any recommended code. Different A.I. models also have different approaches, this has lead to unfortunate duplication or fallback fragility even when specifying "avoid complexity and duplication". Each new iteration of the A.I. models has improved over time. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech MTX computer.
+This extension was developed on a raspberry pi5 running Ubuntu 25.10 (ARM64) and on piOS.  The code was tested on a raspberry PI5 runnig Ubuntu and Memotech emulator (memu-fb in console mode, see ref 7). VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I decided to use a combination of Microsoft copilot which is integrated into VS code, where a user can select a range of non-Microsoft A.I. Models (from Q4 20026 to Q1 2026) and a range of browser A.I. tools (like duck.ai) to assist in the development of this MTX BASIC extension. The building blocks of the extension were taken from my own python MTX disassembly and hexdump programs. The majority of the underlying MTX BASIC (z80) building blocks were in place, but the one thing that I needed to get started, was a suitable JSON schema. I used https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension. Coding using A.I. tools needs a LOT  of patience and perseverance to get to a workable end result, even for the simplest of tasks. A lot of time is spent re-defining followed by extensive testing of any recommended code. Different A.I. models also have different approaches, this has lead to unfortunate duplication or fallback fragility even when specifying "avoid complexity and duplication". Each new iteration of the A.I. models has improved over time. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech MTX computer.
 
 ## For more information
 
@@ -158,8 +164,9 @@ Mac users replace CMD for CTRL.
 2. "The Memotech Operator's Manual" by Spencer Bateson.
 3. "Mastering TypeScript 3" by Nathan Rozentals.
 4. http://www.primrosebank.net/computers/mtx/mtx512.htm
-5. MTX DISASSEMBLY utility (python) will take an existing binary (Program) file (e.g. .BAS or .mtx) and convert it to a .bas text file (BASIC listing).
+5. MTX DISASSEMBLY utility (python) will take an existing binary (Program) file (e.g. .BAS or .mtx) and convert it to a .text file of the BASIC listing (.bas).
 6. MTX HEXDUMP utility (python) will generate a hexadecimal byte and ASCII character text file output of the binary (program) input file to assist in debugging (same as the utility "MTX PANEL COPY" which outputted PANEL to a dot matrix printer).
+7. MEMU download available at https://github.com/Memotech-Bill/MEMU
 
 
 **Enjoy!**

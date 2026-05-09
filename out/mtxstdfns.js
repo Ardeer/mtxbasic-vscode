@@ -649,11 +649,17 @@ function classifyExpr(expr) {
     var trimmed = expr.trim();
     if (!trimmed)
         return { hasString: false, hasNumeric: false };
-    var simpleVar = /^[A-Z][A-Z0-9]*\$?$/.test(trimmed);
-    if (simpleVar)
-        return { hasString: trimmed.endsWith('$'), hasNumeric: !trimmed.endsWith('$') };
+    if (isValidString(trimmed) || isValidStrVarName(trimmed)) {
+        return { hasString: true, hasNumeric: false };
+    }
+    if (isValidVarName(trimmed)) {
+        return { hasString: false, hasNumeric: true };
+    }
     var leadingTokenMatch = /^([A-Za-z][A-Za-z0-9]*\$?)/.exec(trimmed);
     var leadingToken = (_a = leadingTokenMatch === null || leadingTokenMatch === void 0 ? void 0 : leadingTokenMatch[1]) !== null && _a !== void 0 ? _a : '';
+    if (leadingToken && leadingToken !== leadingToken.toUpperCase()) {
+        return { hasString: false, hasNumeric: false };
+    }
     var upper = trimmed.toUpperCase();
     var stringReturningFns = /^(CHR\$|LEFT\$|MID\$|RIGHT\$|STR\$|SPK\$|TIME\$)/;
     if (leadingToken && leadingToken === leadingToken.toUpperCase() && stringReturningFns.test(upper))
@@ -872,8 +878,10 @@ function validateBooleanConnectors(expr, spans, report) {
         var rawGap = expr.slice(cursor, nextStart);
         var trimmed = rawGap.trim();
         var trimmedUpper = trimmed.toUpperCase();
-        // Empty gap or valid boolean connector - OK
-        if (!trimmed || /^(AND|OR|NOT)$/.test(trimmedUpper))
+        // Empty gap or valid uppercase boolean connector - OK
+        if (!trimmed)
+            return;
+        if (/^(AND|OR|NOT)$/.test(trimmed) && trimmed === trimmedUpper)
             return;
         // Skip if the gap contains only arithmetic operators and operands
         // This handles cases like "B+C+3" which is part of a comparison RHS
@@ -948,9 +956,9 @@ function splitBooleanExpression(expr) {
             continue;
         }
         // Check for boolean keywords (AND, OR, NOT) at word boundaries
-        if (/[A-Z]/.test(ch)) {
+        if (/[A-Za-z]/.test(ch)) {
             var j = i + 1;
-            while (j < expr.length && /[A-Z0-9$]/.test(expr[j]))
+            while (j < expr.length && /[A-Za-z0-9$]/.test(expr[j]))
                 j++;
             var word = expr.slice(i, j).toUpperCase();
             if (word === 'AND' || word === 'OR') {

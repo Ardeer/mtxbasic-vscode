@@ -613,11 +613,21 @@ function classifyExpr(expr: string): { hasString: boolean; hasNumeric: boolean }
     const trimmed = expr.trim();
     if (!trimmed) return { hasString: false, hasNumeric: false };
 
-    const simpleVar = /^[A-Z][A-Z0-9]*\$?$/.test(trimmed);
-    if (simpleVar) return { hasString: trimmed.endsWith('$'), hasNumeric: !trimmed.endsWith('$') };
+    if (isValidString(trimmed) || isValidStrVarName(trimmed)) {
+        return { hasString: true, hasNumeric: false };
+    }
+
+    if (isValidVarName(trimmed)) {
+        return { hasString: false, hasNumeric: true };
+    }
 
     const leadingTokenMatch = /^([A-Za-z][A-Za-z0-9]*\$?)/.exec(trimmed);
     const leadingToken = leadingTokenMatch?.[1] ?? '';
+
+    if (leadingToken && leadingToken !== leadingToken.toUpperCase()) {
+        return { hasString: false, hasNumeric: false };
+    }
+
     const upper = trimmed.toUpperCase();
 
     const stringReturningFns = /^(CHR\$|LEFT\$|MID\$|RIGHT\$|STR\$|SPK\$|TIME\$)/;
@@ -831,8 +841,9 @@ function validateBooleanConnectors(
         const trimmed = rawGap.trim();
         const trimmedUpper = trimmed.toUpperCase();
         
-        // Empty gap or valid boolean connector - OK
-        if (!trimmed || /^(AND|OR|NOT)$/.test(trimmedUpper)) return;
+        // Empty gap or valid uppercase boolean connector - OK
+        if (!trimmed) return;
+        if (/^(AND|OR|NOT)$/.test(trimmed) && trimmed === trimmedUpper) return;
         
         // Skip if the gap contains only arithmetic operators and operands
         // This handles cases like "B+C+3" which is part of a comparison RHS
@@ -908,9 +919,9 @@ function splitBooleanExpression(expr: string): BoolSpan[] {
         }
 
         // Check for boolean keywords (AND, OR, NOT) at word boundaries
-        if (/[A-Z]/.test(ch)) {
+        if (/[A-Za-z]/.test(ch)) {
             let j = i + 1;
-            while (j < expr.length && /[A-Z0-9$]/.test(expr[j])) j++;
+            while (j < expr.length && /[A-Za-z0-9$]/.test(expr[j])) j++;
             const word = expr.slice(i, j).toUpperCase();
 
             if (word === 'AND' || word === 'OR') {

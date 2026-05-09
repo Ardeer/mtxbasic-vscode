@@ -1057,7 +1057,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 { id: 'OUT', pattern: 'OUT', cmdname:'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 255 },{ kind: 'numeric', min: 0, max: 255 }], expectEnd: true },
                 { id: 'PAPER', pattern: 'PAPER', cmdname:'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 15 }], expectEnd: true },
                 { id: 'PAUSE', pattern: 'PAUSE', cmdname:'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0, max: 100000 }], expectEnd: true }, //range to be confirmed
-                { id: 'PEEK', pattern: 'PEEK', cmdname:'stdcmd', syntaxForm: 'spaced-call', spacing: 'required', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: 0, max: 65535}], expectEnd: true },
+                { id: 'PEEK', pattern: 'PEEK', cmdname:'numfn', syntaxForm: 'call', spacing: 'forbidden', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [{ kind: 'numeric', min: 0, max: 65535}], expectEnd: true },
                 { id: 'PHI', pattern: 'PHI', cmdname:'stdcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'numeric', min: 0}], expectEnd: true }, //float number, angle in radians
                 { id: 'PI', pattern: 'PI', cmdname:'stdcmd', syntaxForm: 'bare-value', spacing: 'none', resultKind: 'numeric', validInExpression: true, validAsStatement: false, args: [] }, //removed , expectEnd: true so that A=PI*5 is valid
                 { id: 'PLOD', pattern: 'PLOD', cmdname:'strcmd', syntaxForm: 'statement', spacing: 'required', resultKind: 'none', validInExpression: false, validAsStatement: true, args: [{ kind: 'string' }], expectEnd: true, description: 'Execute a NODDY program' },
@@ -1801,7 +1801,7 @@ export function activate(ctx: vscode.ExtensionContext) {
 
                 const [, selectorExprRaw, branchKeyword, targetsRaw] = onMatch;
                 let selectorExpr = stripTrailingCommentUnquoted(selectorExprRaw.trim());
-                selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/,'$1');
+                //selectorExpr = selectorExpr.replace(/^[A-Z][A-Z0-9]*\s*\((.*)\)$/,'$1');
 
                 const selectorIssues = findExpressionIssues(selectorExpr);
                 selectorIssues.forEach(issue => {
@@ -2039,7 +2039,12 @@ export function activate(ctx: vscode.ExtensionContext) {
                         }
 
                         if (/^\s*(?:PRINT|LPRINT)\b/.test(segText)) {
-                                const args = segText.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
+                                //const args = segText.replace(/^\s*(?:PRINT|LPRINT)\b/, '').trim();
+                                const rawArgs = segText.replace(/^\s*(?:PRINT|LPRINT)\b/, '');
+                                if (!rawArgs.trim()) {
+                                        continue;
+                                }
+                                const args = rawArgs.trim();
                                 const perr = printCheck(args, validators);
                                 perr.forEach(e => {
                                         if (!e) return;
@@ -2389,6 +2394,46 @@ export function activate(ctx: vscode.ExtensionContext) {
                 processedLineText = result;
                 }
 
+                const colonSeparatorErrors = (() => {
+                const errors: { start: number; end: number }[] = [];
+                let inString = false;
+                let previousColonIndex = -1;
+
+                for (let j = 0; j < processedLineText.length; j++) {
+                        const ch = processedLineText[j];
+                        if (ch === '"') {
+                                inString = !inString;
+                                continue;
+                        }
+                        if (inString) {
+                                continue;
+                        }
+                        if (ch === ':') {
+                                if (previousColonIndex >= 0) {
+                                        const between = processedLineText.slice(previousColonIndex + 1, j);
+                                        if (!between.trim()) {
+                                                errors.push({ start: previousColonIndex, end: j + 1 });
+                                        }
+                                }
+                                previousColonIndex = j;
+                                continue;
+                        }
+                        if (!/\s/.test(ch)) {
+                                previousColonIndex = -1;
+                        }
+                }
+
+                return errors;
+                })();
+
+                for (const colonError of colonSeparatorErrors) {
+                diags.push(new vscode.Diagnostic(
+                        new vscode.Range(new vscode.Position(i, colonError.start), new vscode.Position(i, colonError.end)),
+                        'Only one colon separator is allowed between BASIC commands',
+                        vscode.DiagnosticSeverity.Error
+                ));
+                }
+
                 const segments = splitLineSegments(processedLineText); // Changed from line.text                
 
                 //const segments = splitLineSegments(line.text); // each { text, start }
@@ -2419,12 +2464,21 @@ export function activate(ctx: vscode.ExtensionContext) {
                                 else { inStr = false; stringRanges.push([strStart, si + 1]); }
                                 }
                         }
-                        const isInString = (pos: number | undefined) => {
+                        const isInStringLocal = (pos: number | undefined) => {
                                 if (typeof pos !== 'number' || pos < 0) return false;
-                                //the final validator block thinks every position is “inside a quoted string” and skips all diagnostics. 
-                                //return stringRanges.every(r => pos >= r[0] && pos < r[1]);
                                 return stringRanges.some(r => pos >= r[0] && pos < r[1]);
                         };
+                        const isInStringAbs = (pos: number | undefined) => {
+                                if (typeof pos !== 'number') return false;
+                                return isInStringLocal(pos - seg.start);
+                        };
+                        if (inStr) {
+                                const quoteStart = seg.start + strStart;
+                                diags.push(new vscode.Diagnostic(
+                                new vscode.Range(new vscode.Position(i, quoteStart), new vscode.Position(i, seg.start + seg.text.length)),
+                                'Unterminated double-quoted string literal',
+                                vscode.DiagnosticSeverity.Error));
+                        }
                 addUnsupportedKeywordWarnings(seg.text, i, seg.start);
                 // --- end quoted-string helper ---  
                 // simple scan to flag any numeric literal over 9 significant digits
@@ -2439,7 +2493,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         const raw = m[1];
                         const relIdx = m.index + (m[0].indexOf(raw) >= 0 ? m[0].indexOf(raw) : 0);
                         const absIdx = absStart + relIdx;
-                        if (isInString(absIdx)) continue;
+                        if (isInStringAbs(absIdx)) continue;
                         if (!isNumericLiteral(raw)) continue;
                         const nval = convertToNumber(raw);
                         if (!Number.isFinite(nval)) continue;
@@ -2534,7 +2588,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 if (gosubStartMatch) {
                         // Ensure this occurrence is not inside a quoted string
                         const gosubIdx = seg.text.toUpperCase().indexOf('GOSUB');
-                        if (!isInString(gosubIdx)) {
+                        if (!isInStringLocal(gosubIdx)) {
                                 gosubCount++;
                                 if (gosubCount > 34) {
                                         const absIdx = seg.start + gosubIdx;
@@ -2604,7 +2658,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                                 const absIdx = (innerIdx >= 0) ? (start + innerIdx) : seg.text.indexOf(rawMatch2, (letMatch.index ?? 0));
                                 const diagStart = (absIdx >= 0) ? absIdx : start;
                                 const diagEnd = diagStart + (rawMatch2.length || 1);
-                                if (isInString(diagStart)) return;
+                                if (isInStringAbs(diagStart)) return;
                                 // If the matched token is a numeric literal, double-check significant digits
                                 if (isNumericLiteral(rawMatch2)) {
                                         const nval = convertToNumber(rawMatch2);
@@ -2666,7 +2720,13 @@ export function activate(ctx: vscode.ExtensionContext) {
 */
                 const printAss = /^\s*(?:PRINT|LPRINT)\s*(.*)$/.exec(seg.text);
                 if (printAss) {
-                const argsTextRaw = (printAss[1] || '').trim();
+                //const argsTextRaw = (printAss[1] || '').trim();
+                const rawArgsText = printAss[1] || '';
+                if (!rawArgsText.trim()) {
+                printFlag = true;
+                segHandled = true;
+                } else {
+                const argsTextRaw = rawArgsText.trim();
                 const printErrors = printCheck(argsTextRaw, validators);
                     if (printErrors && printErrors.length) {
                         // locate args start within this segment (best-effort)
@@ -2687,6 +2747,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         ));
                         }
                     }
+                }
                 printFlag = true;
                 segHandled = true;
                 } //END of printAss
@@ -2798,6 +2859,23 @@ export function activate(ctx: vscode.ExtensionContext) {
                 const thenPart = (ifMatch[2] ?? '').trim();
                 const elsePart = (ifMatch[3] ?? '').trim();
                 const condStart = seg.text.indexOf(cond, ifMatch.index ?? 0); // used for position of error
+
+                const boolKeywordCaseRe = /\b(and|or|not)\b/g;
+                let boolKeywordCaseMatch: RegExpExecArray | null;
+                while ((boolKeywordCaseMatch = boolKeywordCaseRe.exec(cond)) !== null) {
+                const rawToken = boolKeywordCaseMatch[0] ?? '';
+                const matchIndex = boolKeywordCaseMatch.index ?? 0;
+                if (!/[a-z]/.test(rawToken) || isIndexInQuotedString(cond, matchIndex)) continue;
+
+                const startChar = seg.start + condStart + matchIndex;
+                const endChar = startChar + rawToken.length;
+                const range = new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar));
+                diags.push(new vscode.Diagnostic(
+                        range,
+                        `Identifiers and keywords must be uppercase: "${rawToken}" should be "${rawToken.toUpperCase()}"`,
+                        vscode.DiagnosticSeverity.Error
+                ));
+                }
 
                 const boolCondIssues = findBooleanOperatorSpacingIssues(cond);
                 boolCondIssues.forEach(issue => {
@@ -2942,7 +3020,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         
                         if ((lhsType.hasString && rhsType.hasNumeric) || (lhsType.hasNumeric && rhsType.hasString)) {
                             const absStart = seg.start + condStart + part.start + notOffset + (cmpMatch.index ?? 0);
-                            if (isInString(absStart)) continue;
+                            if (isInStringAbs(absStart)) continue;
                             const range = new vscode.Range(
                                 new vscode.Position(i, absStart),
                                 new vscode.Position(i, absStart + cmpMatch[0].length)
@@ -3168,7 +3246,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         let cm: RegExpExecArray | null;
                         while ((cm = codeWordRe.exec(seg.text)) !== null) {
                         const matchIdx = cm.index ?? -1;
-                        if (isInString(matchIdx)) continue;
+                        if (isInStringLocal(matchIdx)) continue;
                         const start = seg.start + matchIdx;
                         diags.push(new vscode.Diagnostic(
                                 new vscode.Range(new vscode.Position(i, start), new vscode.Position(i, start + cm[0].length)),
@@ -3180,7 +3258,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         const codeConcatRe = /\bCODE(?=\w)/gi;
                         while ((cm = codeConcatRe.exec(seg.text)) !== null) {
                         const matchIdx = cm.index ?? -1;
-                        if (isInString(matchIdx)) continue;
+                        if (isInStringLocal(matchIdx)) continue;
                         // highlight the whole token starting at matchIdx
                         let j = matchIdx + 4; // position after "CODE"
                         while (j < seg.text.length && /\w/.test(seg.text[j])) j++;
@@ -3231,15 +3309,17 @@ export function activate(ctx: vscode.ExtensionContext) {
                         const matchIdx = m.index ?? -1;
                         if (matchIdx < 0) continue;
                         const absStart = seg.start + matchIdx;
-                        if (isInString(absStart)) continue;
+                        if (isInStringAbs(absStart)) continue;
 
                         const after = seg.text.slice(matchIdx + kw.length);
                         const spaceMatch = /^(\s*)/.exec(after);
                         const space = spaceMatch ? (spaceMatch[1] ?? '') : '';
-
+                        const hasTrailingContent = after.trim().length > 0;
                         const { spaceMissingYes, msg0 } = isNoSpaceFound(space);
                         const { multiSpaceYes, msg2 } = isMultiSpaceFound(space);
-
+                        if ((kw === 'PRINT' || kw === 'LPRINT') && !hasTrailingContent) {
+                        continue;
+                        }
                         if (checkMissing && spaceMissingYes) {
                         const range = new vscode.Range(
                         new vscode.Position(i, absStart),
@@ -3294,7 +3374,7 @@ export function activate(ctx: vscode.ExtensionContext) {
 
                 runValidatorsOnSegment(seg.text, validators, (err, rawMatch, absoluteIdx, matchArray) => {
                 if (!err || typeof absoluteIdx !== 'number') return;
-                if (isInString(absoluteIdx)) return;
+                if (isInStringAbs(absoluteIdx)) return;
 
                 // Mark this segment as handled when a validator reports an issue here
                 segHandled = true;
@@ -3317,7 +3397,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                     }
                 }
                 const endChar = startChar + Math.max(1, capture.length);
-                if (isInString(startChar)) return;
+                if (isInStringAbs(startChar)) return;
 
                 diags.push(new vscode.Diagnostic(
                     new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, endChar)),
@@ -3819,13 +3899,16 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `The VS CODE extension for MTX-BASIC does not use the Memotech built-in editor tools like ASSEM, AUTO, or EDIT.`);
             } 
             if (word === 'ATN') {
-		return new vscode.Hover(`**ATN**:  Returns the angle whose tangent is the specified number..\n\n` +
+		return new vscode.Hover(`**ATN**:  Returns the angle whose tangent is the specified number.\n\n` +
                     `Usage: ATN(number) \n\n` +
                     `The arc tangent. The number and the result are in radians\n\n` + 
                     `The arc tangent result is typically in the range -pi/2 to pi/2. The number and the result are in radians\n\n` + 
                     `EXAMPLE: \n\n` + 
                     `10 PRINT TAN(0.785): REM TAN of 0.785 rads (45 degrees) = 1\n\n` + 
-                    `20 PRINT ATN(1): REM ATN of 1 rads is 0.785 rads = 45 degress`);
+                    `20 PRINT ATN(1): REM ATN of 1 rads is 0.785 rads = 45 degress\n\n` + 
+                    ` \n\n` + 
+                    `NOTE: arc sin (ASN) and arc cosine (ACS) were not built in to MTX BASIC.Use the following formulae \n\n` +
+                    ``);
             }
             if (word === 'ATTR') {
 		return new vscode.Hover(`**ATTR**:  Defines effects on the grahphics screen with the specified parameters.\n\n` +
@@ -4329,8 +4412,9 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
             }   
             if (word === 'PEEK') {
 		return new vscode.Hover(`**PEEK**:  Returns the contents of the specified address in the current memory page.\n\n` +
-                    `Usage: PEEK memory address\n\n` +
-                    `Notice that the MTX pages its memory in 32K blocks and so care must be taken to ensure that when PEEK\n\n` +
+                    `Usage: PEEK(memory address)\n\n` +
+                    `Note that even though the reference manuals state the usage as PEEK \\<memory address\\>, this is incorrect, its a function.\n\n` +
+                    `Note that the MTX pages its memory in 32K blocks and so care must be taken to ensure that when PEEK\n\n` +
                     `is used you are peeking the correct page. The top 16K of memory is available to all pages`);
             }            
             if (word === 'PHI') { // doesn't generate a MTX BASIC SE.C error if VS 4 not specified beforehand
@@ -4825,111 +4909,80 @@ const renumberZ80Cmd = vscode.commands.registerCommand('mtxbasic.renumberZ80', a
         }
         
         const doc = editor.document;
-        const position = editor.selection.active;
-        
-        // Find which CODE block we're in
-        let codeStartLine = -1;
-        let codeEndLine = -1;
-        
-        // Scan backwards to find CODE declaration
-        for (let i = position.line; i >= 0; i--) {
-                const line = doc.lineAt(i).text;
-                if (/^\d{1,5}\s+CODE\s*$/.test(line.trim())) {
-                        codeStartLine = i;
-                        break;
-                }
-                // Stop if we hit another BASIC line number (not in CODE block)
-                if (i < position.line && /^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
-                        vscode.window.showErrorMessage('Cursor is not inside a CODE block');
-                        return;
-                }
+
+        const documentLines: string[] = [];
+        for (let i = 0; i < doc.lineCount; i++) {
+                documentLines.push(doc.lineAt(i).text);
         }
-        
-        if (codeStartLine === -1) {
-                vscode.window.showErrorMessage('No CODE block found');
+
+        const codeBlocks = detectCodeBlocks(documentLines, hexBaseAddress) || [];
+        if (codeBlocks.length === 0) {
+                vscode.window.showErrorMessage('No CODE blocks found');
                 return;
         }
-        
-        // Scan forward to find end of CODE block
-        for (let i = codeStartLine + 1; i < doc.lineCount; i++) {
-                const line = doc.lineAt(i).text;
-                // End of CODE block: hit another BASIC line number or end of file
-                if (/^\d{1,5}\s/.test(line) && !/^\s/.test(line)) {
-                        codeEndLine = i - 1;
-                        break;
-                }
-                if (i === doc.lineCount - 1) {
-                        codeEndLine = i;
-                        break;
-                }
-        }
-        
-        // Calculate starting address for this CODE block from the full converted byte stream.
-        const codeStartText = doc.lineAt(codeStartLine).text;
-        const codeLineMatch = /^\s*(\d{1,5})\s+CODE\s*$/.exec(codeStartText);
-        const codeLineNumber = codeLineMatch ? parseInt(codeLineMatch[1], 10) : NaN;
 
-        let currentAddress = hexBaseAddress;
-        if (!Number.isNaN(codeLineNumber)) {
-                try {
-                        const docBytes = convertTextToHex(doc.getText(), hexBaseAddress);
+        let docBytes: number[] | null = null;
+        try {
+                docBytes = convertTextToHex(doc.getText(), hexBaseAddress);
+        } catch (e) {
+                vscode.window.showErrorMessage('Unable to renumber CODE blocks because the document could not be converted to bytes');
+                return;
+        }
+
+        // Build new lines with updated addresses for every CODE block in the document
+        const edits: { line: number; newText: string }[] = [];
+
+        for (const block of codeBlocks) {
+                const codeStartText = doc.lineAt(block.startLine).text;
+                const codeLineMatch = /^\s*(\d{1,5})\s+CODE\s*$/.exec(codeStartText);
+                const codeLineNumber = codeLineMatch ? parseInt(codeLineMatch[1], 10) : NaN;
+
+                let currentAddress = hexBaseAddress;
+                if (!Number.isNaN(codeLineNumber) && docBytes) {
                         const codeLineAddress = findAddressForLineNumber(codeLineNumber, docBytes, hexBaseAddress);
                         if (codeLineAddress !== null) {
-                                // Z80 bytes begin 7 bytes into the CODE line record.
                                 currentAddress = codeLineAddress + 7;
                         }
-                } catch (e) {
-                        // Keep fallback base if conversion fails.
                 }
-        }
-        
-        // Build new lines with updated addresses
-        const edits: { line: number; newText: string }[] = [];
-        
-        for (let i = codeStartLine + 1; i <= codeEndLine; i++) {
-                const line = doc.lineAt(i).text;
-                //const match = /^(\s+)([0-9A-Fa-f]{4}\s+)(.*)$/.exec(line);
-                const match = /^(\s+)([0-9A-F]{4})(\s+)(.*)$/.exec(line);
-                
-                if (match) {
-                        const indent = match[1];
-                        //const instruction = match[3].trim();
-                        const gapAfterAddress = match[3];
-                        const instruction = match[4];
-                        
-                        // Calculate new address
-                        const newAddr = currentAddress.toString(16).toUpperCase().padStart(4, '0');
-                        //const newLine = `${indent}${newAddr} ${instruction}`;
-                        const newLine = `${indent}${newAddr}${gapAfterAddress}${instruction}`;
 
-                        // Only add edit if address changed
-                        if (newLine !== line) {
-                                edits.push({ line: i, newText: newLine });
-                        }
+                for (let i = block.startLine + 1; i <= block.endLine; i++) {
+                        const line = doc.lineAt(i).text;
+                        const match = /^(\s+)([0-9A-F]{4})(\s+)(.*)$/.exec(line);
                         
-                        // Calculate instruction length for next address
-                        try {
-                                //const parsed = parseZ80Line(`${newAddr} ${instruction}`, i);
-                                const parsed = parseZ80Line(`${newAddr} ${instruction.trimStart()}`, i);
-                                if (parsed) {
-                                        let instrLength = 1;
-                                        if (parsed.isDirective) {
-                                                instrLength = getDirectiveLength(parsed);
-                                        } else if (parsed.mnemonic) {
-                                                instrLength = getInstructionLength(parsed.mnemonic, parsed.operands);
-                                        }
-                                        currentAddress += instrLength;
-                                } else {
-                                        currentAddress += 1; // Default estimate
+                        if (match) {
+                                const indent = match[1];
+                                const gapAfterAddress = match[3];
+                                const instruction = match[4];
+                                
+                                const newAddr = currentAddress.toString(16).toUpperCase().padStart(4, '0');
+                                const newLine = `${indent}${newAddr}${gapAfterAddress}${instruction}`;
+
+                                if (newLine !== line) {
+                                        edits.push({ line: i, newText: newLine });
                                 }
-                        } catch (e) {
-                                currentAddress += 1; // Default estimate on error
+                                
+                                try {
+                                        const parsed = parseZ80Line(`${newAddr} ${instruction.trimStart()}`, i);
+                                        if (parsed) {
+                                                let instrLength = 1;
+                                                if (parsed.isDirective) {
+                                                        instrLength = getDirectiveLength(parsed);
+                                                } else if (parsed.mnemonic) {
+                                                        instrLength = getInstructionLength(parsed.mnemonic, parsed.operands);
+                                                }
+                                                currentAddress += instrLength;
+                                        } else {
+                                                currentAddress += 1;
+                                        }
+                                } catch (e) {
+                                        currentAddress += 1;
+                                }
                         }
                 }
         }
         
         if (edits.length === 0) {
-                vscode.window.showInformationMessage('Z80 addresses are already correct');
+                vscode.window.showInformationMessage('All Z80 addresses are already correct');
                 return;
         }
         

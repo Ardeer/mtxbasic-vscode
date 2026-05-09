@@ -851,3 +851,40 @@ The colour decorator settings must be in both user preferences and the mtxbasic 
 17-Apr-2026
 updated Unrecognised error message to
 diags.push(new vscode.Diagnostic(rng, `Unrecognised Keyword, Typo or stray text: '${tok}'. If stray text Did you mean to add 'REM' beforehand ?`, vscode.DiagnosticSeverity.Warning));
+
+19-Apr-2026
+Issues with IF A="B" or A="b" and IF A="B" OR A="b" not flagging errors. updates to mtxstdfns.ts and IF in extension.ts. The later was using relative rather than absolute coordinates, treating A="B" as part of the string!
+
+20-APR-2026
+Although PEEK <memory addr> is in the reference manuals, its usage is definitely a function. PEEK(memory addr). Updated CmdSpecs and Hover information.
+
+Another bug found, ON ASC(B$) GOTO/GOSUB not process properly.
+
+6-May-2026
+PRINT "kjfijerjgpoerk with no closing string literal did not result in an error
+
+It did not flag because the extension never turns an unmatched double quote into a diagnostic on the PRINT path.
+The relevant path is extension.ts:2041. PRINT and LPRINT are handled by printCheck, which immediately splits the argument text with splitTopLevel at extension.ts:652. That splitter, defined in mtxstdfns.ts:719, treats a double quote as “start a quoted token” and then keeps consuming characters until it finds another double quote or simply reaches end of line. If the closing quote is missing, it still returns the token and does not report an error. Later in diagnostics, the quote scan in extension.ts:2412 is only used to suppress other checks inside quoted text. It builds string ranges when quotes are balanced, but there is no follow-up like “if still inside a string at end of segment, emit unterminated string literal”. So line 22 survives as a malformed PRINT argument with no explicit rejection. There is also a guard for a whole segment that is just a string literal at extension.ts:2508, but that regex only matches a balanced string, so it does not catch your case either. + items added to extension.ts
+
+                         const isInStringAbs = (pos: number | undefined) => {
+                                 if (typeof pos !== 'number') return false;
+                                 return isInStringLocal(pos - seg.start);
+                         };
++                        if (inStr) {
++                                const quoteStart = seg.start + strStart;
++                                diags.push(new vscode.Diagnostic(
++                                new vscode.Range(new vscode.Position(i, quoteStart), new vscode.Position(i, seg.start + seg.text.length)),
++                                'Unterminated double-quoted string literal',
++                                vscode.DiagnosticSeverity.Error));
++                        }
+
+7-May-2026
+Updated CTRL SHIFT R so that it updated all codeblocks from a single keypress. Note: the cursor needs to be in one of the code blocks for it to work.
+
+8-MAY-2026
+
+PRINT :: REM should flag anan error because double :: separating BASIC tokens
+
+The control flow is clear splitLineSegments preserves empty segments for ::, but both command validators skip empty trimmed segments, so the invalid separator disappears instead of producing a diagnostic. Patching the main diagnostic path to explicitly flag adjacent top-level colons outside strings.
+
+PRINT or LPRINT currently needs a space after it, but MTX BASIC doesn't need this. Updated block at 2041 and 2721 to make exception.
