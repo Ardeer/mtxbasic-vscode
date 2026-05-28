@@ -1316,17 +1316,17 @@ class get_mtx_directives_info():
                 self.fn_in.seek(peek_pos)
                 next_byte=peek_bytes[0] if len(peek_bytes)>=1 else 0
                 next2_byte=peek_bytes[1] if len(peek_bytes)>=2 else 0
-                # Num_00 can start with #/digits or label-like text (unresolved symbol names).
-                num_sig_ok=(next_byte==35) or \
+                # Quoted character literals such as CP "R" are valid Num_00
+                # payloads and must follow the same path as the original parser.
+                num_sig_ok=(next_byte in (34,35)) or \
                            (48<=next_byte<=57) or (176<=next_byte<=185) or \
                            (65<=next_byte<=90) or (97<=next_byte<=122) or \
-                           (193<=next_byte<=218) or (225<=next_byte<=250) 
+                           (193<=next_byte<=218) or (225<=next_byte<=250)
                 expected_pad=(next_byte in (0,1)) and (next2_byte in (2,3,4,5,8))
                 if num_sig_ok==False:
                     if expected_pad==False:
                         pass
                     parse_num_token=False
-                #print("Num_00")
             if token_id==0:
                 if parse_num_token:
                     self.Num_00()
@@ -1748,7 +1748,7 @@ class get_mtx_directives_info():
     def DW_04(self):
         '''16-bit word / address
         04 DW
-        <offset (2bytes)><byte count><length><string>
+        <offset (2bytes)><word count><length><string>
         Note: if the number after DW is decimal it will be shown as ASCII decimal and likewise for hexadecimal
         '''
         if self.fn_in==None:
@@ -1759,7 +1759,7 @@ class get_mtx_directives_info():
         tmp_lsb=int.from_bytes(self.fn_in.read(1),"little") #read memory displacement from start
         tmp_msb=int.from_bytes(self.fn_in.read(1),"little")
         tmp_dbf[1]=(tmp_msb*256)+tmp_lsb
-        tmp_dbf[3]=int.from_bytes(self.fn_in.read(1),"little") #byte count
+        tmp_dbf[3]=int.from_bytes(self.fn_in.read(1),"little") #word byte count
         char_cnt=int.from_bytes(self.fn_in.read(1),"little") # number of chars
         self.byte_read_cnt=4 #read tracker set
         while (self.byte_read_cnt-4)<char_cnt:
@@ -1771,8 +1771,12 @@ class get_mtx_directives_info():
             if tmp_read>31 and tmp_read<128: #std ascii - might need to fine tune ao that only 0-9,a-z and A-Z
                 tmp_dbf[2]=str(tmp_dbf[2])+chr(tmp_read)
             elif tmp_read>127: # bit 7 set, so end
-                tmp_dbf[2]=str(tmp_dbf[2])+chr((tmp_read-128)) 
-                break #end while loop
+                if (self.byte_read_cnt-4)==char_cnt:
+                    tmp_dbf[2]=str(tmp_dbf[2])+chr((tmp_read-128))
+                    break #end while loop - don't add a comma at end
+                else:
+                    tmp_dbf[2]=str(tmp_dbf[2])+chr((tmp_read-128))+"," 
+                #end if-elif-else
             #end if-elif
         #end while
 
@@ -1885,9 +1889,6 @@ class get_mtx_directives_info():
         tmp_dbf=[9,0,"",0]
         pass
         return
-
-
-        return #return to be defined
 
 
 
@@ -2572,7 +2573,7 @@ def convert_mtx_to_txt():
     RES_code="" #build up the code output
     #open('workfile', 'w', encoding="utf-8") not applicable to ytes
     #print("get file to convert (*.mtx)")
-    GV_fname_r = askopenfilename(title="Binary (Program) input filename",defaultextension=GC_extn_r, filetypes=[("MTX Program (Binary) files", GC_extn_r),("All files","*.*")])
+    GV_fname_r = askopenfilename(title="Binary (Program) input filename",defaultextension=GC_extn_r, filetypes=[("MTX Program (Binary) files", GC_extn_r),("FDXB COM files", "*.com"),("EXE files", "*.exe"),("All files","*.*")])
     #print("write conversion out as a text BASIC file (*.bas)")
     GV_fname_w = asksaveasfilename(title="BASIC (text) output filename",defaultextension=GC_extn_w, filetypes=[("MTX BASIC text files", "*.bas"),("TEXT files", "*.txt"),("All files","*.*")]) 
     VSC_flag=False #Not required by VS Code as can view/edit a greater proportion of the listing and CTRL F to find than for the current 4 MTX editor.

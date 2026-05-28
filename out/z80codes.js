@@ -1096,6 +1096,9 @@ function isHexOperand(op) {
 function isDecimalOperand(op) {
     return /^[0-9]+$/.test(op.trim());
 }
+function isQuotedCharOperand(op) {
+    return /^"[^"]"$/.test(op.trim());
+}
 /**
  * Check if operand is a label (starts with A-Z)
  */
@@ -1136,6 +1139,12 @@ function getHexDigitCount(op) {
  */
 function validateOperandSize(op, placeholder) {
     var trimmed = op.trim().toUpperCase();
+    if (isQuotedCharOperand(trimmed)) {
+        if (placeholder === 'XX' || placeholder === 'ZZ') {
+            return null;
+        }
+        return "".concat(placeholder, " cannot use a quoted character literal");
+    }
     // Labels are assumed valid (validated in label cross-check phase)
     if (/^[A-Z][A-Z0-9]*$/.test(trimmed)) {
         return null;
@@ -1316,6 +1325,22 @@ function validateDirectiveOperands(parsed) {
     }
     return issues;
 }
+function extractDirectiveLabelUsages(parsed) {
+    if (!parsed.isDirective || parsed.directiveType !== 'DW' || !parsed.directiveValue) {
+        return [];
+    }
+    return splitDirectiveValues(parsed.directiveValue)
+        .map(function (value) { return value.trim().toUpperCase(); })
+        .filter(function (value) { return isLabelOperand(value); });
+}
+function parseDirectiveNumericValue(token) {
+    var trimmed = token.trim();
+    if (/^#[0-9A-Fa-f]+$/.test(trimmed))
+        return parseInt(trimmed.slice(1), 16);
+    if (/^\d+$/.test(trimmed))
+        return parseInt(trimmed, 10);
+    return null;
+}
 /**
  * Build normalized instruction for exact matching
  */
@@ -1333,7 +1358,7 @@ function buildNormalizedInstruction(mnemonic, operands) {
 function replaceWithPlaceholders(mnemonic, operands) {
     var upperMnemonic = mnemonic.toUpperCase();
     var replacedOps = operands.map(function (op, idx) {
-        var _a;
+        var _a, _b;
         var upper = op.toUpperCase().trim();
         // Keep registers, conditions, indirect registers as-is
         if (/^(A|B|C|D|E|H|L|I|R)$/.test(upper))
@@ -1406,6 +1431,22 @@ function replaceWithPlaceholders(mnemonic, operands) {
                 return 'XX';
             if (/^\(IY[+-]/.test(firstOp))
                 return 'XX';
+        }
+        if (isQuotedCharOperand(upper)) {
+            if (['ADD', 'ADC', 'SUB', 'SBC', 'AND', 'XOR', 'OR', 'CP'].includes(upperMnemonic)) {
+                return 'XX';
+            }
+            if (upperMnemonic === 'LD' && idx === 1) {
+                var firstOp = ((_b = operands[0]) === null || _b === void 0 ? void 0 : _b.toUpperCase().trim()) || '';
+                if (/^(A|B|C|D|E|H|L)$/.test(firstOp))
+                    return 'XX';
+                if (/^\(HL\)$/.test(firstOp))
+                    return 'XX';
+                if (/^\(IX[+-]/.test(firstOp))
+                    return 'XX';
+                if (/^\(IY[+-]/.test(firstOp))
+                    return 'XX';
+            }
         }
         // For other 8-bit operations (ADD A,n; SUB n; AND n; etc.)
         if (['ADD', 'ADC', 'SUB', 'SBC', 'AND', 'XOR', 'OR', 'CP'].includes(upperMnemonic)) {
@@ -1656,6 +1697,15 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
                     severity: 'error'
                 });
             }
+            for (var _f = 0, _g = extractDirectiveLabelUsages(parsed); _f < _g.length; _f++) {
+                var labelRef = _g[_f];
+                labelUsages.push({
+                    name: labelRef,
+                    lineNumber: startLine + i,
+                    instructionAddress: currentAddress,
+                    isRelativeJump: false
+                });
+            }
         }
         // Calculate next address based on instruction length
         if (parsed.mnemonic && !parsed.isDirective) {
@@ -1807,8 +1857,8 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
         if (!patterns) {
             // No patterns for this mnemonic - check if mnemonic is valid at all
             var allMnemonics = new Set();
-            for (var _f = 0, z80Cmds_2 = z80Cmds; _f < z80Cmds_2.length; _f++) {
-                var cmd = z80Cmds_2[_f];
+            for (var _h = 0, z80Cmds_2 = z80Cmds; _h < z80Cmds_2.length; _h++) {
+                var cmd = z80Cmds_2[_h];
                 allMnemonics.add(cmd.z80.split(/\s+/)[0].toUpperCase());
             }
             if (!allMnemonics.has(mnemonic)) {
@@ -1844,8 +1894,8 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
         */
         var matched = false;
         var matchedPattern = null;
-        for (var _g = 0, patterns_2 = patterns; _g < patterns_2.length; _g++) {
-            var p = patterns_2[_g];
+        for (var _j = 0, patterns_2 = patterns; _j < patterns_2.length; _j++) {
+            var p = patterns_2[_j];
             if (p.pattern === withPlaceholders) {
                 matched = true;
                 matchedPattern = p;
@@ -1912,8 +1962,8 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
     // ============================================
     // STEP 5: Cross-check label usages
     // ============================================
-    for (var _h = 0, labelUsages_1 = labelUsages; _h < labelUsages_1.length; _h++) {
-        var usage = labelUsages_1[_h];
+    for (var _k = 0, labelUsages_1 = labelUsages; _k < labelUsages_1.length; _k++) {
+        var usage = labelUsages_1[_k];
         if (!labelDefs.has(usage.name)) {
             errors.push({
                 line: usage.lineNumber,
@@ -1927,8 +1977,8 @@ function validateCodeBlock(lines, startLine, baseAddr, expectedStartAddress) {
     // ============================================
     // STEP 6: Check relative jump ranges
     // ============================================
-    for (var _j = 0, labelUsages_2 = labelUsages; _j < labelUsages_2.length; _j++) {
-        var usage = labelUsages_2[_j];
+    for (var _l = 0, labelUsages_2 = labelUsages; _l < labelUsages_2.length; _l++) {
+        var usage = labelUsages_2[_l];
         if (!usage.isRelativeJump)
             continue;
         var labelDef = labelDefs.get(usage.name);
@@ -1983,6 +2033,7 @@ function getInstructionLength(mnemonic, operands) {
  * Get directive length (DB, DW, DS)
  */
 function getDirectiveLength(parsed) {
+    var _a;
     if (!parsed.isDirective || !parsed.directiveValue)
         return 0;
     switch (parsed.directiveType) {
@@ -2007,7 +2058,7 @@ function getDirectiveLength(parsed) {
         case 'DW':
             return Math.max(1, splitDirectiveValues(parsed.directiveValue).length) * 2;
         case 'DS':
-            return parseInt(parsed.directiveValue, 10) || 1;
+            return (_a = parseDirectiveNumericValue(parsed.directiveValue)) !== null && _a !== void 0 ? _a : 1;
         default:
             return 0;
     }

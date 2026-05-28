@@ -888,3 +888,59 @@ PRINT :: REM should flag anan error because double :: separating BASIC tokens
 The control flow is clear splitLineSegments preserves empty segments for ::, but both command validators skip empty trimmed segments, so the invalid separator disappears instead of producing a diagnostic. Patching the main diagnostic path to explicitly flag adjacent top-level colons outside strings.
 
 PRINT or LPRINT currently needs a space after it, but MTX BASIC doesn't need this. Updated block at 2041 and 2721 to make exception.
+
+19-May-2026
+updated z80codes.ts and mtxtokens.ts to address CP "R" or CP "T" errors
+The CP "char" problem was not in the Python disassembler path. It was in the VS Code extension’s Z80 validator/encoder, which was treating "R" as an invalid operand instead of an 8-bit immediate. That is why the editor showed Z80: Invalid Z80 instruction: CP "R" even though the disassembly side was already reconstructing the source-form correctly.
+
+So the state now is:
+
+mtxdisassembly.py is fine for the CP "char" cases.
+The extension-side fix in z80codes.ts, z80codes.js, mtxtokens.ts, and mtxtokens.js was the correct place to resolve the editor error.
+The extension no longer flagging CP "char" confirms that.
+
+26-May-2026
+The issue occurs when extension.ts and its support files z80codes.ts, etc generate the binary file. I have identified two errors in the creation of the binary file.
+4097 LD D,#00 error on loading into the mtx computer that #00 is undefined.
+411B LD BC,10 generating 411B LD BC,#000A due to an issue with mtx directive.
+
+I’ve isolated the bug to mixed number-reference encoding: the current serializer folds byte and word references for the same literal into one MTX record, which does not match the documented single-type number-definition format. I’m patching that serializer path only. Change to mtxtokens.ts at 9a) Number definition blocks (0x00)
+
+The remaining risk is in byte-only number records: the serializer currently reverses those offsets twice, so numbers used more than once can still be emitted in the wrong order. I’m patching that next and validating the emitted ordering directly.
+
+4007 LD A,(TEST)
+4009 RET
+400B TEST: DB TEST2
+400C TEST2: DB "A"
+the compiler results in out of range error at 400B. However, reviewing the binary, the MTX directive for 400B and 400C are
+03 04 00 01 05 54 45 53 54 B2
+03 05 00 01 03 22 41 A2
+when the code is stepped LD A,(TEST) results in register A=0C not 41 for the letter A. DB TEST2 is technically not valid because it points to a label which is a 16-bit address not a byte.
+
+Review finding: the only material cross-directive risk from the earlier fix was DB label handling, and your TEST: DB TEST2 case confirms it. In out/mtxtokens.ts, DB was resolving labels to the low byte of the address, which is why DB TEST2 became 0C and LD A,(TEST) loaded 0C instead of the byte at TEST2. That was inconsistent with the validator in z80codes.ts:1347, which already treats DB LABEL as invalid.
+
+I removed that unintended DB label path and kept the DW label fix intact. That means the change set now affects MTX directive processing in this way:
+DW LABEL: still supported and now correctly emits address words
+DB LABEL: no longer silently truncates a 16-bit label address to one byte
+DS, comments, MTX number directives, and label directives: unchanged by this correction
+
+Validation on out/mtxtokens.ts is clean. So the current assessment is that the DW fix is safe for other MTX directive processing, and the only observed unintended consequence was the DB label truncation path, which is now removed.
+
+28-May-2028
+Review mtxcodes.ts with regards to mtx directives to see if there are sufficient guardrails in place or are there any areas of duplication, conflict or weak fallback checks?
+
+The directive guardrails are not sufficient yet. The main problems are not cosmetic; there are real validator/encoder mismatches and at least one silent-zero fallback for DW labels. The safest cleanup would be to centralize directive parsing/length/value resolution into one shared implementation and make directive label references flow through the same unresolved-label checks as instruction operands.
+
+Natural next steps:
+
+Add directive label cross-checking for DW and indexed directive references.
+Unify DS parsing so validator, address tracking, and emission all accept the same formats.
+Remove or repair the duplicate assembleCodeBlock directive-length logic before it drifts further.
+
+Findings
+
+High: DW directives accept label-shaped operands but never participate in the normal “label not found” pass, so an undefined label can compile as zero with no diagnostic. The validator treats a non-numeric DW operand as valid if it looks like a label in z80codes.ts:1382-1384, but directive lines are skipped entirely in the second-pass label usage collection in z80codes.ts:1835. The later cross-check only walks labelUsages gathered from instructions in z80codes.ts:2074-2083. On the encoding side, missing DW labels fall back to parseImmediateOperand(...) || 0 in mtxtokens.ts:1575-1578, and parseImmediateOperand returns 0 for label/unknown tokens in mtxtokens.ts:1931-1944. That is the weakest current guardrail.
+
+High: DS hex syntax is explicitly validated as supported, but the length/emission paths only parse decimal, so DS #10 can pass validation and still reserve the wrong number of bytes. The validator advertises #00-#FE support in z80codes.ts:1392-1415. But address tracking in z80codes.ts:2174 uses parseInt(..., 10) || 1, and both code-generation paths use decimal-only parsing in mtxtokens.ts:1110, mtxtokens.ts:1175, and mtxtokens.ts:1582-1585. This is a direct validator/encoder conflict, not just duplication.
+
+Medium: Directive length logic is duplicated and already diverges in the legacy assembler path. The validator computes DB/DW lengths by counting all split operands in z80codes.ts:2154-2174, and the main processCodeBlock path mirrors that via parseDbValues/parseDwValues in mtxtokens.ts:959-980 and mtxtokens.ts:1108-1110. But assembleCodeBlock undercounts in its first pass: DB is treated as length 1 unless it is a single quoted string, and DW is always length 2 in mtxtokens.ts:1525-1539, while its second pass emits all operands in mtxtokens.ts:1560-1585. If that function is still reachable, labels after multi-item directives will be misaddressed. This was downloaded to duplicate and not used elsewhere, so function assmbleCodeBlock in mtxtoken.ts is not required. One more stale piece is the forced trailing RET in mtxtokens.ts:1651-1654. The active path explicitly says “do not auto-append RET” in mtxtokens.ts:1468-1469, so this is another sign that assembleCodeBlock belongs to an older behavior model. This was put in for a reason, not sure why. a copy of the function was saved and the function was deleted from mtxtokens and export removed and import into extension.ts removed. It was tested on T090389UP2B.bas

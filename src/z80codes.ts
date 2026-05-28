@@ -1180,6 +1180,10 @@ function isDecimalOperand(op: string): boolean {
     return /^[0-9]+$/.test(op.trim());
 }
 
+function isQuotedCharOperand(op: string): boolean {
+    return /^"[^"]"$/.test(op.trim());
+}
+
 /**
  * Check if operand is a label (starts with A-Z)
  */
@@ -1223,6 +1227,13 @@ function getHexDigitCount(op: string): number {
  */
 function validateOperandSize(op: string, placeholder: string): string | null {
     const trimmed = op.trim().toUpperCase();
+
+    if (isQuotedCharOperand(trimmed)) {
+        if (placeholder === 'XX' || placeholder === 'ZZ') {
+            return null;
+        }
+        return `${placeholder} cannot use a quoted character literal`;
+    }
     
     // Labels are assumed valid (validated in label cross-check phase)
     if (/^[A-Z][A-Z0-9]*$/.test(trimmed)) {
@@ -1407,6 +1418,23 @@ function validateDirectiveOperands(parsed: Z80ParsedLine): DirectiveIssue[] {
     return issues;
 }
 
+function extractDirectiveLabelUsages(parsed: Z80ParsedLine): string[] {
+    if (!parsed.isDirective || parsed.directiveType !== 'DW' || !parsed.directiveValue) {
+        return [];
+    }
+
+    return splitDirectiveValues(parsed.directiveValue)
+        .map(value => value.trim().toUpperCase())
+        .filter(value => isLabelOperand(value));
+}
+
+function parseDirectiveNumericValue(token: string): number | null {
+    const trimmed = token.trim();
+    if (/^#[0-9A-Fa-f]+$/.test(trimmed)) return parseInt(trimmed.slice(1), 16);
+    if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+    return null;
+}
+
 
 /**
  * Build normalized instruction for exact matching
@@ -1496,6 +1524,19 @@ function replaceWithPlaceholders(mnemonic: string, operands: string[]): string {
             if (/^\(HL\)$/.test(firstOp)) return 'XX';
             if (/^\(IX[+-]/.test(firstOp)) return 'XX';
             if (/^\(IY[+-]/.test(firstOp)) return 'XX';
+        }
+
+        if (isQuotedCharOperand(upper)) {
+            if (['ADD', 'ADC', 'SUB', 'SBC', 'AND', 'XOR', 'OR', 'CP'].includes(upperMnemonic)) {
+                return 'XX';
+            }
+            if (upperMnemonic === 'LD' && idx === 1) {
+                const firstOp = operands[0]?.toUpperCase().trim() || '';
+                if (/^(A|B|C|D|E|H|L)$/.test(firstOp)) return 'XX';
+                if (/^\(HL\)$/.test(firstOp)) return 'XX';
+                if (/^\(IX[+-]/.test(firstOp)) return 'XX';
+                if (/^\(IY[+-]/.test(firstOp)) return 'XX';
+            }
         }
         
         // For other 8-bit operations (ADD A,n; SUB n; AND n; etc.)
@@ -1764,6 +1805,15 @@ function validateCodeBlock(lines: string[], startLine: number, baseAddr = 0x4000
                     end,
                     message: issue.message,
                     severity: 'error'
+                });
+            }
+
+            for (const labelRef of extractDirectiveLabelUsages(parsed)) {
+                labelUsages.push({
+                    name: labelRef,
+                    lineNumber: startLine + i,
+                    instructionAddress: currentAddress,
+                    isRelativeJump: false
                 });
             }
         }
@@ -2147,7 +2197,7 @@ function getDirectiveLength(parsed: Z80ParsedLine): number {
         case 'DW':
             return Math.max(1, splitDirectiveValues(parsed.directiveValue).length) * 2;
         case 'DS':
-            return parseInt(parsed.directiveValue, 10) || 1;
+            return parseDirectiveNumericValue(parsed.directiveValue) ?? 1;
         default:
             return 0;
     }

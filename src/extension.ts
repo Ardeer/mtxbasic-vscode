@@ -66,7 +66,6 @@ import {
 import {
         convertTextToHex,
         convertNoddyBlock,
-        assembleCodeBlock,
         basicTokeniseLine,
         refineConvertTextToHex,
         compressSpacesAndAscii,
@@ -4406,7 +4405,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
             if (word === 'PAUSE') {
 		return new vscode.Hover(`**PAUSE**:  with the specified parameters.\n\n` +
                     `Usage: PAUSE number \n\n` +
-                    `The program will pause for a length of time dependent on number. \n\n` + 
+                    `The program will pause for a length of time dependent on number, range 0 to 65535. \n\n` + 
                     `The time cannot be specified accurately but will vary according to how many incidental functions\n\n` +
                     `the computer is performing at the same time such as flashing the cursor or updating the clock.`);
             }   

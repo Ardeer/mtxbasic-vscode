@@ -352,7 +352,7 @@ const mtxTokens: {tokenDec: number, tokenHex: number, token: string}[] = [
         <label referenced (used/called), relative offset to where the label is defined,  LSB/MSB> [0x01 0x00] 
         <pad> [0x00]
                 
-        9d) Define Byte (DB) syntax <label:>DB <hex/dec> and/or "<ASCII characters>" and/or <label> separated by commas
+        9d) Define Byte (DB) syntax <label:>DB <hex/dec> and/or "<ASCII characters>" and/or <label> separated by commas (label is 16-bit, so not valid as a DB, see devolpment_log change 26-May-2026)
         <0x03>
         <offset (2bytes)>
         <byte count>
@@ -969,10 +969,30 @@ function parseDbValues(raw: string): number[] {
   return out;
 }
 
-function parseDwValues(raw: string): number[] {
+function parseDirectiveNumericValue(token: string): number | null {
+  const trimmed = token.trim();
+  if (/^#[0-9A-Fa-f]+$/.test(trimmed)) return parseInt(trimmed.slice(1), 16);
+  if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  return null;
+}
+
+function parseDirectiveSizeValue(raw: string): number {
+  return parseDirectiveNumericValue(raw) ?? 0;
+}
+
+function parseDwValues(raw: string, labelMap?: Record<string, number>): number[] {
   const out: number[] = [];
   for (const tok of splitDirectiveList(raw)) {
-    const v = parseImmediateOperand(tok);
+    let v = parseImmediateOperand(tok);
+    const trimmed = tok.trim();
+    const numericValue = parseDirectiveNumericValue(trimmed);
+    if (numericValue !== null) {
+      v = numericValue;
+    } else if ((/^[A-Z][A-Z0-9]*$/).test(trimmed)) {
+      const lab = trimmed.toUpperCase();
+      if (labelMap && typeof labelMap[lab] === 'number') v = labelMap[lab];
+      else if (labelMap) throw new Error(`Undefined DW label: ${trimmed}`);
+    }
     out.push(v & 0xff, (v >> 8) & 0xff);
   }
   return out;
@@ -1103,7 +1123,7 @@ function parseCodeBlockPhase1(codeBlock: string, baseAddr = 0x4000): {
     if (parsed.isDirective) {
       if (parsed.directiveType === 'DB') instrLen = parseDbValues(parsed.directiveValue || '').length;
       else if (parsed.directiveType === 'DW') instrLen = parseDwValues(parsed.directiveValue || '').length;
-      else if (parsed.directiveType === 'DS') instrLen = parseInt(parsed.directiveValue || '0', 10) || 0;
+      else if (parsed.directiveType === 'DS') instrLen = parseDirectiveSizeValue(parsed.directiveValue || '0');
     } else if (parsed.mnemonic) {
       const instr = parsed.mnemonic;
       const ops = parsed.operands || [];
@@ -1160,7 +1180,7 @@ function parseCodeBlockPhase2(
         opcodeBytes.push(...bytesToAdd);
         cumulativeOffset = baseOffset + bytesToAdd.length;
       } else if (p.directiveType === 'DW') {
-        const bytesToAdd = parseDwValues(p.directiveValue || '');
+        const bytesToAdd = parseDwValues(p.directiveValue || '', labelMap);
         opcodeBytes.push(...bytesToAdd);
         cumulativeOffset = baseOffset + bytesToAdd.length;
       } else if (p.directiveType === 'DS') {
@@ -1168,7 +1188,7 @@ function parseCodeBlockPhase2(
         // DS 1 -> 0xC9
         // DS 2 -> 0xC9 0x00
         // DS 3 -> 0xC9 0x00 0x00
-        const count = parseInt(p.directiveValue || '0', 10) || 0;
+        const count = parseDirectiveSizeValue(p.directiveValue || '0');
         if (count > 0) {
           opcodeBytes.push(0xC9); // RET opcode as placeholder
           for (let i = 1; i < count; i++) {
@@ -1243,15 +1263,32 @@ function parseCodeBlockPhase3(
 
   // 9a) Number definition blocks (0x00)
   for (const [numberStr, info] of Array.from(mergedNumberRefs.entries())) {
-    mtxDirectiveBytes.push(0x00); // Number definition marker
-    const numAscii = compressSpacesAndAscii(numberStr);
-    mtxDirectiveBytes.push(...numAscii);
-    // Set bit 7 on last character
-    if (mtxDirectiveBytes.length > 0) {
-      mtxDirectiveBytes[mtxDirectiveBytes.length - 1] |= 0x80;
+    // MTX number-definition records carry a single reference kind.
+    // If the same literal is used as both byte and word, emit one record per kind.
+    const refGroups: RefBuckets[] = [
+      { byteOffsets: [...(info.byteOffsets || [])], wordOffsets: [], relativeOffsets: [] },
+      { byteOffsets: [], wordOffsets: [...(info.wordOffsets || [])], relativeOffsets: [] },
+      { byteOffsets: [], wordOffsets: [], relativeOffsets: [...(info.relativeOffsets || [])] }
+    ];
+
+    for (const refsForKind of refGroups) {
+      if (
+        refsForKind.byteOffsets.length === 0 &&
+        refsForKind.wordOffsets.length === 0 &&
+        refsForKind.relativeOffsets.length === 0
+      ) {
+        continue;
+      }
+
+      mtxDirectiveBytes.push(0x00); // Number definition marker
+      const numAscii = compressSpacesAndAscii(numberStr);
+      mtxDirectiveBytes.push(...numAscii);
+      // Set bit 7 on last character
+      if (mtxDirectiveBytes.length > 0) {
+        mtxDirectiveBytes[mtxDirectiveBytes.length - 1] |= 0x80;
+      }
+      mtxDirectiveBytes.push(...buildReferenceSections(refsForKind, codeStartAbsolute));
     }
-    // Build reference section
-    mtxDirectiveBytes.push(...buildReferenceSections(info, codeStartAbsolute));
   }
 
   // 9c) Label definition blocks (0x02)
@@ -1277,7 +1314,6 @@ function parseCodeBlockPhase3(
   // 9d-9f) Directives (DB/DW/DS)
   for (const dir of directiveLines) {
     if (dir.directiveType === 'DB') {
-      // <0x03> <offset LSB/MSB> <byte count> <ascii length> <ascii chars w/ commas handling,bit7 set on last char of each item separated by commas> >
       mtxDirectiveBytes.push(0x03); // DB marker
       const relOffset = (dir._offset || 0) - offsetBase;
       mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
@@ -1409,9 +1445,11 @@ function buildReferenceSections(refs: RefBuckets, codeStartAbsolute: number): nu
     for (const o of relRefs) bytes.push(o & 0xff, (o >> 8) & 0xff);
   }
 
-  // Legacy-only single-kind padding for byte refs remains via existing helper.
   if (wordRefs.length === 0 && relRefs.length === 0 && byteRefs.length > 0) {
-    return buildReferenceSection(byteRefs, 'byte');
+    const byteOnly: number[] = [byteRefs.length & 0xff];
+    for (const o of byteRefs) byteOnly.push(o & 0xff, (o >> 8) & 0xff);
+    byteOnly.push(0x00, 0x00);
+    return byteOnly;
   }
 
   return bytes;
@@ -1469,150 +1507,6 @@ function processCodeBlock(codeBlock: string, baseAddr = 0x4000): {
     mtxDirectiveBytes: phase3.mtxDirectiveBytes,
     totalCodeLength
   };
-}
-
-function assembleCodeBlock(lines: string[], baseAddr = 0x4000): number[] {
-  // Two-pass: 1) parse lines and collect labels/addresses; 2) emit bytes with labels resolved
-  const bytes: number[] = [];
-  const parsedLines: Array<any> = [];
-  const labelMap: Record<string, number> = {};
-
-  // First pass: parse and determine addresses
-  let currentAddress = baseAddr;
-  for (const rawLine of lines) {
-    const line = rawLine.replace(/\r?\n$/, '');
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    // comment-only lines
-    if (trimmed.startsWith(';')) {
-      parsedLines.push({ raw: line, isComment: true });
-      continue;
-    }
-
-    const parsed: any = parseZ80Line(line, 0) || { raw: line };
-    // if parse found an explicit address, use it
-    if (parsed.address) {
-      currentAddress = parseInt(parsed.address, 16);
-    }
-    parsed._address = currentAddress;
-    // record label definition
-    if (parsed.label) labelMap[parsed.label.toUpperCase()] = currentAddress;
-
-    // determine length
-    let instrLen = 0;
-    if (parsed.isDirective) {
-      const d = parsed.directiveType;
-      const val = parsed.directiveValue || '';
-      if (d === 'DB') {
-        const v = val.trim();
-        if (v.startsWith('\"') && v.endsWith('\"')) {
-          instrLen = v.slice(1, -1).length;
-        } else {
-          instrLen = 1;
-        }
-      } else if (d === 'DW') {
-        instrLen = 2;
-      } else if (d === 'DS') {
-        instrLen = parseInt(parsed.directiveValue || '0', 10) || 0;
-      }
-    } else if (parsed.mnemonic) {
-      const bestMatch = findBestZ80Match(parsed.mnemonic, parsed.operands || []);
-      instrLen = bestMatch ? bestMatch.length : 1;
-    }
-
-    parsedLines.push(parsed);
-    currentAddress += instrLen;
-  }
-
-  // Second pass: emit bytes
-  let cumulativeOffset = 0;
-  for (const p of parsedLines) {
-    if (p.isComment) {
-      bytes.push(...compressSpacesAndAscii(p.raw.substring(p.raw.indexOf(';') + 1)));
-      bytes.push(0xFF);
-      continue;
-    }
-    const parsed: any = p;
-    if (!parsed.mnemonic && !parsed.isDirective) continue;
-
-    if (parsed.isDirective) {
-      const d = parsed.directiveType;
-      const val = parsed.directiveValue || '';
-      if (d === 'DB') {
-        const v = val.trim();
-        if (v.startsWith('\"') && v.endsWith('\"')) {
-          const s = v.slice(1, -1);
-          for (let k = 0; k < s.length; k++) bytes.push(s.charCodeAt(k));
-          cumulativeOffset += s.length;
-        } else {
-          bytes.push(parseImmediateOperand(v) & 0xff);
-          cumulativeOffset += 1;
-        }
-      } else if (d === 'DW') {
-        const vv = parseImmediateOperand(val) || 0;
-        bytes.push(vv & 0xff, (vv >> 8) & 0xff);
-        cumulativeOffset += 2;
-      } else if (d === 'DS') {
-        const count = parseInt(parsed.directiveValue || '0', 10) || 0;
-        if (count > 0) {
-          bytes.push(0xC9); // RET opcode as placeholder
-          for (let n = 1; n < count; n++) bytes.push(0x00);
-          cumulativeOffset += count;
-        }
-      }
-      continue;
-    }
-
-    // instructions
-    const instr = typeof normalizeInstruction === 'function'
-      ? normalizeInstruction(parsed.mnemonic || '', parsed.operands || [])
-      : null;
-    let cmd: any = null;
-    if (instr && Array.isArray(z80Cmds)) {
-      for (const c of z80Cmds) {
-        const norm = c.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
-        if (norm === (instr || '').toUpperCase()) { cmd = c; break; }
-      }
-    }
-    if (!cmd) {
-      const placeholder = typeof normalizeInstruction === 'function'
-        ? normalizeInstruction(parsed.mnemonic || '', parsed.operands || [])
-        : null;
-      if (placeholder && Array.isArray(z80Cmds)) {
-        for (const c of z80Cmds) {
-          const norm2 = c.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
-          if (norm2 === placeholder.toUpperCase()) { cmd = c; break; }
-        }
-      }
-    }
-
-    if (cmd) {
-
-      // Use the actual instruction address from parsed._address if available, otherwise use cumulativeOffset
-      const instrAddr = parsed._address !== undefined ? parsed._address : cumulativeOffset;
-      const instrBytes = opCodePatternToBytes(cmd.opCode, parsed, labelMap, new Map(), instrAddr, new Map());
-      
-      // Validate that generated bytes match the expected length - KEEP FOR DEVELOPMENT USE ONLY
-      if (instrBytes.length !== cmd.length) {
-        console.error(
-          `OPCODE LENGTH MISMATCH: ${cmd.z80} at address 0x${instrAddr.toString(16)} - ` +
-          `Expected ${cmd.length} bytes but generated ${instrBytes.length} bytes. ` +
-          `OpCode pattern: ${cmd.opCode}, Generated bytes: ${instrBytes.map(b => '0x' + b.toString(16).toUpperCase()).join(' ')}`
-        );
-      }
-      
-      bytes.push(...instrBytes);
-      cumulativeOffset += instrBytes.length;
-    }
-  }
-
-  // Ensure code block ends with RET (0xC9) if not already present
-  if (bytes.length === 0 || bytes[bytes.length - 1] !== 0xC9) {
-    bytes.push(0xC9);
-  }
-
-  return bytes;
 }
 
 /**
@@ -1914,6 +1808,7 @@ function parseImmediateOperand(op: string | undefined): number {
   if (/^[#]/.test(op)) return sign * (parseInt(op.slice(1), 16) || 0);
   //f (/^0x/i.test(op)) return sign * (parseInt(op, 16) || 0);
   if (/^[0-9]+$/.test(op)) return sign * (parseInt(op, 10) || 0);
+  if (/^"[^"]"$/.test(op)) return sign * op.charCodeAt(1);
   return 0; // label/unknown -> 0 (labels would need two-pass)
 }
 
@@ -2028,6 +1923,7 @@ function opCodePatternToBytes(
 
       const cleanOp = operandForParse.trim(); 
       let v = parseImmediateOperand(cleanOp);
+      const isQuotedChar = /^"[^"]"$/.test(cleanOp);
            // >>> HIGHLIGHT 1: New logic to check for Decimal numbers (isDec) <<<
       let checkOp = cleanOp;
       if (checkOp.startsWith('+') || checkOp.startsWith('-')) {
@@ -2042,7 +1938,7 @@ function opCodePatternToBytes(
         if (labelReferences) {
           addRefOffset(labelReferences, lab, 'byte', baseOffset + out.length);
         }
-      } else if (isHex || isDec) { // >>> HIGHLIGHT 2: Added `|| isDec` to this condition <<<
+      } else if (isHex || isDec || isQuotedChar) { // >>> HIGHLIGHT 2: Added decimal and quoted-char support <<<
         // Track number reference (byte type)
         // Previous code only had: else if (/^[#]/.test(cleanOp))
         if (numberReferences) {
@@ -2178,7 +2074,6 @@ function extractMTXDirectives(codeBlock: string): string[] {
 
 export { mtxTokens,
     convertTextToHex,
-    assembleCodeBlock,
     basicTokeniseLine,
     refineConvertTextToHex,
     compressSpacesAndAscii,

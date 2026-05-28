@@ -18,7 +18,6 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.mtxTokens = void 0;
 exports.convertTextToHex = convertTextToHex;
-exports.assembleCodeBlock = assembleCodeBlock;
 exports.basicTokeniseLine = basicTokeniseLine;
 exports.refineConvertTextToHex = refineConvertTextToHex;
 exports.compressSpacesAndAscii = compressSpacesAndAscii;
@@ -775,11 +774,35 @@ function parseDbValues(raw) {
     }
     return out;
 }
-function parseDwValues(raw) {
+function parseDirectiveNumericValue(token) {
+    var trimmed = token.trim();
+    if (/^#[0-9A-Fa-f]+$/.test(trimmed))
+        return parseInt(trimmed.slice(1), 16);
+    if (/^\d+$/.test(trimmed))
+        return parseInt(trimmed, 10);
+    return null;
+}
+function parseDirectiveSizeValue(raw) {
+    var _a;
+    return (_a = parseDirectiveNumericValue(raw)) !== null && _a !== void 0 ? _a : 0;
+}
+function parseDwValues(raw, labelMap) {
     var out = [];
     for (var _i = 0, _a = splitDirectiveList(raw); _i < _a.length; _i++) {
         var tok = _a[_i];
         var v = parseImmediateOperand(tok);
+        var trimmed = tok.trim();
+        var numericValue = parseDirectiveNumericValue(trimmed);
+        if (numericValue !== null) {
+            v = numericValue;
+        }
+        else if ((/^[A-Z][A-Z0-9]*$/).test(trimmed)) {
+            var lab = trimmed.toUpperCase();
+            if (labelMap && typeof labelMap[lab] === 'number')
+                v = labelMap[lab];
+            else if (labelMap)
+                throw new Error("Undefined DW label: ".concat(trimmed));
+        }
         out.push(v & 0xff, (v >> 8) & 0xff);
     }
     return out;
@@ -895,7 +918,7 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
             else if (parsed.directiveType === 'DW')
                 instrLen = parseDwValues(parsed.directiveValue || '').length;
             else if (parsed.directiveType === 'DS')
-                instrLen = parseInt(parsed.directiveValue || '0', 10) || 0;
+                instrLen = parseDirectiveSizeValue(parsed.directiveValue || '0');
         }
         else if (parsed.mnemonic) {
             var instr = parsed.mnemonic;
@@ -935,7 +958,7 @@ function parseCodeBlockPhase2(parsedLines, labelMap, labelReferences, numberRefe
                 cumulativeOffset = baseOffset + bytesToAdd.length;
             }
             else if (p.directiveType === 'DW') {
-                var bytesToAdd = parseDwValues(p.directiveValue || '');
+                var bytesToAdd = parseDwValues(p.directiveValue || '', labelMap);
                 opcodeBytes.push.apply(opcodeBytes, bytesToAdd);
                 cumulativeOffset = baseOffset + bytesToAdd.length;
             }
@@ -944,7 +967,7 @@ function parseCodeBlockPhase2(parsedLines, labelMap, labelReferences, numberRefe
                 // DS 1 -> 0xC9
                 // DS 2 -> 0xC9 0x00
                 // DS 3 -> 0xC9 0x00 0x00
-                var count = parseInt(p.directiveValue || '0', 10) || 0;
+                var count = parseDirectiveSizeValue(p.directiveValue || '0');
                 if (count > 0) {
                     opcodeBytes.push(0xC9); // RET opcode as placeholder
                     for (var i = 1; i < count; i++) {
@@ -1009,19 +1032,33 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
     // 9a) Number definition blocks (0x00)
     for (var _j = 0, _k = Array.from(mergedNumberRefs.entries()); _j < _k.length; _j++) {
         var _l = _k[_j], numberStr = _l[0], info = _l[1];
-        mtxDirectiveBytes.push(0x00); // Number definition marker
-        var numAscii = compressSpacesAndAscii(numberStr);
-        mtxDirectiveBytes.push.apply(mtxDirectiveBytes, numAscii);
-        // Set bit 7 on last character
-        if (mtxDirectiveBytes.length > 0) {
-            mtxDirectiveBytes[mtxDirectiveBytes.length - 1] |= 0x80;
+        // MTX number-definition records carry a single reference kind.
+        // If the same literal is used as both byte and word, emit one record per kind.
+        var refGroups = [
+            { byteOffsets: __spreadArray([], (info.byteOffsets || []), true), wordOffsets: [], relativeOffsets: [] },
+            { byteOffsets: [], wordOffsets: __spreadArray([], (info.wordOffsets || []), true), relativeOffsets: [] },
+            { byteOffsets: [], wordOffsets: [], relativeOffsets: __spreadArray([], (info.relativeOffsets || []), true) }
+        ];
+        for (var _m = 0, refGroups_1 = refGroups; _m < refGroups_1.length; _m++) {
+            var refsForKind = refGroups_1[_m];
+            if (refsForKind.byteOffsets.length === 0 &&
+                refsForKind.wordOffsets.length === 0 &&
+                refsForKind.relativeOffsets.length === 0) {
+                continue;
+            }
+            mtxDirectiveBytes.push(0x00); // Number definition marker
+            var numAscii = compressSpacesAndAscii(numberStr);
+            mtxDirectiveBytes.push.apply(mtxDirectiveBytes, numAscii);
+            // Set bit 7 on last character
+            if (mtxDirectiveBytes.length > 0) {
+                mtxDirectiveBytes[mtxDirectiveBytes.length - 1] |= 0x80;
+            }
+            mtxDirectiveBytes.push.apply(mtxDirectiveBytes, buildReferenceSections(refsForKind, codeStartAbsolute));
         }
-        // Build reference section
-        mtxDirectiveBytes.push.apply(mtxDirectiveBytes, buildReferenceSections(info, codeStartAbsolute));
     }
     // 9c) Label definition blocks (0x02)
-    for (var _m = 0, _o = Object.entries(labelMap); _m < _o.length; _m++) {
-        var _p = _o[_m], labelName = _p[0], offset = _p[1];
+    for (var _o = 0, _p = Object.entries(labelMap); _o < _p.length; _o++) {
+        var _q = _p[_o], labelName = _q[0], offset = _q[1];
         mtxDirectiveBytes.push(0x02); // Label definition marker
         var relOffset = offset - codeStartAbsolute;
         mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
@@ -1041,10 +1078,9 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
         }
     }
     // 9d-9f) Directives (DB/DW/DS)
-    for (var _q = 0, directiveLines_1 = directiveLines; _q < directiveLines_1.length; _q++) {
-        var dir = directiveLines_1[_q];
+    for (var _r = 0, directiveLines_1 = directiveLines; _r < directiveLines_1.length; _r++) {
+        var dir = directiveLines_1[_r];
         if (dir.directiveType === 'DB') {
-            // <0x03> <offset LSB/MSB> <byte count> <ascii length> <ascii chars w/ commas handling,bit7 set on last char of each item separated by commas> >
             mtxDirectiveBytes.push(0x03); // DB marker
             var relOffset = (dir._offset || 0) - offsetBase;
             mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
@@ -1084,8 +1120,8 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
         }
     }
     // 9i) Comments (0x08)
-    for (var _r = 0, commentLines_1 = commentLines; _r < commentLines_1.length; _r++) {
-        var comment = commentLines_1[_r];
+    for (var _s = 0, commentLines_1 = commentLines; _s < commentLines_1.length; _s++) {
+        var comment = commentLines_1[_s];
         //<0x08><offset><length><comment string in ascii characters (excludes the semicolon marker at the start of the comment)><end of comment marker, 0xff>
         mtxDirectiveBytes.push(0x08); // Comment marker
         var relOffset = (comment.offset || 0) - offsetBase;
@@ -1180,9 +1216,14 @@ function buildReferenceSections(refs, codeStartAbsolute) {
             bytes.push(o & 0xff, (o >> 8) & 0xff);
         }
     }
-    // Legacy-only single-kind padding for byte refs remains via existing helper.
     if (wordRefs.length === 0 && relRefs.length === 0 && byteRefs.length > 0) {
-        return buildReferenceSection(byteRefs, 'byte');
+        var byteOnly = [byteRefs.length & 0xff];
+        for (var _c = 0, byteRefs_2 = byteRefs; _c < byteRefs_2.length; _c++) {
+            var o = byteRefs_2[_c];
+            byteOnly.push(o & 0xff, (o >> 8) & 0xff);
+        }
+        byteOnly.push(0x00, 0x00);
+        return byteOnly;
     }
     return bytes;
 }
@@ -1226,156 +1267,6 @@ function processCodeBlock(codeBlock, baseAddr) {
         mtxDirectiveBytes: phase3.mtxDirectiveBytes,
         totalCodeLength: totalCodeLength
     };
-}
-function assembleCodeBlock(lines, baseAddr) {
-    if (baseAddr === void 0) { baseAddr = 0x4000; }
-    // Two-pass: 1) parse lines and collect labels/addresses; 2) emit bytes with labels resolved
-    var bytes = [];
-    var parsedLines = [];
-    var labelMap = {};
-    // First pass: parse and determine addresses
-    var currentAddress = baseAddr;
-    for (var _i = 0, lines_2 = lines; _i < lines_2.length; _i++) {
-        var rawLine = lines_2[_i];
-        var line = rawLine.replace(/\r?\n$/, '');
-        var trimmed = line.trim();
-        if (!trimmed)
-            continue;
-        // comment-only lines
-        if (trimmed.startsWith(';')) {
-            parsedLines.push({ raw: line, isComment: true });
-            continue;
-        }
-        var parsed = (0, z80codes_js_1.parseZ80Line)(line, 0) || { raw: line };
-        // if parse found an explicit address, use it
-        if (parsed.address) {
-            currentAddress = parseInt(parsed.address, 16);
-        }
-        parsed._address = currentAddress;
-        // record label definition
-        if (parsed.label)
-            labelMap[parsed.label.toUpperCase()] = currentAddress;
-        // determine length
-        var instrLen = 0;
-        if (parsed.isDirective) {
-            var d = parsed.directiveType;
-            var val = parsed.directiveValue || '';
-            if (d === 'DB') {
-                var v = val.trim();
-                if (v.startsWith('\"') && v.endsWith('\"')) {
-                    instrLen = v.slice(1, -1).length;
-                }
-                else {
-                    instrLen = 1;
-                }
-            }
-            else if (d === 'DW') {
-                instrLen = 2;
-            }
-            else if (d === 'DS') {
-                instrLen = parseInt(parsed.directiveValue || '0', 10) || 0;
-            }
-        }
-        else if (parsed.mnemonic) {
-            var bestMatch = findBestZ80Match(parsed.mnemonic, parsed.operands || []);
-            instrLen = bestMatch ? bestMatch.length : 1;
-        }
-        parsedLines.push(parsed);
-        currentAddress += instrLen;
-    }
-    // Second pass: emit bytes
-    var cumulativeOffset = 0;
-    for (var _a = 0, parsedLines_2 = parsedLines; _a < parsedLines_2.length; _a++) {
-        var p = parsedLines_2[_a];
-        if (p.isComment) {
-            bytes.push.apply(bytes, compressSpacesAndAscii(p.raw.substring(p.raw.indexOf(';') + 1)));
-            bytes.push(0xFF);
-            continue;
-        }
-        var parsed = p;
-        if (!parsed.mnemonic && !parsed.isDirective)
-            continue;
-        if (parsed.isDirective) {
-            var d = parsed.directiveType;
-            var val = parsed.directiveValue || '';
-            if (d === 'DB') {
-                var v = val.trim();
-                if (v.startsWith('\"') && v.endsWith('\"')) {
-                    var s = v.slice(1, -1);
-                    for (var k = 0; k < s.length; k++)
-                        bytes.push(s.charCodeAt(k));
-                    cumulativeOffset += s.length;
-                }
-                else {
-                    bytes.push(parseImmediateOperand(v) & 0xff);
-                    cumulativeOffset += 1;
-                }
-            }
-            else if (d === 'DW') {
-                var vv = parseImmediateOperand(val) || 0;
-                bytes.push(vv & 0xff, (vv >> 8) & 0xff);
-                cumulativeOffset += 2;
-            }
-            else if (d === 'DS') {
-                var count = parseInt(parsed.directiveValue || '0', 10) || 0;
-                if (count > 0) {
-                    bytes.push(0xC9); // RET opcode as placeholder
-                    for (var n = 1; n < count; n++)
-                        bytes.push(0x00);
-                    cumulativeOffset += count;
-                }
-            }
-            continue;
-        }
-        // instructions
-        var instr = typeof z80codes_js_1.normalizeInstruction === 'function'
-            ? (0, z80codes_js_1.normalizeInstruction)(parsed.mnemonic || '', parsed.operands || [])
-            : null;
-        var cmd = null;
-        if (instr && Array.isArray(z80codes_js_1.z80Cmds)) {
-            for (var _b = 0, z80Cmds_1 = z80codes_js_1.z80Cmds; _b < z80Cmds_1.length; _b++) {
-                var c = z80Cmds_1[_b];
-                var norm = c.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
-                if (norm === (instr || '').toUpperCase()) {
-                    cmd = c;
-                    break;
-                }
-            }
-        }
-        if (!cmd) {
-            var placeholder = typeof z80codes_js_1.normalizeInstruction === 'function'
-                ? (0, z80codes_js_1.normalizeInstruction)(parsed.mnemonic || '', parsed.operands || [])
-                : null;
-            if (placeholder && Array.isArray(z80codes_js_1.z80Cmds)) {
-                for (var _c = 0, z80Cmds_2 = z80codes_js_1.z80Cmds; _c < z80Cmds_2.length; _c++) {
-                    var c = z80Cmds_2[_c];
-                    var norm2 = c.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
-                    if (norm2 === placeholder.toUpperCase()) {
-                        cmd = c;
-                        break;
-                    }
-                }
-            }
-        }
-        if (cmd) {
-            // Use the actual instruction address from parsed._address if available, otherwise use cumulativeOffset
-            var instrAddr = parsed._address !== undefined ? parsed._address : cumulativeOffset;
-            var instrBytes = opCodePatternToBytes(cmd.opCode, parsed, labelMap, new Map(), instrAddr, new Map());
-            // Validate that generated bytes match the expected length - KEEP FOR DEVELOPMENT USE ONLY
-            if (instrBytes.length !== cmd.length) {
-                console.error("OPCODE LENGTH MISMATCH: ".concat(cmd.z80, " at address 0x").concat(instrAddr.toString(16), " - ") +
-                    "Expected ".concat(cmd.length, " bytes but generated ").concat(instrBytes.length, " bytes. ") +
-                    "OpCode pattern: ".concat(cmd.opCode, ", Generated bytes: ").concat(instrBytes.map(function (b) { return '0x' + b.toString(16).toUpperCase(); }).join(' ')));
-            }
-            bytes.push.apply(bytes, instrBytes);
-            cumulativeOffset += instrBytes.length;
-        }
-    }
-    // Ensure code block ends with RET (0xC9) if not already present
-    if (bytes.length === 0 || bytes[bytes.length - 1] !== 0xC9) {
-        bytes.push(0xC9);
-    }
-    return bytes;
 }
 /**
  * Enhanced matching logic for Z80 instructions in CODE blocks.
@@ -1507,8 +1398,8 @@ function convertNoddyBlock(lines) {
         allBytes.push.apply(allBytes, pageContentBytes);
         allBytes.push(0xFF);
     };
-    for (var _i = 0, lines_3 = lines; _i < lines_3.length; _i++) {
-        var rawLine = lines_3[_i];
+    for (var _i = 0, lines_2 = lines; _i < lines_2.length; _i++) {
+        var rawLine = lines_2[_i];
         // Clean line ending
         var line = rawLine.replace(/\r?\n$/, '');
         var trimmedLine = line.trim();
@@ -1649,6 +1540,8 @@ function parseImmediateOperand(op) {
     //f (/^0x/i.test(op)) return sign * (parseInt(op, 16) || 0);
     if (/^[0-9]+$/.test(op))
         return sign * (parseInt(op, 10) || 0);
+    if (/^"[^"]"$/.test(op))
+        return sign * op.charCodeAt(1);
     return 0; // label/unknown -> 0 (labels would need two-pass)
 }
 function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences, baseOffset, labelReferences) {
@@ -1746,6 +1639,7 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
             }
             var cleanOp = operandForParse.trim();
             var v = parseImmediateOperand(cleanOp);
+            var isQuotedChar = /^"[^"]"$/.test(cleanOp);
             // >>> HIGHLIGHT 1: New logic to check for Decimal numbers (isDec) <<<
             var checkOp = cleanOp;
             if (checkOp.startsWith('+') || checkOp.startsWith('-')) {
@@ -1761,7 +1655,7 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
                     addRefOffset(labelReferences, lab, 'byte', baseOffset + out.length);
                 }
             }
-            else if (isHex || isDec) { // >>> HIGHLIGHT 2: Added `|| isDec` to this condition <<<
+            else if (isHex || isDec || isQuotedChar) { // >>> HIGHLIGHT 2: Added decimal and quoted-char support <<<
                 // Track number reference (byte type)
                 // Previous code only had: else if (/^[#]/.test(cleanOp))
                 if (numberReferences) {
