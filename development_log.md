@@ -944,3 +944,73 @@ High: DW directives accept label-shaped operands but never participate in the no
 High: DS hex syntax is explicitly validated as supported, but the length/emission paths only parse decimal, so DS #10 can pass validation and still reserve the wrong number of bytes. The validator advertises #00-#FE support in z80codes.ts:1392-1415. But address tracking in z80codes.ts:2174 uses parseInt(..., 10) || 1, and both code-generation paths use decimal-only parsing in mtxtokens.ts:1110, mtxtokens.ts:1175, and mtxtokens.ts:1582-1585. This is a direct validator/encoder conflict, not just duplication.
 
 Medium: Directive length logic is duplicated and already diverges in the legacy assembler path. The validator computes DB/DW lengths by counting all split operands in z80codes.ts:2154-2174, and the main processCodeBlock path mirrors that via parseDbValues/parseDwValues in mtxtokens.ts:959-980 and mtxtokens.ts:1108-1110. But assembleCodeBlock undercounts in its first pass: DB is treated as length 1 unless it is a single quoted string, and DW is always length 2 in mtxtokens.ts:1525-1539, while its second pass emits all operands in mtxtokens.ts:1560-1585. If that function is still reachable, labels after multi-item directives will be misaddressed. This was downloaded to duplicate and not used elsewhere, so function assmbleCodeBlock in mtxtoken.ts is not required. One more stale piece is the forced trailing RET in mtxtokens.ts:1651-1654. The active path explicitly says “do not auto-append RET” in mtxtokens.ts:1468-1469, so this is another sign that assembleCodeBlock belongs to an older behavior model. This was put in for a reason, not sure why. a copy of the function was saved and the function was deleted from mtxtokens and export removed and import into extension.ts removed. It was tested on T090389UP2B.bas
+
+29-May-2026
+why is LD BC,#000a and LD BC,#0000A not resulting in the followig errors
+
+use of lowercase in hexadecimal address
+a hexadecimal number greater than 16-bit
+
+So the missing errors come from two design choices:
+
+Case is normalized away before operand validation.
+XXXX is enforced as “fits in 16-bit value”, not “is at most 4 hex digits”.
+
+changes to z80codes.ts
+
+Hex operands are no longer uppercased before operand validation, so lowercase input like #000a can now be diagnosed instead of being silently normalized.
+Hex-width checks were added before the existing numeric range checks: more than 2 digits now errors for 8-bit placeholders (XX, YY, ZZ), and more than 4 digits errors for 16-bit placeholders (XXXX).
+Mnemonic normalization remains intact, so mixed-case mnemonics like LDIr still produce the existing uppercase-mnemonic error.
+
+31-May-2026
+Code streamlining to remove unused functions, i.e.  only those with no references beyond their own declaration.
+Within the six-file scope you named, these functions in src/mtxstdfns.ts appear unused by both criteria: they have no real usage inside src/mtxstdfns.ts beyond their own declaration/export, and no usage in src/mtxsavehdr.ts, src/mtxsysvars.ts, src/mtxtokens.ts, src/z80codes.ts, or src/extension.ts.
+The extracted functions and copied into oldfns.ts are parseSignedHex, isBalancedDoubleQuotes, simpleTokeniser, trimCommaList, trimArray, splitCommandsByColon, isNoddyTrigger, and findPlodReferences.
+
+Moved computeNoddyAsciiLength out of src/extension.ts into src/oldfns.ts, and added the required vscode import there so the original signature remains intact.
+
+No unused functions in mtxsavehdr.ts
+
+For src/mtxsysvars.ts, there are no function declarations at all.
+
+For src/mtxtokens.ts, these function declarations meet your unused criteria within the allowed scope:
+
+convertToAsciiWithHiBit
+updateCodeBlockLength
+refineConvertTextToHex
+extractMTXDirectives does not qualify because it is used by refineConvertTextToHex inside mtxtokens.ts, and processMTXDirectives does not qualify because it is used internally as well. So the unused set for this file is just those three names. Preserved their original logic in oldfns.ts rather than turning them into empty archive shells. Focused validation on both touched files reports no errors.
+
+For src/z80codes.ts, these function declarations meet your unused criteria within the allowed scope:
+
+getHexDigitCount
+findZ80Command
+getHexDigitCount is a local helper that appears to be declared but never called. findZ80Command is exported, but within the file set you specified it does not appear to be used anywhere.
+
+After changes, tested against compiled versions of ANALYSIS.bas and POWERGRAPHICS.bas
+
+Added a tsconfig.json for compiling options
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "rootDir": "src",
+    "outDir": "out",
+    "strict": false,
+    "esModuleInterop": true,
+    "sourceMap": false,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "out"]
+}
+
+use 
+npm run compile (this runs > mtxbasic-extension@0.0.1 compile > tsc -p ./)
+npm run watch  (this runs tsc -watch -p ./ as defined in package.json)
+
+In practice:
+npm run compile = one build, then exit
+npm run watch = keep running, rebuild on each file change
+Use watch when you are actively editing .ts files and want the .js files in out to stay up to date automatically.
+

@@ -1213,20 +1213,13 @@ function parseHexValue(op: string): number {
 }
 
 /**
- * Get hex digit count
- */
-function getHexDigitCount(op: string): number {
-    const match = /^[#]([0-9A-F]+)$/.exec(op.trim());
-    return match ? match[1].length : 0;
-}
-
-/**
  * Validate operand size based on placeholder type
  * Returns error message if invalid, null if valid
  * Handles: XX (8-bit), YY (8-bit signed), ZZ (8-bit), XXXX (16-bit)
  */
 function validateOperandSize(op: string, placeholder: string): string | null {
-    const trimmed = op.trim().toUpperCase();
+    const rawTrimmed = op.trim();
+    const trimmed = rawTrimmed.toUpperCase();
 
     if (isQuotedCharOperand(trimmed)) {
         if (placeholder === 'XX' || placeholder === 'ZZ') {
@@ -1241,27 +1234,42 @@ function validateOperandSize(op: string, placeholder: string): string | null {
     }
     
     // Extract hex value
-    const hexMatch = /^[#]([0-9A-F]+)$/.exec(trimmed);
+    const hexMatch = /^[#]([0-9A-Fa-f]+)$/.exec(rawTrimmed);
     if (hexMatch) {
         const hexValue = parseInt(hexMatch[1], 16);
-        const hexStr = hexMatch[1].toUpperCase();
+        const hexStr = hexMatch[1];
+        const normalizedHexStr = hexStr.toUpperCase();
+        const hexDigitCount = hexStr.length;
+
+        if (hexStr !== normalizedHexStr) {
+            return `Hex value must be uppercase: "${rawTrimmed}" should be "#${normalizedHexStr}"`;
+        }
         
         if (placeholder === 'XX' || placeholder === 'ZZ') {
+            if (hexDigitCount > 2) {
+                return `${placeholder} must use at most 2 hex digits, got #${normalizedHexStr}`;
+            }
             // 8-bit unsigned: 0x00 to 0xFF
             if (hexValue < 0 || hexValue > 0xFF) {
-                return `${placeholder} must be 8-bit (#00 to #FF), got #${hexStr}`;
+                return `${placeholder} must be 8-bit (#00 to #FF), got #${normalizedHexStr}`;
             }
             return null;           
         } else if (placeholder === 'YY') {
+            if (hexDigitCount > 2) {
+                return `${placeholder} must use at most 2 hex digits, got #${normalizedHexStr}`;
+            }
             // 8-bit signed: -128 to +127 (0x00 to 0xFF in unsigned, but interpreted as -128..+127)
             if (hexValue < 0 || hexValue > 0xFF) {
-                return `${placeholder} must be 8-bit signed (#00 to #FF), got #${hexStr}`;
+                return `${placeholder} must be 8-bit signed (#00 to #FF), got #${normalizedHexStr}`;
             }
             return null;
         } else if (placeholder === 'XXXX') {
+            if (hexDigitCount > 4) {
+                return `${placeholder} must use at most 4 hex digits, got #${normalizedHexStr}`;
+            }
             // 16-bit unsigned: 0x0000 to 0xFFFF
             if (hexValue < 0 || hexValue > 0xFFFF) {
-                return `${placeholder} must be 16-bit (#0000 to #FFFF), got #${hexStr}`;
+                return `${placeholder} must be 16-bit (#0000 to #FFFF), got #${normalizedHexStr}`;
             }
             return null;
         }
@@ -1444,7 +1452,7 @@ function buildNormalizedInstruction(mnemonic: string, operands?: string[]): stri
         return mnemonic.toUpperCase();
     }
     
-    const normalizedOps = operands.map(op => op.toUpperCase().trim());
+    const normalizedOps = operands.map(op => op.trim());
     return `${mnemonic.toUpperCase()} ${normalizedOps.join(',')}`;
 }
 
@@ -1456,7 +1464,8 @@ function replaceWithPlaceholders(mnemonic: string, operands: string[]): string {
     const upperMnemonic = mnemonic.toUpperCase();
     
     const replacedOps = operands.map((op, idx) => {
-        const upper = op.toUpperCase().trim();
+        const raw = op.trim();
+        const upper = raw.toUpperCase();
         
         // Keep registers, conditions, indirect registers as-is
         if (/^(A|B|C|D|E|H|L|I|R)$/.test(upper)) return upper;
@@ -1474,16 +1483,16 @@ function replaceWithPlaceholders(mnemonic: string, operands: string[]): string {
         
         // Indirect port number for IN/OUT: (xx) -> (XX)
         if (upperMnemonic === 'OUT' || upperMnemonic === 'IN') {
-            if (/^\([#]?[0-9A-F]+\)$/.test(upper) || /^\([0-9]+\)$/.test(upper)) {
+            if (/^\([#]?[0-9A-Fa-f]+\)$/.test(raw) || /^\([0-9]+\)$/.test(raw)) {
                 return '(XX)';
             }
         }
         
         // Indirect address: (#XXXX) or (decimal) or (label) -> (XXXX)
-        if (/^\([#][0-9A-F]+\)$/.test(upper)) {
+        if (/^\([#][0-9A-Fa-f]+\)$/.test(raw)) {
             return '(XXXX)';
         }
-        if (/^\([0-9]+\)$/.test(upper)) {
+        if (/^\([0-9]+\)$/.test(raw)) {
             return '(XXXX)';
         }
         if (/^\([A-Z][A-Z0-9]*\)$/.test(upper)) {
@@ -1542,20 +1551,20 @@ function replaceWithPlaceholders(mnemonic: string, operands: string[]): string {
         // For other 8-bit operations (ADD A,n; SUB n; AND n; etc.)
         if (['ADD', 'ADC', 'SUB', 'SBC', 'AND', 'XOR', 'OR', 'CP'].includes(upperMnemonic)) {
             // If it's a value, it's 8-bit
-            if (isHexOperand(upper) || isDecimalOperand(upper)) {
+            if (isHexOperand(raw) || isDecimalOperand(raw)) {
                 return 'XX';
             }
         }
         
         // Hex value - determine size
-        if (isHexOperand(upper)) {
-            const val = parseHexValue(upper);
+        if (isHexOperand(raw)) {
+            const val = parseHexValue(raw);
             return val > 255 ? 'XXXX' : 'XX';
         }
         
         // Decimal value - determine size
-        if (isDecimalOperand(upper)) {
-            const val = parseInt(upper, 10);
+        if (isDecimalOperand(raw)) {
+            const val = parseInt(raw, 10);
             return val > 255 ? 'XXXX' : 'XX';
         }
         
@@ -2303,15 +2312,6 @@ function normalizeInstruction(mnemonic: string, operands?: string[]): string {
     return replaceWithPlaceholders(mnemonic, operands || []);
 }
 
-function findZ80Command(normalizedInstruction: string): typeof z80Cmds[0] | null {
-    for (const cmd of z80Cmds) {
-        if (cmd.z80.toUpperCase() === normalizedInstruction.toUpperCase()) {
-            return cmd;
-        }
-    }
-    return null;
-}
-
 function getZ80InstructionInfo(word: string): string | null {
     const upperWord = word.toUpperCase();
     const matches = z80Cmds.filter(cmd => 
@@ -2355,7 +2355,6 @@ export {
     detectCodeBlocks,
     collectLabels,
     normalizeInstruction,
-    findZ80Command,
     validateZ80Instruction,
     validateZ80InstructionWithLabels,
     validateCodeBlock,

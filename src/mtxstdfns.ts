@@ -18,23 +18,6 @@ type BoolSpan = { spanStart: number; spanEnd: number };
             //return /^[+-]?[#][0-9A-Fa-f]{1,4}$/.test(expr); // use if what SIGNED but must use - or + in front of the hex number.
     }//  END of isHexNumber
 
-    function parseSignedHex(s: string): number | null { 
-
-            const m = s.match(/^([#])([0-9A-Fa-f]{1,4})$/);
-            if (!m) return null;
-
-            const raw = parseInt(m[2]!, 16);          // 0‑65535 (m[2] is guaranteed by the regex and the null check)
-            // Convert to signed 16‑bit:
-            const signed = raw & 0x8000 ? raw - 0x10000 : raw;
-
-            // 16‑bit signed range: -32768 … 32767
-            // negative numbers starts at #8000 (-32768) to #FFFF (-1)
-            // postive numbers start at 0 to #7FFF
-            if (signed < -32768 || signed> 32767) return null;
-
-            return signed; // e.g. #FFA0 → -96
-    } //  END of isHexadecimalNumber
-
     function parseHex(s: string): number | null {
             const m = s.match(/^([+-]?)([#])([0-9A-Fa-f]{1,4})$/);
             if (!m) return null;                     // not a valid literal
@@ -99,17 +82,6 @@ type BoolSpan = { spanStart: number; spanEnd: number };
             }
             return count ===0; //true if condition met
     } //END of isBalancedParentheses
-
-    function isBalancedDoubleQuotes(s: string): boolean {
-            let count = 0;
-            for (const char of s) {
-            if (char === '"') count++;
-            if (char === '"') count--;
-            if (count < 0) return false;
-            }
-            return count ===0; //true if condition met
-    } //END of isBalancedParentheses
-
 
     function stripAllCharacters(input: string | number, chars: string): string {
         // Escape characters that have special meaning in a RegExp (e.g. . * + ? ^ $ \)
@@ -365,21 +337,6 @@ type BoolSpan = { spanStart: number; spanEnd: number };
             return n;
     } //END of captureParenthesesGroup
 
-
-    // simple tokeniser – split on whitespace and keep punctuation as separate tokens
-    function simpleTokeniser(str: string): string[] {
-
-        // order is critical, need to check decimal before the last option otherwise '4.5' is split as 4,.,5. The last bit allows vars starting with numbers to avoid splitting down
-        
-        const re = /("[^"]*"|[A-Z]{1,}[0-9]*\$(?![A-Z0-9])|(?=[A-Z0-9]*[A-Z])[A-Z0-9]+|\d+(?:\.\d+)?|\S)/g; //LEN\s isn't correct and split down further.
-        // regex above matches
-        // \"[^"]*\" captures a double‑quoted string (including any lowercase letters) as one token.
-        // [A-Z]{1,}[0-9]*\$(?![A-Za-z0-9]) matches the special $‑ending tokens.
-        //[A-Z][A-Za-z0-9]* matches regular identifiers that start with a capital letter and may contain only capitals or digits
-        // \d+ matches pure numbers but for decimals its \d+(?:\.\d+)?
-        // \S catches any remaining single non‑space character (punctuation, symbols, etc.).
-        return str.match(re) ?? [];
-    } // END of simple tokeniser
 
     // ------------------------------------------------------------
     // complexTokeniser – tokenises according to the exact rules
@@ -957,51 +914,6 @@ function splitBooleanExpression(expr: string): BoolSpan[] {
     return spans;
 } // END of splitBooleanExpression //END of splitBooleanExpression
 
-//a -ve number trims from the last entry backwards. A +ve trims from the 1st entry forward
- function trimCommaList(s: string, n = 3): string { 
-  const items = s
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  if (n === 0) return '';
-
-  const result =
-    n > 0 ? items.slice(0, n) : items.slice(n); // slice(n) with negative n keeps last |n|
-
-  return result.join(', ');
-} //END of trimCommaList  
-
-function trimArray<T>(arr: T[] | null | undefined, n = 3): T[] {
-  const safe = arr ?? [];
-  if (n === 0) return [];
-  return n > 0 ? safe.slice(0, n) : safe.slice(n);
-} //END trim arrays
-
-function splitCommandsByColon(text: string): string[] {
-    //same as splitLineSegments but returns string array only and doesn't remove leading line numbers
-    const chunks: string[] = [];
-    let current = '';
-    let depth = 0;
-    let inString = false;
-    for (let idx = 0; idx < text.length; idx++) {
-        const ch = text[idx];
-        if (ch === '"') { inString = !inString; current += ch; continue; }
-        if (inString) { current += ch; continue; }
-        if (ch === '(') { depth++; current += ch; continue; }
-        if (ch === ')') { depth = Math.max(0, depth - 1); current += ch; continue; }
-        if (depth === 0 && ch === ':') {
-            if (current.trim()) chunks.push(current.trim());
-            current = '';
-            continue;
-        }
-        current += ch;
-    }
-    if (current.trim()) chunks.push(current.trim());
-    return chunks;
-} // END of splitCommandsByColon
-
-
 // NODDY command specification
 interface NoddyCommand {
     id: string;
@@ -1418,52 +1330,20 @@ function validateNoddyProgram(
     return errors;
 }
 
-/**
- * Check if a line is a NODDY trigger line
- */
-function isNoddyTrigger(line: string): boolean {
-    return /^\s*\d+\s+NODDY\s*$/.test(line.toUpperCase());
-}
-
-/**
- * Get all PLOD references from BASIC code
- */
-function findPlodReferences(lines: string[]): { line: number; progName: string; start: number }[] {
-    const refs: { line: number; progName: string; start: number }[] = [];
-    const plodPattern = /PLOD\s+"(\w+)"/g;
-    
-    for (let i = 0; i < lines.length; i++) {
-        const lineUpper = lines[i].toUpperCase();
-        let match;
-        while ((match = plodPattern.exec(lineUpper)) !== null) {
-            refs.push({
-                line: i,
-                progName: match[1],
-                start: match.index
-            });
-        }
-    }
-    
-    return refs;
-}
-
 // Exports: named exports so other files can import what they need
 export {
         isHexNumber,
-        parseSignedHex,
         parseHex,
         isValidVarName,
         isValidStrVarName,
         isValidString,
         isBalancedParentheses,
-        isBalancedDoubleQuotes,
         stripAllCharacters,
         stripOuterParentheses,
         convertToNumber,
         stringExprParts,
         varExprParts,
         captureParenthesesGroup,
-        simpleTokeniser,
         complexTokeniser,
         isValidVarExprArithmetic,
         isValidArithmetic,
@@ -1477,12 +1357,7 @@ export {
         findBooleanOperatorSpacingIssues,
         validateBooleanConnectors,
         splitBooleanExpression,
-        trimCommaList,
-        trimArray,
-        splitCommandsByColon,
         parseNoddyContent,
         validateNoddyProgram,
-        isNoddyTrigger,
-        findPlodReferences,
         NoddyPage
 };

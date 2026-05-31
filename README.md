@@ -68,7 +68,7 @@ CODE must be on a dedicated line with no other commands, as shown above, otherwi
 The assembler format is unchanged from that used by the MTX assembler. 
 <indent><sp><hexaddr><LABEL: (optional)><z80 mnenomic><;COMMENT (optional)>
 
-Once a CODE block is defined as above, pressing <return> moves the line down 1 row and indents, so as to differentiate from a BASIC <linenumber>. Pressing the space bar <sp> after the indent will generate the next available hexadecimal address. Click on it to use it. This can be a tad slow, I normally use 4000 for each line then use the auto renumber feature below to quick renumber the whole block with the correct hex addresses.
+Once a CODE block is defined as above, pressing <return> moves the line down 1 row and indents, so as to differentiate from a BASIC <linenumber>. Pressing the space bar <sp> after the indent will generate the next available hexadecimal address. Click on it to use it. This can be a tad slow, I normally use 4000 for each line then use the auto renumber feature below to quickly renumber the whole block with the correct hex addresses.
 
 20 CODE<return>
      4014 START: LD A,#0F ; START of the z80 code<return>
@@ -90,7 +90,9 @@ A quirk of the assembler and to keep consistency with the original, the hexadeci
      401B LD HL,16412 ;decimal address
      401E RET ;ensure there is 1 RET in your code to avoid the program from crashing if you want to return to BASIC.
 
-Do not use blank lines or comment only lines as this will result in errors, it will treat the code after the blank or comment only line as BASIC and not part of the code block. If you need to add additional comment information, use NOP followed the comment, e.g. 4010 NOP ; additional commenting.
+In a CODE block, do not use blank lines or comment only lines as this will result in errors, it will treat the code after the blank or comment only line as BASIC and not part of the code block. If you need to add additional comment information, use NOP followed the comment, e.g. 4010 NOP ; additional commenting.
+
+The CODE block will flag if duplicate or missing LABELS.
 
 One quirk not applied in this implementation is the frustrating way the built in assembler dealt with changes after an assembly instruction was entered. For example, if you changed LD DE,#7000 to LD DE,#9000 the total length of the code increases by 9 bytes in this example. It leaves a residue of 00 23 39 30 30 b0 00 00 00 behind. Working with VS code does not generate this. Note: mtxdisassembly will strip out these reminants resulting in modified code lengths and if the coder had used fixed memory addresses, these strip outs could result in positional changes that may affect execution after recompiling in this extension. So bewary.
 
@@ -143,6 +145,8 @@ i) Once you have created your MTX BASIC masterpiece, save the VS code text file,
 ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h.  This will bring up MTX save window, enter the filename.mtx (yes use the .mtx extension as preferred for MEMU emulator). A second prompt at the top middle of the VS code screen will ask if you want to auto-run or not (NOTE: do not forget to select "Yes or No" or the file will not be saved). If Yes (auto-run) is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator). If there are any errors, the binary file (.mtx) will not save, error message(s) will appear at the bottom left hand corner of the VS code screen.
 
 The .mtx code generated for use on the Memotech MEMU emulator only uses minimal changes to the standard system variables that are normally saved to tape. In this version, the MTX header block including MTX tape based system variables is equivalent to 619 bytes.
+
+Finally, the extension default mode is for a MTX 512. Currently, to change to a MTX500, you will have to manually edit the file extension.js in the OUT folder of the extension and change const ramSize = 48; to const ramSize = 32; This will set free RAM to #8000 instead of #4000.
 
 ## Contributing
 

@@ -22,23 +22,8 @@ import {
         findBooleanOperatorSpacingIssues,
         validateBooleanConnectors,
         splitBooleanExpression,
-        trimCommaList,
-        trimArray,
         parseNoddyContent,
-        validateNoddyProgram,
-        isHexNumber,
-        parseSignedHex,
-        parseHex,
-        isValidString,
-        isBalancedParentheses,
-        isBalancedDoubleQuotes,
-        captureParenthesesGroup,
-        simpleTokeniser,
-        complexTokeniser,
-        splitCommandsByColon,
-        isNoddyTrigger,
-        findPlodReferences,
-        NoddyPage}
+        validateNoddyProgram}
 from './mtxstdfns.js';
 
  
@@ -48,36 +33,12 @@ import {
         getZ80InstructionInfo,
         parseZ80Line,
         getInstructionLength,
-        getDirectiveLength,
-        z80Cmds,
-        Z80Error,
-        Z80ParsedLine,
-        CodeBlock,
-        LabelInfo,
-        splitOperands,
-        collectLabels,
-        normalizeInstruction,
-        findZ80Command,
-        validateZ80Instruction,
-        validateZ80InstructionWithLabels,
-        validateCodeBlock
+        getDirectiveLength
 } from './z80codes.js';
 
 import {
         convertTextToHex,
-        convertNoddyBlock,
-        basicTokeniseLine,
-        refineConvertTextToHex,
-        compressSpacesAndAscii,
-        findBestZ80Match,
-        mtxTokens,
-        parseImmediateOperand,
-        opCodePatternToBytes,
-        processMTXDirectives,
-        processCodeBlock,
-        updateCodeBlockLength,
-        extractMTXDirectives,
-        isAtWordBoundary
+        convertNoddyBlock
  } from './mtxtokens.js';
 
 import { createHdr, initCreateHdr} from './mtxsavehdr.js';
@@ -542,17 +503,6 @@ export function activate(ctx: vscode.ExtensionContext) {
         }
         return s;
         } //END of stripTrailingCommentUnquoted function
-
-        // Count ASCII characters in the NODDY section (marker line excluded)
-        function computeNoddyAsciiLength(doc: vscode.TextDocument, noddyStartLine: number): number {
-        if (noddyStartLine < 0) return 0;
-        const startLine = noddyStartLine + 1;
-        if (startLine >= doc.lineCount) return 0;
-        const start = new vscode.Position(startLine, 0);
-        const end = doc.lineAt(doc.lineCount - 1).range.end;
-        const noddyText = doc.getText(new vscode.Range(start, end));
-        return noddyText.length;
-        }
 
         // Count BYTES in the NODDY section (using Page structure)
         function computeNoddyByteLength(doc: vscode.TextDocument, noddyStartLine: number): number {

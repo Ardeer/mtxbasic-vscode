@@ -6,20 +6,10 @@ v0.1
 
 12-Dec-2025 converted to typescript and added hex values of the tokens.
 */
-var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
-    if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
-        if (ar || !(i in from)) {
-            if (!ar) ar = Array.prototype.slice.call(from, 0, i);
-            ar[i] = from[i];
-        }
-    }
-    return to.concat(ar || Array.prototype.slice.call(from));
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.mtxTokens = void 0;
 exports.convertTextToHex = convertTextToHex;
 exports.basicTokeniseLine = basicTokeniseLine;
-exports.refineConvertTextToHex = refineConvertTextToHex;
 exports.compressSpacesAndAscii = compressSpacesAndAscii;
 exports.findBestZ80Match = findBestZ80Match;
 exports.convertNoddyBlock = convertNoddyBlock;
@@ -27,14 +17,11 @@ exports.parseImmediateOperand = parseImmediateOperand;
 exports.opCodePatternToBytes = opCodePatternToBytes;
 exports.processMTXDirectives = processMTXDirectives;
 exports.processCodeBlock = processCodeBlock;
-exports.updateCodeBlockLength = updateCodeBlockLength;
 exports.extractMTXDirectives = extractMTXDirectives;
 exports.isAtWordBoundary = isAtWordBoundary;
-var z80codes_js_1 = require("./z80codes.js");
-//Not imported     Z80Error, Z80ParsedLine, CodeBlock, LabelInfo, splitOperands, detectCodeBlocks, collectLabels, findZ80Command,
-//                 validateZ80Instruction, validateZ80InstructionWithLabels, validateCodeBlock, validateCodeBlocks,  getZ80InstructionInfo
+const z80codes_js_1 = require("./z80codes.js");
 //ascii (non-printable 0 to 31 and printable from 32 to 127) + MTX BASIC tokens (from 128 to 255)
-var mtxTokens = [
+const mtxTokens = [
     { tokenDec: 0, tokenHex: 0x00, token: "NUL" },
     { tokenDec: 1, tokenHex: 0x01, token: "SCH" },
     { tokenDec: 2, tokenHex: 0x02, token: "STX" },
@@ -297,8 +284,8 @@ function createRefBuckets() {
     return { byteOffsets: [], wordOffsets: [], relativeOffsets: [] };
 }
 function ensureRefBuckets(map, key) {
-    var k = key.toUpperCase();
-    var b = map.get(k);
+    const k = key.toUpperCase();
+    let b = map.get(k);
     if (!b) {
         b = createRefBuckets();
         map.set(k, b);
@@ -306,7 +293,7 @@ function ensureRefBuckets(map, key) {
     return b;
 }
 function addRefOffset(map, key, kind, offset) {
-    var buckets = ensureRefBuckets(map, key);
+    const buckets = ensureRefBuckets(map, key);
     if (kind === 'byte')
         buckets.byteOffsets.push(offset);
     else if (kind === 'word')
@@ -316,33 +303,33 @@ function addRefOffset(map, key, kind, offset) {
 }
 // --- token helpers (keep existing mtxTokens above) ---
 // tokens sorted by length (longest-first) + uppercase cache
-var tokensSorted = mtxTokens
-    .map(function (t) { return ({ token: t.token, tokenUpper: t.token.toUpperCase(), dec: t.tokenDec }); })
-    .sort(function (a, b) { return b.token.length - a.token.length; });
-var maxTokenLen = tokensSorted.length ? Math.max.apply(Math, tokensSorted.map(function (t) { return t.token.length; })) : 0;
-var stringKeywordTokens = new Set(tokensSorted.filter(function (t) { return t.tokenUpper.endsWith('$'); }).map(function (t) { return t.tokenUpper; }));
+const tokensSorted = mtxTokens
+    .map(t => ({ token: t.token, tokenUpper: t.token.toUpperCase(), dec: t.tokenDec }))
+    .sort((a, b) => b.token.length - a.token.length);
+const maxTokenLen = tokensSorted.length ? Math.max(...tokensSorted.map(t => t.token.length)) : 0;
+const stringKeywordTokens = new Set(tokensSorted.filter(t => t.tokenUpper.endsWith('$')).map(t => t.tokenUpper));
 // Helper: check if position is at a word boundary
 function isAtWordBoundary(text, pos, len) {
     // MTX BASIC identifiers: [A-Z][A-Z0-9]*\$?
     // Before: must not be a letter or $ 
     // (digits and spaces are OK: "1TO" or " TO" means TO is separate. Likewise for Numbers before THEN and ELSE)
-    var before = pos === 0 || !/[A-Z$]/.test(text[pos - 1]);
+    const before = pos === 0 || !/[A-Z$]/.test(text[pos - 1]);
     // After: must not be alphanumeric or $
-    var after = pos + len >= text.length || !/[A-Z0-9$]/.test(text[pos + len]);
+    const after = pos + len >= text.length || !/[A-Z0-9$]/.test(text[pos + len]);
     return before && after;
 }
 // compress runs of spaces into 0x80 + runLength and otherwise emit ASCII bytes
 function compressSpacesAndAscii(str) {
-    var bytes = [];
-    var i = 0;
+    const bytes = [];
+    let i = 0;
     while (i < str.length) {
         if (str[i] === ' ') {
-            var j = i;
+            let j = i;
             while (j < str.length && str[j] === ' ')
                 j++;
-            var run = j - i;
+            let run = j - i;
             while (run > 0) {
-                var chunk = Math.min(run, 127);
+                const chunk = Math.min(run, 127);
                 bytes.push(0x80 + chunk);
                 run -= chunk;
             }
@@ -380,34 +367,33 @@ totalMtxDirectiverLength
 add +1 for EOL
 Note: ensure the EOL marker (0xFF) is not duplicated at the end of the mtx directive processing.
 */
-function basicTokeniseLine(line, baseAddr) {
-    var _a, _b;
-    if (baseAddr === void 0) { baseAddr = 0x4000; }
+function basicTokeniseLine(line, baseAddr = 0x4000) {
     // detect and strip leading line number (capture rest including newlines)
-    var lnMatch = /^\s*(\d+)\s*([\s\S]*)$/.exec(line);
-    var hasLineNumber = false;
-    var lineNumber = 0;
+    const lnMatch = /^\s*(\d+)\s*([\s\S]*)$/.exec(line);
+    let hasLineNumber = false;
+    let lineNumber = 0;
     if (lnMatch) {
         hasLineNumber = true;
         lineNumber = parseInt(lnMatch[1], 10) || 0;
         line = lnMatch[2] || '';
     }
-    var restFull = line.replace(/\r?\n$/, '');
-    var restTrim = restFull.trim();
-    var wrapWithLineHeader = function (payloadBytes) {
-        var totalLength = 2 + 2 + payloadBytes.length;
-        return __spreadArray([
+    const restFull = line.replace(/\r?\n$/, '');
+    const restTrim = restFull.trim();
+    const wrapWithLineHeader = (payloadBytes) => {
+        const totalLength = 2 + 2 + payloadBytes.length;
+        return [
             totalLength & 0xff, (totalLength >> 8) & 0xff,
-            lineNumber & 0xff, (lineNumber >> 8) & 0xff
-        ], payloadBytes, true);
+            lineNumber & 0xff, (lineNumber >> 8) & 0xff,
+            ...payloadBytes
+        ];
     };
     // CODE handling: accept CODE line followed by assembly lines (process only mnemonic part)
     if (/^\s*CODE(?:\b|$)/.test(restTrim)) {
-        var codeTok = (_b = (_a = tokensSorted.find(function (t) { return t.tokenUpper === 'CODE'; })) === null || _a === void 0 ? void 0 : _a.dec) !== null && _b !== void 0 ? _b : 0xC2;
+        const codeTok = tokensSorted.find(t => t.tokenUpper === 'CODE')?.dec ?? 0xC2;
         // split the rest into physical lines and find the line that contains CODE
-        var linesArr = restFull.split(/\r?\n/);
-        var codeLineIndex = -1;
-        for (var idx = 0; idx < linesArr.length; idx++) {
+        const linesArr = restFull.split(/\r?\n/);
+        let codeLineIndex = -1;
+        for (let idx = 0; idx < linesArr.length; idx++) {
             if (/^\s*CODE(?:\b|$)/.test(linesArr[idx])) {
                 codeLineIndex = idx;
                 break;
@@ -418,9 +404,9 @@ function basicTokeniseLine(line, baseAddr) {
         // get lines after the CODE line, stopping at either:
         // 1. a new BASIC line (no leading whitespace, starts with digits)
         // 2. a line without a hex address (leading whitespace but no hex address)
-        var rawCodeLines = [];
-        for (var idx = codeLineIndex + 1; idx < linesArr.length; idx++) {
-            var l = linesArr[idx];
+        const rawCodeLines = [];
+        for (let idx = codeLineIndex + 1; idx < linesArr.length; idx++) {
+            const l = linesArr[idx];
             // Stop if this is a new BASIC line (starts with digits, no leading whitespace)
             if (/^\d+\s/.test(l))
                 break;
@@ -435,44 +421,46 @@ function basicTokeniseLine(line, baseAddr) {
         // UPDATE: We do NOT split comments here anymore. We pass the full line to processCodeBlock
         // which handles inline comments correctly by preserving the same offset.
         // Alternative simpler approach: just filter out empty lines
-        var codeLines = rawCodeLines.filter(function (l) { return l.trim().length > 0; });
+        const codeLines = rawCodeLines.filter(l => l.trim().length > 0);
         if (codeLines.length === 0) {
-            var payloadPlaceholder = [codeTok, 0x00, 0x00, 0xFF];
+            const payloadPlaceholder = [codeTok, 0x00, 0x00, 0xFF];
             if (hasLineNumber)
                 return wrapWithLineHeader(payloadPlaceholder);
             return payloadPlaceholder;
         }
-        var codeBlockStr = codeLines.join('\n');
-        var codeBlockResult = processCodeBlock(codeBlockStr, baseAddr);
+        const codeBlockStr = codeLines.join('\n');
+        const codeBlockResult = processCodeBlock(codeBlockStr, baseAddr);
         // Build final payload with separated opcode and directive bytes
-        var payload = __spreadArray(__spreadArray(__spreadArray([
+        const payload = [
             codeTok,
             codeBlockResult.totalOpcodeLength & 0xff,
-            (codeBlockResult.totalOpcodeLength >> 8) & 0xff
-        ], codeBlockResult.opcodeBytes, true), codeBlockResult.mtxDirectiveBytes, true), [
+            (codeBlockResult.totalOpcodeLength >> 8) & 0xff,
+            ...codeBlockResult.opcodeBytes,
+            ...codeBlockResult.mtxDirectiveBytes,
             0xFF
-        ], false);
+        ];
         // Update total line length to include: line-header(2) + line-number(2) + payload
         // payload = token(1) + opcode-length(2) + opcodes + directives + EOL(1)
-        var totalLineLength = 2 + 2 + payload.length; // 2(length bytes) + 2(line number) + payload
-        var finalPayload = __spreadArray([
+        const totalLineLength = 2 + 2 + payload.length; // 2(length bytes) + 2(line number) + payload
+        const finalPayload = [
             totalLineLength & 0xff,
             (totalLineLength >> 8) & 0xff,
             lineNumber & 0xff,
-            (lineNumber >> 8) & 0xff
-        ], payload, true);
+            (lineNumber >> 8) & 0xff,
+            ...payload
+        ];
         if (hasLineNumber)
             return finalPayload;
         return payload;
     }
     // Standard BASIC tokenisation (remove spaces after ':' and before TO/THEN outside quotes)
-    var stripSpacesAfterColonOutsideQuotes = function (input) {
-        var out = '';
-        var inQ = false;
-        var inRem = false;
-        var isIdentChar = function (c) { return /[A-Z0-9\$]/.test(c); };
-        for (var idx = 0; idx < input.length; idx++) {
-            var ch = input[idx];
+    const stripSpacesAfterColonOutsideQuotes = (input) => {
+        let out = '';
+        let inQ = false;
+        let inRem = false;
+        const isIdentChar = (c) => /[A-Z0-9\$]/.test(c);
+        for (let idx = 0; idx < input.length; idx++) {
+            const ch = input[idx];
             if (ch === '"') {
                 inQ = !inQ;
                 out += ch;
@@ -484,7 +472,7 @@ function basicTokeniseLine(line, baseAddr) {
                     inRem = false;
                     out += ch;
                     // strip spaces immediately after ':' (normal behavior resumes)
-                    var j = idx + 1;
+                    let j = idx + 1;
                     while (j < input.length && input[j] === ' ')
                         j++;
                     idx = j - 1;
@@ -496,8 +484,8 @@ function basicTokeniseLine(line, baseAddr) {
             // Detect REM token outside quotes (word boundary)
             if (!inQ && !inRem) {
                 if ((ch === 'R' || ch === 'r') && input.substring(idx, idx + 3).toUpperCase() === 'REM') {
-                    var prev = idx > 0 ? input[idx - 1] : '';
-                    var next = idx + 3 < input.length ? input[idx + 3] : '';
+                    const prev = idx > 0 ? input[idx - 1] : '';
+                    const next = idx + 3 < input.length ? input[idx + 3] : '';
                     if (!isIdentChar(prev) && !isIdentChar(next)) {
                         out += input.substr(idx, 3);
                         idx += 2;
@@ -508,7 +496,7 @@ function basicTokeniseLine(line, baseAddr) {
             }
             if (!inQ && ch === ':') {
                 out += ch;
-                var j = idx + 1;
+                let j = idx + 1;
                 while (j < input.length && input[j] === ' ')
                     j++;
                 idx = j - 1;
@@ -531,12 +519,12 @@ function basicTokeniseLine(line, baseAddr) {
         }
         return out;
     };
-    var restStandard = stripSpacesAfterColonOutsideQuotes(restFull);
-    var bytes = [];
-    var i = 0;
-    var inQuote = false;
-    var L = restStandard.length;
-    var opTokenMap = {
+    const restStandard = stripSpacesAfterColonOutsideQuotes(restFull);
+    const bytes = [];
+    let i = 0;
+    let inQuote = false;
+    const L = restStandard.length;
+    const opTokenMap = {
         '>=': 0xD7,
         '<=': 0xD8,
         '<>': 0xD9,
@@ -549,44 +537,44 @@ function basicTokeniseLine(line, baseAddr) {
         '>': 0xD5,
         '<': 0xD6
     };
-    var tryEmitOperatorToken = function (s, idx) {
-        var two = s.substring(idx, idx + 2);
+    const tryEmitOperatorToken = (s, idx) => {
+        const two = s.substring(idx, idx + 2);
         if (opTokenMap[two] !== undefined) {
             bytes.push(opTokenMap[two]);
             return 2;
         }
-        var one = s[idx];
+        const one = s[idx];
         if (opTokenMap[one] !== undefined) {
             bytes.push(opTokenMap[one]);
             return 1;
         }
         return 0;
     };
-    var tryEmitStringVar = function (s, idx) {
+    const tryEmitStringVar = (s, idx) => {
         // String variable name encoding: debase first letter by 0x40 (A->0x01..Z->0x1A)
         // Applies to identifiers ending with $ (e.g., A$, A1$, ABZ$), excluding keyword tokens like INKEY$, CHR$
         // Ensure previous/next char are not A-Z0-9$ to avoid mid-identifier matches
-        var prevCh = idx > 0 ? s[idx - 1] : '';
+        const prevCh = idx > 0 ? s[idx - 1] : '';
         if (/[A-Z0-9\$]/.test(prevCh))
             return 0;
         if (!/[A-Z]/.test(s[idx]))
             return 0;
-        var j = idx + 1;
+        let j = idx + 1;
         while (j < L && /[A-Z0-9]/.test(s[j]))
             j++;
         if (j >= L || s[j] !== '$')
             return 0;
-        var end = j + 1;
-        var nextCh = end < L ? s[end] : '';
+        const end = j + 1;
+        const nextCh = end < L ? s[end] : '';
         if (/[A-Z0-9\$]/.test(nextCh))
             return 0;
-        var ident = s.substring(idx, end).toUpperCase();
+        const ident = s.substring(idx, end).toUpperCase();
         if (stringKeywordTokens.has(ident))
             return 0;
-        var firstUpper = s[idx].toUpperCase();
+        const firstUpper = s[idx].toUpperCase();
         bytes.push(firstUpper.charCodeAt(0) - 0x40);
-        for (var k = idx + 1; k < end; k++) {
-            var c = s.charCodeAt(k);
+        for (let k = idx + 1; k < end; k++) {
+            const c = s.charCodeAt(k);
             if (c >= 97 && c <= 122)
                 bytes.push(c - 32);
             else
@@ -596,12 +584,12 @@ function basicTokeniseLine(line, baseAddr) {
     };
     while (i < L) {
         if (inQuote) {
-            var j = i;
+            let j = i;
             while (j < L && restStandard[j] !== '"')
                 j++;
-            var chunk = restStandard.substring(i, j);
+            const chunk = restStandard.substring(i, j);
             // Inside quotes: emit raw ASCII (do NOT compress spaces)
-            for (var k = 0; k < chunk.length; k++) {
+            for (let k = 0; k < chunk.length; k++) {
                 bytes.push(chunk.charCodeAt(k));
             }
             if (j < L && restStandard[j] === '"') {
@@ -625,25 +613,24 @@ function basicTokeniseLine(line, baseAddr) {
         }
         // String variables must be handled before token matching, otherwise single-letter
         // ASCII tokens like 'A' consume the prefix and block debasing.
-        var svConsumed = tryEmitStringVar(restStandard, i);
+        const svConsumed = tryEmitStringVar(restStandard, i);
         if (svConsumed > 0) {
             i += svConsumed;
             continue;
         }
-        var matched = false;
+        let matched = false;
         // Operator tokens (use tokenised operators instead of ASCII)
-        var opConsumed = tryEmitOperatorToken(restStandard, i);
+        const opConsumed = tryEmitOperatorToken(restStandard, i);
         if (opConsumed > 0) {
             i += opConsumed;
             continue;
         }
-        var remaining = L - i;
-        for (var _i = 0, tokensSorted_1 = tokensSorted; _i < tokensSorted_1.length; _i++) {
-            var tk = tokensSorted_1[_i];
-            var tlen = tk.token.length;
+        const remaining = L - i;
+        for (const tk of tokensSorted) {
+            const tlen = tk.token.length;
             if (tlen > remaining)
                 continue;
-            var substr = restStandard.substring(i, i + tlen);
+            const substr = restStandard.substring(i, i + tlen);
             if (substr === tk.token || substr.toUpperCase() === tk.tokenUpper) {
                 // ADD WORD BOUNDARY CHECK HERE:
                 if (!isAtWordBoundary(restStandard, i, tlen))
@@ -653,18 +640,18 @@ function basicTokeniseLine(line, baseAddr) {
                 matched = true;
                 if (tk.tokenUpper === 'REM') {
                     if (i < L) {
-                        var j = i;
-                        var inRemQuote = false;
+                        let j = i;
+                        let inRemQuote = false;
                         // Treat REM text like quoted until ':' outside quotes or end-of-line
                         while (j < L) {
-                            var ch_1 = restStandard[j];
-                            if (ch_1 === '"') {
+                            const ch = restStandard[j];
+                            if (ch === '"') {
                                 inRemQuote = !inRemQuote;
                                 bytes.push(0x22);
                                 j++;
                                 continue;
                             }
-                            if (!inRemQuote && ch_1 === ':') {
+                            if (!inRemQuote && ch === ':') {
                                 // Stop REM at ':' and resume normal tokenization
                                 break;
                             }
@@ -695,14 +682,14 @@ function basicTokeniseLine(line, baseAddr) {
         }
         if (matched)
             continue;
-        var ch = restStandard[i];
+        const ch = restStandard[i];
         if (ch === '"') {
             bytes.push(0x22);
             inQuote = true;
             i++;
             continue;
         }
-        var code = restStandard.charCodeAt(i);
+        const code = restStandard.charCodeAt(i);
         if (code >= 97 && code <= 122)
             bytes.push(code - 32);
         else
@@ -715,18 +702,18 @@ function basicTokeniseLine(line, baseAddr) {
     return bytes;
 }
 function splitDirectiveList(raw) {
-    var parts = [];
-    var buf = '';
-    var inQuote = false;
-    for (var i = 0; i < raw.length; i++) {
-        var ch = raw[i];
+    const parts = [];
+    let buf = '';
+    let inQuote = false;
+    for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
         if (ch === '"') {
             inQuote = !inQuote;
             buf += ch;
             continue;
         }
         if (ch === ',' && !inQuote) {
-            var t = buf.trim();
+            const t = buf.trim();
             if (t)
                 parts.push(t);
             buf = '';
@@ -734,39 +721,32 @@ function splitDirectiveList(raw) {
         }
         buf += ch;
     }
-    var tail = buf.trim();
+    const tail = buf.trim();
     if (tail)
         parts.push(tail);
     return parts;
 }
 // Build DB directive payload: item count, ascii bytes with last char of each item having bit 7 set
 function buildDbDirectivePayload(raw) {
-    var items = splitDirectiveList(raw);
-    var ascii = [];
-    for (var _i = 0, items_1 = items; _i < items_1.length; _i++) {
-        var tok = items_1[_i];
-        var chars = [];
-        for (var _a = 0, tok_1 = tok; _a < tok_1.length; _a++) {
-            var ch = tok_1[_a];
+    const items = splitDirectiveList(raw);
+    const ascii = [];
+    for (const tok of items) {
+        const chars = [];
+        for (const ch of tok)
             chars.push(ch.charCodeAt(0));
-        }
         if (chars.length > 0)
             chars[chars.length - 1] |= 0x80; // mark end of item
-        ascii.push.apply(// mark end of item
-        ascii, chars);
+        ascii.push(...chars);
     }
-    return { itemCount: items.length, ascii: ascii };
+    return { itemCount: items.length, ascii };
 }
 function parseDbValues(raw) {
-    var out = [];
-    for (var _i = 0, _a = splitDirectiveList(raw); _i < _a.length; _i++) {
-        var tok = _a[_i];
+    const out = [];
+    for (const tok of splitDirectiveList(raw)) {
         if (/^".*"$/.test(tok)) {
-            var s = tok.slice(1, -1);
-            for (var _b = 0, s_1 = s; _b < s_1.length; _b++) {
-                var ch = s_1[_b];
+            const s = tok.slice(1, -1);
+            for (const ch of s)
                 out.push(ch.charCodeAt(0));
-            }
         }
         else {
             out.push(parseImmediateOperand(tok) & 0xff);
@@ -775,7 +755,7 @@ function parseDbValues(raw) {
     return out;
 }
 function parseDirectiveNumericValue(token) {
-    var trimmed = token.trim();
+    const trimmed = token.trim();
     if (/^#[0-9A-Fa-f]+$/.test(trimmed))
         return parseInt(trimmed.slice(1), 16);
     if (/^\d+$/.test(trimmed))
@@ -783,25 +763,23 @@ function parseDirectiveNumericValue(token) {
     return null;
 }
 function parseDirectiveSizeValue(raw) {
-    var _a;
-    return (_a = parseDirectiveNumericValue(raw)) !== null && _a !== void 0 ? _a : 0;
+    return parseDirectiveNumericValue(raw) ?? 0;
 }
 function parseDwValues(raw, labelMap) {
-    var out = [];
-    for (var _i = 0, _a = splitDirectiveList(raw); _i < _a.length; _i++) {
-        var tok = _a[_i];
-        var v = parseImmediateOperand(tok);
-        var trimmed = tok.trim();
-        var numericValue = parseDirectiveNumericValue(trimmed);
+    const out = [];
+    for (const tok of splitDirectiveList(raw)) {
+        let v = parseImmediateOperand(tok);
+        const trimmed = tok.trim();
+        const numericValue = parseDirectiveNumericValue(trimmed);
         if (numericValue !== null) {
             v = numericValue;
         }
         else if ((/^[A-Z][A-Z0-9]*$/).test(trimmed)) {
-            var lab = trimmed.toUpperCase();
+            const lab = trimmed.toUpperCase();
             if (labelMap && typeof labelMap[lab] === 'number')
                 v = labelMap[lab];
             else if (labelMap)
-                throw new Error("Undefined DW label: ".concat(trimmed));
+                throw new Error(`Undefined DW label: ${trimmed}`);
         }
         out.push(v & 0xff, (v >> 8) & 0xff);
     }
@@ -813,39 +791,37 @@ function parseDwValues(raw, labelMap) {
  * - Supports DB/DW/DS directives, comments starting with ';', and common immediate formats.
  */
 // =================== PHASE 1: PARSE & DISCOVER ===================
-function parseCodeBlockPhase1(codeBlock, baseAddr) {
-    if (baseAddr === void 0) { baseAddr = 0x4000; }
-    var parsedLines = [];
-    var labelMap = {};
-    var labelReferences = new Map();
-    var numberReferences = new Map();
-    var directiveLines = [];
-    var commentLines = [];
-    var lines = codeBlock.split(/\r?\n/).map(function (l) { return l.replace(/\t/g, ' ').replace(/\r?\n$/, ''); });
-    var offset = 0;
-    var firstLine = true;
-    for (var _i = 0, lines_1 = lines; _i < lines_1.length; _i++) {
-        var rawLine = lines_1[_i];
-        var raw = (rawLine || '').trim();
+function parseCodeBlockPhase1(codeBlock, baseAddr = 0x4000) {
+    const parsedLines = [];
+    const labelMap = {};
+    const labelReferences = new Map();
+    const numberReferences = new Map();
+    const directiveLines = [];
+    const commentLines = [];
+    const lines = codeBlock.split(/\r?\n/).map(l => l.replace(/\t/g, ' ').replace(/\r?\n$/, ''));
+    let offset = 0;
+    let firstLine = true;
+    for (const rawLine of lines) {
+        let raw = (rawLine || '').trim();
         if (!raw)
             continue;
         // [Step 1]: Extract comment text immediately but process it last.
         // This ensures we parse the instruction first to get the correct offset.
-        var commentPart = null;
-        var semiIdx = raw.indexOf(';');
+        let commentPart = null;
+        const semiIdx = raw.indexOf(';');
         if (semiIdx >= 0) {
             commentPart = raw.substring(semiIdx);
             raw = raw.substring(0, semiIdx).trim(); // Remove comment from raw for parsing
         }
         // [Step 2]: If line was ONLY a comment, record it immediately
         if (!raw && commentPart) {
-            commentLines.push({ raw: commentPart, offset: offset, _absoluteAddress: baseAddr + offset });
+            commentLines.push({ raw: commentPart, offset, _absoluteAddress: baseAddr + offset });
             parsedLines.push({ raw: commentPart, isComment: true });
             continue;
         }
         // [Step 3]: Logic to reconstruct the 'parsed' object
         // Initialize parsed object
-        var parsed = {
+        const parsed = {
             raw: rawLine, // Store full original line
             _offset: offset,
             address: undefined,
@@ -858,9 +834,9 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
             isComment: false,
             isUnparsed: false
         };
-        var workingStr = raw;
+        let workingStr = raw;
         // A. Parse Explicit Address (e.g., 8000 LD A,B)
-        var addrMatch = /^(?:([0-9A-F]{4})\s+)?(.*)$/.exec(workingStr);
+        const addrMatch = /^(?:([0-9A-F]{4})\s+)?(.*)$/.exec(workingStr);
         if (addrMatch && addrMatch[1]) {
             parsed.address = parseInt(addrMatch[1], 16);
             // Only update offset from explicit address on the very first line
@@ -872,7 +848,7 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
             workingStr = addrMatch[2].trim();
         }
         // B. Parse Label (e.g., LABEL:)
-        var labelMatch = /^([A-Z][A-Z0-9]*):\s*(.*)$/.exec(workingStr);
+        const labelMatch = /^([A-Z][A-Z0-9]*):\s*(.*)$/.exec(workingStr);
         if (labelMatch) {
             parsed.label = labelMatch[1];
             labelMap[parsed.label] = baseAddr + offset; // Map label to absolute code address
@@ -884,7 +860,7 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
             parsedLines.push(parsed);
         }
         else {
-            var dirMatch = /^(DB|DW|DS)\s+(.*)$/.exec(workingStr);
+            const dirMatch = /^(DB|DW|DS)\s+(.*)$/.exec(workingStr);
             if (dirMatch) {
                 parsed.isDirective = true;
                 parsed.directiveType = dirMatch[1].toUpperCase();
@@ -898,7 +874,7 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
             }
             else {
                 // Assume Mnemonic
-                var spaceIdx = workingStr.indexOf(' ');
+                const spaceIdx = workingStr.indexOf(' ');
                 if (spaceIdx > 0) {
                     parsed.mnemonic = workingStr.substring(0, spaceIdx).trim().toUpperCase();
                     parsed.operands = splitDirectiveList(workingStr.substring(spaceIdx).trim());
@@ -911,7 +887,7 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
             parsedLines.push(parsed);
         }
         // [Step 4]: Calculate Instruction Length to advance offset
-        var instrLen = 0;
+        let instrLen = 0;
         if (parsed.isDirective) {
             if (parsed.directiveType === 'DB')
                 instrLen = parseDbValues(parsed.directiveValue || '').length;
@@ -921,9 +897,9 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
                 instrLen = parseDirectiveSizeValue(parsed.directiveValue || '0');
         }
         else if (parsed.mnemonic) {
-            var instr = parsed.mnemonic;
-            var ops = parsed.operands || [];
-            var best = findBestZ80Match(instr, ops);
+            const instr = parsed.mnemonic;
+            const ops = parsed.operands || [];
+            const best = findBestZ80Match(instr, ops);
             instrLen = best ? best.length : 1;
         }
         // [Step 5]: Now that instruction len is calculated, record the inline comment.
@@ -932,34 +908,35 @@ function parseCodeBlockPhase1(codeBlock, baseAddr) {
         // but the original logic wanted them to be "emitted" at this point.
         // Actually, for documentation/display, comments usually associate with the instruction offset.
         if (commentPart) {
-            commentLines.push({ raw: commentPart, offset: offset, _absoluteAddress: baseAddr + offset });
+            commentLines.push({ raw: commentPart, offset, _absoluteAddress: baseAddr + offset });
         }
         // Increment offset for the next line
         offset += instrLen;
         firstLine = false;
     }
-    return { parsedLines: parsedLines, labelMap: labelMap, labelReferences: labelReferences, numberReferences: numberReferences, directiveLines: directiveLines, commentLines: commentLines };
+    return { parsedLines, labelMap, labelReferences, numberReferences, directiveLines, commentLines };
 }
 // =================== PHASE 2: GENERATE OPCODES ===================
 function parseCodeBlockPhase2(parsedLines, labelMap, labelReferences, numberReferences, baseAddr, offsetBase) {
-    var opcodeBytes = [];
-    var cumulativeOffset = 0;
-    var _loop_1 = function (p) {
+    const opcodeBytes = [];
+    let cumulativeOffset = 0;
+    for (const p of parsedLines) {
         if (p.isComment || p.isUnparsed) {
-            return "continue";
+            //[Phase2] Skipping comment/unparsed
+            continue;
         }
-        var baseOffset = typeof p._offset === 'number' ? p._offset : cumulativeOffset;
-        var baseOffsetAbs = baseAddr + baseOffset;
+        const baseOffset = typeof p._offset === 'number' ? p._offset : cumulativeOffset;
+        const baseOffsetAbs = baseAddr + baseOffset;
         // Handle directives in opcode section (DB, DW, DS)
         if (p.isDirective) {
             if (p.directiveType === 'DB') {
-                var bytesToAdd = parseDbValues(p.directiveValue || '');
-                opcodeBytes.push.apply(opcodeBytes, bytesToAdd);
+                const bytesToAdd = parseDbValues(p.directiveValue || '');
+                opcodeBytes.push(...bytesToAdd);
                 cumulativeOffset = baseOffset + bytesToAdd.length;
             }
             else if (p.directiveType === 'DW') {
-                var bytesToAdd = parseDwValues(p.directiveValue || '', labelMap);
-                opcodeBytes.push.apply(opcodeBytes, bytesToAdd);
+                const bytesToAdd = parseDwValues(p.directiveValue || '', labelMap);
+                opcodeBytes.push(...bytesToAdd);
                 cumulativeOffset = baseOffset + bytesToAdd.length;
             }
             else if (p.directiveType === 'DS') {
@@ -967,188 +944,175 @@ function parseCodeBlockPhase2(parsedLines, labelMap, labelReferences, numberRefe
                 // DS 1 -> 0xC9
                 // DS 2 -> 0xC9 0x00
                 // DS 3 -> 0xC9 0x00 0x00
-                var count = parseDirectiveSizeValue(p.directiveValue || '0');
+                const count = parseDirectiveSizeValue(p.directiveValue || '0');
                 if (count > 0) {
                     opcodeBytes.push(0xC9); // RET opcode as placeholder
-                    for (var i = 1; i < count; i++) {
+                    for (let i = 1; i < count; i++) {
                         opcodeBytes.push(0x00); // Padding bytes
                     }
                     cumulativeOffset = baseOffset + count;
                 }
             }
-            return "continue";
+            continue;
         }
         if (!p.mnemonic)
-            return "continue";
-        var instr = p.mnemonic;
-        var operands = p.operands || [];
-        var best = findBestZ80Match(instr, operands);
+            continue;
+        const instr = p.mnemonic;
+        const operands = p.operands || [];
+        const best = findBestZ80Match(instr, operands);
         if (!best) {
             // Try emergency fallback: direct lookup in z80Cmds by z80 field
             if (Array.isArray(z80codes_js_1.z80Cmds)) {
-                var fallback = z80codes_js_1.z80Cmds.find(function (cmd) { return cmd.z80.toUpperCase().trim() === instr.toUpperCase().trim(); });
+                const fallback = z80codes_js_1.z80Cmds.find(cmd => cmd.z80.toUpperCase().trim() === instr.toUpperCase().trim());
                 if (fallback) {
-                    var bytesForInstr_1 = opCodePatternToBytes(fallback.opCode, p, labelMap, numberReferences, baseOffsetAbs);
-                    opcodeBytes.push.apply(opcodeBytes, bytesForInstr_1);
-                    cumulativeOffset = baseOffset + bytesForInstr_1.length;
-                    return "continue";
+                    const bytesForInstr = opCodePatternToBytes(fallback.opCode, p, labelMap, numberReferences, baseOffsetAbs);
+                    opcodeBytes.push(...bytesForInstr);
+                    cumulativeOffset = baseOffset + bytesForInstr.length;
+                    continue;
                 }
             }
-            return "continue";
+            // Skipping instruction (no match and no fallback found)
+            continue;
         }
-        var bytesForInstr = opCodePatternToBytes(best.opCode, p, labelMap, numberReferences, baseOffsetAbs, labelReferences);
-        opcodeBytes.push.apply(opcodeBytes, bytesForInstr);
+        const bytesForInstr = opCodePatternToBytes(best.opCode, p, labelMap, numberReferences, baseOffsetAbs, labelReferences);
+        opcodeBytes.push(...bytesForInstr);
         cumulativeOffset = baseOffset + bytesForInstr.length;
-    };
-    for (var _i = 0, parsedLines_1 = parsedLines; _i < parsedLines_1.length; _i++) {
-        var p = parsedLines_1[_i];
-        _loop_1(p);
     }
-    return { totalOpcodeLength: cumulativeOffset, opcodeBytes: opcodeBytes };
+    return { totalOpcodeLength: cumulativeOffset, opcodeBytes };
 }
 // =================== PHASE 3: BUILD MTX DIRECTIVES ===================
 function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, directiveLines, commentLines, offsetBase, codeStartAbsolute) {
-    var _a, _b, _c;
-    var mtxDirectiveBytes = [];
+    const mtxDirectiveBytes = [];
     // Undefined label references are encoded as Number-definition records (historic MTX behaviour).
-    var mergedNumberRefs = new Map();
-    for (var _i = 0, _d = Array.from(numberReferences.entries()); _i < _d.length; _i++) {
-        var _e = _d[_i], name_1 = _e[0], refs = _e[1];
-        mergedNumberRefs.set(name_1, {
-            byteOffsets: __spreadArray([], refs.byteOffsets, true),
-            wordOffsets: __spreadArray([], refs.wordOffsets, true),
-            relativeOffsets: __spreadArray([], refs.relativeOffsets, true)
+    const mergedNumberRefs = new Map();
+    for (const [name, refs] of Array.from(numberReferences.entries())) {
+        mergedNumberRefs.set(name, {
+            byteOffsets: [...refs.byteOffsets],
+            wordOffsets: [...refs.wordOffsets],
+            relativeOffsets: [...refs.relativeOffsets]
         });
     }
-    for (var _f = 0, _g = Array.from(labelReferences.entries()); _f < _g.length; _f++) {
-        var _h = _g[_f], labelName = _h[0], refs = _h[1];
+    for (const [labelName, refs] of Array.from(labelReferences.entries())) {
         if (typeof labelMap[labelName] === 'number')
             continue;
-        var dst = ensureRefBuckets(mergedNumberRefs, labelName);
-        (_a = dst.byteOffsets).push.apply(_a, refs.byteOffsets);
-        (_b = dst.wordOffsets).push.apply(_b, refs.wordOffsets);
-        (_c = dst.relativeOffsets).push.apply(_c, refs.relativeOffsets);
+        const dst = ensureRefBuckets(mergedNumberRefs, labelName);
+        dst.byteOffsets.push(...refs.byteOffsets);
+        dst.wordOffsets.push(...refs.wordOffsets);
+        dst.relativeOffsets.push(...refs.relativeOffsets);
     }
     // 9a) Number definition blocks (0x00)
-    for (var _j = 0, _k = Array.from(mergedNumberRefs.entries()); _j < _k.length; _j++) {
-        var _l = _k[_j], numberStr = _l[0], info = _l[1];
+    for (const [numberStr, info] of Array.from(mergedNumberRefs.entries())) {
         // MTX number-definition records carry a single reference kind.
         // If the same literal is used as both byte and word, emit one record per kind.
-        var refGroups = [
-            { byteOffsets: __spreadArray([], (info.byteOffsets || []), true), wordOffsets: [], relativeOffsets: [] },
-            { byteOffsets: [], wordOffsets: __spreadArray([], (info.wordOffsets || []), true), relativeOffsets: [] },
-            { byteOffsets: [], wordOffsets: [], relativeOffsets: __spreadArray([], (info.relativeOffsets || []), true) }
+        const refGroups = [
+            { byteOffsets: [...(info.byteOffsets || [])], wordOffsets: [], relativeOffsets: [] },
+            { byteOffsets: [], wordOffsets: [...(info.wordOffsets || [])], relativeOffsets: [] },
+            { byteOffsets: [], wordOffsets: [], relativeOffsets: [...(info.relativeOffsets || [])] }
         ];
-        for (var _m = 0, refGroups_1 = refGroups; _m < refGroups_1.length; _m++) {
-            var refsForKind = refGroups_1[_m];
+        for (const refsForKind of refGroups) {
             if (refsForKind.byteOffsets.length === 0 &&
                 refsForKind.wordOffsets.length === 0 &&
                 refsForKind.relativeOffsets.length === 0) {
                 continue;
             }
             mtxDirectiveBytes.push(0x00); // Number definition marker
-            var numAscii = compressSpacesAndAscii(numberStr);
-            mtxDirectiveBytes.push.apply(mtxDirectiveBytes, numAscii);
+            const numAscii = compressSpacesAndAscii(numberStr);
+            mtxDirectiveBytes.push(...numAscii);
             // Set bit 7 on last character
             if (mtxDirectiveBytes.length > 0) {
                 mtxDirectiveBytes[mtxDirectiveBytes.length - 1] |= 0x80;
             }
-            mtxDirectiveBytes.push.apply(mtxDirectiveBytes, buildReferenceSections(refsForKind, codeStartAbsolute));
+            mtxDirectiveBytes.push(...buildReferenceSections(refsForKind, codeStartAbsolute));
         }
     }
     // 9c) Label definition blocks (0x02)
-    for (var _o = 0, _p = Object.entries(labelMap); _o < _p.length; _o++) {
-        var _q = _p[_o], labelName = _q[0], offset = _q[1];
+    for (const [labelName, offset] of Object.entries(labelMap)) {
         mtxDirectiveBytes.push(0x02); // Label definition marker
-        var relOffset = offset - codeStartAbsolute;
+        const relOffset = offset - codeStartAbsolute;
         mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
-        var labelAscii = compressSpacesAndAscii(labelName);
-        mtxDirectiveBytes.push.apply(mtxDirectiveBytes, labelAscii);
+        const labelAscii = compressSpacesAndAscii(labelName);
+        mtxDirectiveBytes.push(...labelAscii);
         // Set bit 7 on last character
         if (mtxDirectiveBytes.length > 0) {
             mtxDirectiveBytes[mtxDirectiveBytes.length - 1] |= 0x80;
         }
         // Append label reference section (relative/word/byte) using newest-first order
-        var refs = labelReferences.get(labelName.toUpperCase());
+        const refs = labelReferences.get(labelName.toUpperCase());
         if (refs) {
-            mtxDirectiveBytes.push.apply(mtxDirectiveBytes, buildReferenceSections(refs, codeStartAbsolute));
+            mtxDirectiveBytes.push(...buildReferenceSections(refs, codeStartAbsolute));
         }
         else {
             mtxDirectiveBytes.push(0x00, 0x00, 0x00);
         }
     }
     // 9d-9f) Directives (DB/DW/DS)
-    for (var _r = 0, directiveLines_1 = directiveLines; _r < directiveLines_1.length; _r++) {
-        var dir = directiveLines_1[_r];
+    for (const dir of directiveLines) {
         if (dir.directiveType === 'DB') {
             mtxDirectiveBytes.push(0x03); // DB marker
-            var relOffset = (dir._offset || 0) - offsetBase;
+            const relOffset = (dir._offset || 0) - offsetBase;
             mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
-            var val = dir.directiveValue || '';
-            var dbPayload = buildDbDirectivePayload(val);
+            const val = dir.directiveValue || '';
+            const dbPayload = buildDbDirectivePayload(val);
             mtxDirectiveBytes.push(dbPayload.itemCount & 0xff); // byte count (comma-separated items)
             mtxDirectiveBytes.push(dbPayload.ascii.length & 0xff); // ascii length excluding commas
-            mtxDirectiveBytes.push.apply(// ascii length excluding commas
-            mtxDirectiveBytes, dbPayload.ascii); // ascii bytes with bit7 set on last char of each item
+            mtxDirectiveBytes.push(...dbPayload.ascii); // ascii bytes with bit7 set on last char of each item
         }
         else if (dir.directiveType === 'DW') {
             // <0x04> <offset> <word byte-count> <ascii length> <ascii chars>
             // Spec: <number ... as ASCII characters, last character has bit 7 set>
             mtxDirectiveBytes.push(0x04); // DW marker
-            var relOffset = (dir._offset || 0) - offsetBase;
+            const relOffset = (dir._offset || 0) - offsetBase;
             mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
-            var val = dir.directiveValue || '';
-            var dwPayload = buildDbDirectivePayload(val);
+            const val = dir.directiveValue || '';
+            const dwPayload = buildDbDirectivePayload(val);
             //mtxDirectiveBytes.push(dwPayload.itemCount & 0xff);
-            var dwByteCount = dwPayload.itemCount * 2;
+            const dwByteCount = dwPayload.itemCount * 2;
             mtxDirectiveBytes.push(dwByteCount & 0xff);
             mtxDirectiveBytes.push(dwPayload.ascii.length & 0xff);
-            mtxDirectiveBytes.push.apply(mtxDirectiveBytes, dwPayload.ascii);
+            mtxDirectiveBytes.push(...dwPayload.ascii);
         }
         else if (dir.directiveType === 'DS') {
             // <0x05> <offset> <byte count> <ascii length>  <ascii chars>
             // Spec: "number of bytes to reserve represented as ASCII characters, last character has bit 7 set"
             mtxDirectiveBytes.push(0x05); // DS marker
-            var relOffset = (dir._offset || 0) - offsetBase;
+            const relOffset = (dir._offset || 0) - offsetBase;
             mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
-            var val = dir.directiveValue || '';
-            var dsPayload = buildDbDirectivePayload(val);
-            var count = parseInt(val || '0', 10) || 0;
+            const val = dir.directiveValue || '';
+            const dsPayload = buildDbDirectivePayload(val);
+            const count = parseInt(val || '0', 10) || 0;
             mtxDirectiveBytes.push(count & 0xff);
             mtxDirectiveBytes.push(dsPayload.ascii.length & 0xff);
-            mtxDirectiveBytes.push.apply(mtxDirectiveBytes, dsPayload.ascii);
+            mtxDirectiveBytes.push(...dsPayload.ascii);
         }
     }
     // 9i) Comments (0x08)
-    for (var _s = 0, commentLines_1 = commentLines; _s < commentLines_1.length; _s++) {
-        var comment = commentLines_1[_s];
+    for (const comment of commentLines) {
         //<0x08><offset><length><comment string in ascii characters (excludes the semicolon marker at the start of the comment)><end of comment marker, 0xff>
         mtxDirectiveBytes.push(0x08); // Comment marker
-        var relOffset = (comment.offset || 0) - offsetBase;
+        const relOffset = (comment.offset || 0) - offsetBase;
         mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
-        var text = comment.raw.replace(/^\s*;/, '');
-        var textAscii = compressSpacesAndAscii(text);
+        const text = comment.raw.replace(/^\s*;/, '');
+        const textAscii = compressSpacesAndAscii(text);
         // Length includes 0xFF end marker
         mtxDirectiveBytes.push((textAscii.length + 1) & 0xff);
-        mtxDirectiveBytes.push.apply(mtxDirectiveBytes, textAscii);
+        mtxDirectiveBytes.push(...textAscii);
         mtxDirectiveBytes.push(0xff); // End of comment marker
     }
-    var totalMtxDirectiveLength = mtxDirectiveBytes.length;
-    return { totalMtxDirectiveLength: totalMtxDirectiveLength, mtxDirectiveBytes: mtxDirectiveBytes };
+    const totalMtxDirectiveLength = mtxDirectiveBytes.length;
+    return { totalMtxDirectiveLength, mtxDirectiveBytes };
 }
 // =================== HELPER: BUILD REFERENCE SECTION ===================
 function buildReferenceSection(offsets, type) {
-    var bytes = [];
+    const bytes = [];
     // newest references should come first
-    var refs = __spreadArray([], offsets, true).reverse();
+    const refs = [...offsets].reverse();
     if (refs.length === 0) {
         bytes.push(0x00, 0x00, 0x00); // Discarded (3 zero bytes)
     }
     else if (type === 'byte') {
         // Byte type: marker doubles as count - 0x01 for 1 instance, 0x02 for 2, etc.
         bytes.push(refs.length); // Single byte that represents the count
-        for (var _i = 0, refs_1 = refs; _i < refs_1.length; _i++) {
-            var offset = refs_1[_i];
+        for (const offset of refs) {
             bytes.push(offset & 0xff, (offset >> 8) & 0xff); // LSB/MSB pair for offset
         }
         bytes.push(0x00, 0x00); // Exactly 2 pad bytes for byte type
@@ -1156,8 +1120,7 @@ function buildReferenceSection(offsets, type) {
     else if (type === 'word') {
         // Word type: <0x00> <count> <LSB/MSB offset pair per instance> <1 pad byte>
         bytes.push(0x00, refs.length);
-        for (var _a = 0, refs_2 = refs; _a < refs_2.length; _a++) {
-            var offset = refs_2[_a];
+        for (const offset of refs) {
             bytes.push(offset & 0xff, (offset >> 8) & 0xff); // LSB/MSB pair for word type
         }
         bytes.push(0x00); // Exactly 1 pad byte for word type
@@ -1165,8 +1128,7 @@ function buildReferenceSection(offsets, type) {
     else if (type === 'relative') {
         // Relative jump: <0x00> <0x00> <count> <LSB/MSB offset pair per instance> <0 pad bytes>
         bytes.push(0x00, 0x00, refs.length);
-        for (var _b = 0, refs_3 = refs; _b < refs_3.length; _b++) {
-            var offset = refs_3[_b];
+        for (const offset of refs) {
             bytes.push(offset & 0xff, (offset >> 8) & 0xff); // LSB/MSB pair for relative
         }
         // No pad bytes for relative
@@ -1175,29 +1137,25 @@ function buildReferenceSection(offsets, type) {
 }
 // Supports mixed reference kinds for a single symbol (byte + word + relative).
 function buildReferenceSections(refs, codeStartAbsolute) {
-    var toRelNewestFirst = function (arr) { return arr.map(function (o) { return o - codeStartAbsolute; }).reverse(); };
-    var byteRefs = toRelNewestFirst(refs.byteOffsets || []);
-    var wordRefs = toRelNewestFirst(refs.wordOffsets || []);
-    var relRefs = toRelNewestFirst(refs.relativeOffsets || []);
+    const toRelNewestFirst = (arr) => arr.map(o => o - codeStartAbsolute).reverse();
+    const byteRefs = toRelNewestFirst(refs.byteOffsets || []);
+    const wordRefs = toRelNewestFirst(refs.wordOffsets || []);
+    const relRefs = toRelNewestFirst(refs.relativeOffsets || []);
     if (byteRefs.length === 0 && wordRefs.length === 0 && relRefs.length === 0) {
         return [0x00, 0x00, 0x00];
     }
-    var bytes = [];
+    const bytes = [];
     if (byteRefs.length > 0) {
         // Hybrid format for byte references: <count><offsets...>
         bytes.push(byteRefs.length & 0xff);
-        for (var _i = 0, byteRefs_1 = byteRefs; _i < byteRefs_1.length; _i++) {
-            var o = byteRefs_1[_i];
+        for (const o of byteRefs)
             bytes.push(o & 0xff, (o >> 8) & 0xff);
-        }
     }
     if (wordRefs.length > 0) {
         // Word references: <0x00><count><offsets...>
         bytes.push(0x00, wordRefs.length & 0xff);
-        for (var _a = 0, wordRefs_1 = wordRefs; _a < wordRefs_1.length; _a++) {
-            var o = wordRefs_1[_a];
+        for (const o of wordRefs)
             bytes.push(o & 0xff, (o >> 8) & 0xff);
-        }
         // Keep historical pad byte only when relative section does not follow.
         if (relRefs.length === 0)
             bytes.push(0x00);
@@ -1211,61 +1169,41 @@ function buildReferenceSections(refs, codeStartAbsolute) {
         else {
             bytes.push(0x00, 0x00, relRefs.length & 0xff);
         }
-        for (var _b = 0, relRefs_1 = relRefs; _b < relRefs_1.length; _b++) {
-            var o = relRefs_1[_b];
+        for (const o of relRefs)
             bytes.push(o & 0xff, (o >> 8) & 0xff);
-        }
     }
     if (wordRefs.length === 0 && relRefs.length === 0 && byteRefs.length > 0) {
-        var byteOnly = [byteRefs.length & 0xff];
-        for (var _c = 0, byteRefs_2 = byteRefs; _c < byteRefs_2.length; _c++) {
-            var o = byteRefs_2[_c];
+        const byteOnly = [byteRefs.length & 0xff];
+        for (const o of byteRefs)
             byteOnly.push(o & 0xff, (o >> 8) & 0xff);
-        }
         byteOnly.push(0x00, 0x00);
         return byteOnly;
     }
     return bytes;
 }
-// Helper to convert string to ASCII bytes, setting bit 7 on the very last character - use buildDbDirectivePayload function instead where possible
-function convertToAsciiWithHiBit(str) {
-    if (!str)
-        return [];
-    var bytes = [];
-    for (var i = 0; i < str.length; i++) {
-        var code = str.charCodeAt(i);
-        // If it's the last character, set bit 7
-        if (i === str.length - 1) {
-            code |= 0x80;
-        }
-        bytes.push(code);
-    }
-    return bytes;
-}
 // =================== MAIN PROCESSCODEBOCK FUNCTION ===================
-function processCodeBlock(codeBlock, baseAddr) {
-    if (baseAddr === void 0) { baseAddr = 0x4000; }
+function processCodeBlock(codeBlock, baseAddr = 0x4000) {
     // Phase 1: Parse and discover labels, directives, comments
-    var phase1 = parseCodeBlockPhase1(codeBlock, baseAddr);
-    var offsetCandidates = phase1.parsedLines
-        .map(function (p) { return (typeof (p === null || p === void 0 ? void 0 : p._offset) === 'number' ? p._offset : null); })
-        .filter(function (v) { return v !== null; });
-    var offsetBase = offsetCandidates.length ? Math.min.apply(Math, offsetCandidates) : 0;
-    var codeStartAbsolute = baseAddr + offsetBase;
+    const phase1 = parseCodeBlockPhase1(codeBlock, baseAddr);
+    const offsetCandidates = phase1.parsedLines
+        .map((p) => (typeof p?._offset === 'number' ? p._offset : null))
+        .filter((v) => v !== null);
+    const offsetBase = offsetCandidates.length ? Math.min(...offsetCandidates) : 0;
+    const codeStartAbsolute = baseAddr + offsetBase;
     // Phase 2: Generate opcode bytes
-    var phase2 = parseCodeBlockPhase2(phase1.parsedLines, phase1.labelMap, phase1.labelReferences, phase1.numberReferences, baseAddr, offsetBase);
+    const phase2 = parseCodeBlockPhase2(phase1.parsedLines, phase1.labelMap, phase1.labelReferences, phase1.numberReferences, baseAddr, offsetBase);
     // Use opcode bytes directly from Phase 2 (do not auto-append RET)
-    var opcodeBytes = __spreadArray([], phase2.opcodeBytes, true);
-    var totalOpcodeLength = opcodeBytes.length;
+    const opcodeBytes = [...phase2.opcodeBytes];
+    const totalOpcodeLength = opcodeBytes.length;
     // Phase 3: Build MTX directive bytes
-    var phase3 = parseCodeBlockPhase3(phase1.labelMap, phase1.labelReferences, phase1.numberReferences, phase1.directiveLines, phase1.commentLines, offsetBase, codeStartAbsolute);
-    var totalCodeLength = totalOpcodeLength + phase3.totalMtxDirectiveLength;
+    const phase3 = parseCodeBlockPhase3(phase1.labelMap, phase1.labelReferences, phase1.numberReferences, phase1.directiveLines, phase1.commentLines, offsetBase, codeStartAbsolute);
+    const totalCodeLength = totalOpcodeLength + phase3.totalMtxDirectiveLength;
     return {
-        totalOpcodeLength: totalOpcodeLength,
-        opcodeBytes: opcodeBytes,
+        totalOpcodeLength,
+        opcodeBytes,
         totalMtxDirectiveLength: phase3.totalMtxDirectiveLength,
         mtxDirectiveBytes: phase3.mtxDirectiveBytes,
-        totalCodeLength: totalCodeLength
+        totalCodeLength
     };
 }
 /**
@@ -1275,14 +1213,12 @@ function processCodeBlock(codeBlock, baseAddr) {
 function findBestZ80Match(instruction, operands) {
     // Try direct match first only when there are no operands (avoids RET matching RET NZ/Z/M/etc.)
     if (Array.isArray(z80codes_js_1.z80Cmds) && operands.length === 0) {
-        var directMatch = z80codes_js_1.z80Cmds.find(function (cmd) {
-            return cmd.z80.toUpperCase() === instruction.toUpperCase();
-        });
+        const directMatch = z80codes_js_1.z80Cmds.find(cmd => cmd.z80.toUpperCase() === instruction.toUpperCase());
         if (directMatch)
             return directMatch;
     }
     // If normalizeInstruction is available, use it
-    var normalizedInstr = instruction;
+    let normalizedInstr = instruction;
     if (typeof z80codes_js_1.normalizeInstruction === 'function') {
         normalizedInstr = (0, z80codes_js_1.normalizeInstruction)(instruction, operands).toUpperCase().trim();
     }
@@ -1290,15 +1226,15 @@ function findBestZ80Match(instruction, operands) {
         normalizedInstr = instruction.toUpperCase().trim();
     }
     // First, try exact match
-    var exactMatch = z80codes_js_1.z80Cmds.find(function (cmd) {
-        var normalizedCmd = cmd.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
+    let exactMatch = z80codes_js_1.z80Cmds.find(cmd => {
+        const normalizedCmd = cmd.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
         return normalizedCmd === normalizedInstr;
     });
     if (exactMatch)
         return exactMatch;
     // Fall back to prefix matching if no exact match
-    var potentialMatches = z80codes_js_1.z80Cmds.filter(function (cmd) {
-        var normalizedCmd = cmd.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
+    const potentialMatches = z80codes_js_1.z80Cmds.filter(cmd => {
+        const normalizedCmd = cmd.z80.toUpperCase().replace(/\s+/g, ' ').replace(/,\s*/g, ',').trim();
         return normalizedCmd.startsWith(normalizedInstr);
     });
     if (potentialMatches.length === 0) {
@@ -1308,8 +1244,8 @@ function findBestZ80Match(instruction, operands) {
     // If multiple matches, select the best one based on specificity
     if (potentialMatches.length > 1) {
         // Sort by length (longer=more specific) then by opcode bytes (more bytes = more specific)
-        var scored = potentialMatches.map(function (cmd) {
-            var score = 0;
+        const scored = potentialMatches.map(cmd => {
+            let score = 0;
             // Prefer exact length match
             score += cmd.length * 100;
             // Prefer opcodes with parameters (XXXX, XX, YY, ZZ)
@@ -1324,9 +1260,9 @@ function findBestZ80Match(instruction, operands) {
             // Prefer ED prefix commands when instruction contains them
             if (cmd.opCode.startsWith('ED'))
                 score += 10;
-            return { cmd: cmd, score: score };
+            return { cmd, score };
         });
-        scored.sort(function (a, b) { return b.score - a.score; });
+        scored.sort((a, b) => b.score - a.score);
         return scored[0].cmd;
     }
     return potentialMatches[0];
@@ -1334,13 +1270,13 @@ function findBestZ80Match(instruction, operands) {
 // Helper function to compress a NODDY line and pad to 39 characters
 // Each NODDY line should be exactly 39 characters when displayed
 function compressAndPadNoddyLine(line, addPadding) {
-    var bytes = compressSpacesAndAscii(line);
+    const bytes = compressSpacesAndAscii(line);
     // Calculate how many spaces needed to reach 39 characters
     // The padding is only added to non-final lines (final line ends with 0xFF)
     if (addPadding) {
-        var lineLength = line.length;
+        const lineLength = line.length;
         if (lineLength < 39) {
-            var spacesNeeded = 39 - lineLength;
+            const spacesNeeded = 39 - lineLength;
             // Add compressed space byte (0x80 + count)
             bytes.push(0x80 + spacesNeeded);
         }
@@ -1351,22 +1287,22 @@ function compressAndPadNoddyLine(line, addPadding) {
 // Format per page: <Length LSB> <Length MSB> <Compressed Content> <0xFF>
 // Special rule: The PAGE TITLE is the first part of content. The last char of the title has bit 7 set.
 function convertNoddyBlock(lines) {
-    var allBytes = [];
-    var currentPageLines = [];
-    var currentPageIsProgram = false;
+    const allBytes = [];
+    let currentPageLines = [];
+    let currentPageIsProgram = false;
     // Helper to process a single accumulated page.
     // isProgramPage: true when the title line started with "Program title="
-    var processPage = function (linesToProcess, isProgramPage) {
-        var pageContentBytes = [];
+    const processPage = (linesToProcess, isProgramPage) => {
+        const pageContentBytes = [];
         // Process TITLE (first line)
         // "LOSE" -> 'L','O','S', 'E'|0x80
         // Note: CompressSpaces is NOT applied to the title itself based on common MTX logic for labels/names,
         // but just in case, we'll treat it as raw ASCII with the last bit set.
-        var title = '';
+        let title = '';
         if (linesToProcess.length > 0) {
             title = linesToProcess[0];
-            for (var i = 0; i < title.length; i++) {
-                var code = title.charCodeAt(i);
+            for (let i = 0; i < title.length; i++) {
+                let code = title.charCodeAt(i);
                 if (i === title.length - 1) {
                     code |= 0x80; // Set bit 7 on last char
                 }
@@ -1375,43 +1311,42 @@ function convertNoddyBlock(lines) {
         }
         // isProgramPage is carried in as a parameter (declared by "Program title=" prefix).
         // The optional repeated-name line on the body is still honoured if present.
-        var firstBodyLine = linesToProcess.length > 1 ? linesToProcess[1] : '';
-        var firstBodyRepeatsTitle = !!title && firstBodyLine.trim() === title;
-        var bodyStart = 1;
+        const firstBodyLine = linesToProcess.length > 1 ? linesToProcess[1] : '';
+        const firstBodyRepeatsTitle = !!title && firstBodyLine.trim() === title;
+        let bodyStart = 1;
         if (firstBodyRepeatsTitle) {
             // If this is the only body line, it's the last line of the page.
-            var isLastLine = linesToProcess.length === 2;
-            pageContentBytes.push.apply(pageContentBytes, compressAndPadNoddyLine(linesToProcess[1], !isLastLine));
+            const isLastLine = linesToProcess.length === 2;
+            pageContentBytes.push(...compressAndPadNoddyLine(linesToProcess[1], !isLastLine));
             bodyStart = 2;
         }
         // Process remaining body lines for both page types
-        var lastLineIndex = linesToProcess.length - 1;
-        for (var i = bodyStart; i < linesToProcess.length; i++) {
-            var line = linesToProcess[i];
-            var isLastLine = (i === lastLineIndex);
-            pageContentBytes.push.apply(pageContentBytes, compressAndPadNoddyLine(line, !isLastLine));
+        const lastLineIndex = linesToProcess.length - 1;
+        for (let i = bodyStart; i < linesToProcess.length; i++) {
+            const line = linesToProcess[i];
+            const isLastLine = (i === lastLineIndex);
+            pageContentBytes.push(...compressAndPadNoddyLine(line, !isLastLine));
         }
-        var len = pageContentBytes.length + 3; // +3 to include LSB, MSB and 0xFF
+        const len = pageContentBytes.length + 3; // +3 to include LSB, MSB and 0xFF
         // Push Page Structure: [Len LSB] [Len MSB] [Content...] [0xFF]
         allBytes.push(len & 0xFF);
         allBytes.push((len >> 8) & 0xFF);
-        allBytes.push.apply(allBytes, pageContentBytes);
+        allBytes.push(...pageContentBytes);
         allBytes.push(0xFF);
     };
-    for (var _i = 0, lines_2 = lines; _i < lines_2.length; _i++) {
-        var rawLine = lines_2[_i];
+    for (const rawLine of lines) {
         // Clean line ending
-        var line = rawLine.replace(/\r?\n$/, '');
-        var trimmedLine = line.trim();
-        var isProgTitle = /^Program title=/i.test(trimmedLine);
-        var isTextTitle = /^Text title=/i.test(trimmedLine);
+        const line = rawLine.replace(/\r?\n$/, '');
+        const trimmedLine = line.trim();
+        const isProgTitle = /^Program title=/i.test(trimmedLine);
+        const isTextTitle = /^Text title=/i.test(trimmedLine);
         if (isProgTitle || isTextTitle) {
             // Flush the previous page before starting a new one
             if (currentPageLines.length > 0) {
                 processPage(currentPageLines, currentPageIsProgram);
             }
             // Strip the prefix to get just the page name
-            var pageName = isProgTitle
+            const pageName = isProgTitle
                 ? trimmedLine.replace(/^Program title=/i, '')
                 : trimmedLine.replace(/^Text title=/i, '');
             currentPageLines = [pageName];
@@ -1431,53 +1366,52 @@ function convertNoddyBlock(lines) {
     return allBytes;
 }
 // Updated orchestrator: convertTextToHex uses the three functions above
-function convertTextToHex(docText, baseAddr) {
-    if (baseAddr === void 0) { baseAddr = 0x4000; }
-    var lines = docText.split(/\r?\n/);
-    var output = [];
-    var foundNoddyTrigger = false;
-    var isNoddyMarkerText = function (text) {
-        var trimmed = (text || '').trim();
+function convertTextToHex(docText, baseAddr = 0x4000) {
+    const lines = docText.split(/\r?\n/);
+    let output = [];
+    let foundNoddyTrigger = false;
+    const isNoddyMarkerText = (text) => {
+        const trimmed = (text || '').trim();
         if (/^REM\s+NODDY\s*$/.test(trimmed))
             return true;
         return /:\s*REM\s+NODDY\s*$/.test(trimmed);
     };
-    var hasFollowingBasicLine = function (startIdx) {
-        for (var j = startIdx + 1; j < lines.length; j++) {
+    const hasFollowingBasicLine = (startIdx) => {
+        for (let j = startIdx + 1; j < lines.length; j++) {
             if (/^\s*\d+\s+/.test(lines[j]))
                 return true;
         }
         return false;
     };
-    for (var lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-        var line = lines[lineIdx];
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+        const line = lines[lineIdx];
         if (foundNoddyTrigger) {
             break;
         }
-        var match = /^\s*(\d+)\s*(.*)$/.exec(line);
+        const match = /^\s*(\d+)\s*(.*)$/.exec(line);
         if (!match)
             continue;
-        var lineNum = parseInt(match[1], 10);
-        var codeText = match[2].trim();
+        const lineNum = parseInt(match[1], 10);
+        const codeText = match[2].trim();
         // Noddy handling: Check for "REM NODDY" (must be final BASIC line)
         if (isNoddyMarkerText(codeText) && !hasFollowingBasicLine(lineIdx)) {
             foundNoddyTrigger = true;
             // 1. Process this line as a STANDARD BASIC LINE first (e.g. 13330 REM NODDY)
-            var codeBytes = basicTokeniseLine(line, baseAddr);
-            output.push.apply(output, codeBytes);
+            const codeBytes = basicTokeniseLine(line, baseAddr);
+            output.push(...codeBytes);
             // 2. Collect lines AFTER the 'REM NODDY' line and convert as Noddy Pages
-            var remainingLines = lines.slice(lineIdx + 1);
-            var noddyBytes = convertNoddyBlock(remainingLines);
-            output.push.apply(output, noddyBytes);
+            const remainingLines = lines.slice(lineIdx + 1);
+            const noddyBytes = convertNoddyBlock(remainingLines);
+            output.push(...noddyBytes);
             break;
         }
         if (codeText.toUpperCase() === 'CODE') {
             // Handle CODE block - collect lines until next BASIC line or non-code line
-            var codeLines = [];
+            const codeLines = [];
             // Collect code block lines (with hex addresses)
-            var lastIdx = lineIdx;
-            for (var idx = lineIdx + 1; idx < lines.length; idx++) {
-                var l = lines[idx];
+            let lastIdx = lineIdx;
+            for (let idx = lineIdx + 1; idx < lines.length; idx++) {
+                const l = lines[idx];
                 // Stop if this is a new BASIC line (starts with digits, no leading whitespace)
                 if (/^\d+\s/.test(l))
                     break;
@@ -1489,9 +1423,9 @@ function convertTextToHex(docText, baseAddr) {
                 lastIdx = idx;
             }
             // Build full block (include the CODE line with its line number) and tokenise once
-            var block = "".concat(lineNum, " CODE\n").concat(codeLines.join('\n'));
-            var codeBytes = basicTokeniseLine(block, baseAddr);
-            output.push.apply(output, codeBytes);
+            const block = `${lineNum} CODE\n${codeLines.join('\n')}`;
+            const codeBytes = basicTokeniseLine(block, baseAddr);
+            output.push(...codeBytes);
             // Skip past the code block lines we just consumed
             lineIdx = lastIdx;
             continue;
@@ -1500,27 +1434,25 @@ function convertTextToHex(docText, baseAddr) {
             // Handle simple MTX BASIC line
             // Special case: USER SAVE or USER LOAD
             if (/^USER\s+(SAVE|LOAD)/.test(codeText)) {
-                var tokens = codeText.split(/\s+/);
-                var stripEol = function (arr) { return (arr.length && arr[arr.length - 1] === 0xFF) ? arr.slice(0, -1) : arr; };
-                var userToken = stripEol(basicTokeniseLine(tokens[0], baseAddr)); // USER
-                var secondToken = stripEol(basicTokeniseLine(tokens[1], baseAddr)); // SAVE or LOAD
-                var remainingText = tokens.slice(2).join(' ');
-                var remainingBytes = stripEol(basicTokeniseLine(remainingText, baseAddr));
-                var payload = __spreadArray(__spreadArray(__spreadArray(__spreadArray([], userToken, true), secondToken, true), remainingBytes, true), [0xFF], false);
-                var totalLength_1 = 2 + 2 + payload.length; // length bytes + line number bytes + payload
-                output.push(totalLength_1 & 0xff, (totalLength_1 >> 8) & 0xff); // Total length
+                const tokens = codeText.split(/\s+/);
+                const stripEol = (arr) => (arr.length && arr[arr.length - 1] === 0xFF) ? arr.slice(0, -1) : arr;
+                const userToken = stripEol(basicTokeniseLine(tokens[0], baseAddr)); // USER
+                const secondToken = stripEol(basicTokeniseLine(tokens[1], baseAddr)); // SAVE or LOAD
+                const remainingText = tokens.slice(2).join(' ');
+                const remainingBytes = stripEol(basicTokeniseLine(remainingText, baseAddr));
+                const payload = [...userToken, ...secondToken, ...remainingBytes, 0xFF];
+                const totalLength = 2 + 2 + payload.length; // length bytes + line number bytes + payload
+                output.push(totalLength & 0xff, (totalLength >> 8) & 0xff); // Total length
                 output.push(lineNum & 0xff, (lineNum >> 8) & 0xff); // Line number
-                output.push.apply(// Line number
-                output, payload);
+                output.push(...payload);
                 continue;
             }
-            var codeBytes = basicTokeniseLine(codeText, baseAddr);
-            var totalLength = 2 + 2 + codeBytes.length; // length bytes + line number bytes + payload (includes EOL)
+            const codeBytes = basicTokeniseLine(codeText, baseAddr);
+            const totalLength = 2 + 2 + codeBytes.length; // length bytes + line number bytes + payload (includes EOL)
             // Emit bytes
             output.push(totalLength & 0xff, (totalLength >> 8) & 0xff); // Total length
             output.push(lineNum & 0xff, (lineNum >> 8) & 0xff); // Line number
-            output.push.apply(// Line number
-            output, codeBytes); // Tokenized code (includes EOL)
+            output.push(...codeBytes); // Tokenized code (includes EOL)
         }
     }
     output.push(0xff); // Program terminator - not included in total length of the CODE length bytes as outside the scope of the code block. 
@@ -1531,7 +1463,7 @@ function parseImmediateOperand(op) {
     if (!op)
         return 0;
     op = op.trim();
-    var sign = op.startsWith('-') ? -1 : 1;
+    const sign = op.startsWith('-') ? -1 : 1;
     if (op.startsWith('+') || op.startsWith('-')) {
         op = op.slice(1).trim();
     }
@@ -1544,17 +1476,16 @@ function parseImmediateOperand(op) {
         return sign * op.charCodeAt(1);
     return 0; // label/unknown -> 0 (labels would need two-pass)
 }
-function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences, baseOffset, labelReferences) {
-    if (baseOffset === void 0) { baseOffset = 0; }
-    var parts = opCodePattern.split(/\s+/).filter(Boolean);
-    var out = [];
-    var operands = parsed.operands || [];
-    var opIdx = 0;
-    var isRegisterLike = function (s) {
+function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences, baseOffset = 0, labelReferences) {
+    const parts = opCodePattern.split(/\s+/).filter(Boolean);
+    const out = [];
+    const operands = parsed.operands || [];
+    let opIdx = 0;
+    const isRegisterLike = (s) => {
         if (!s)
             return false;
-        var u = s.toUpperCase().trim();
-        var regs = new Set([
+        const u = s.toUpperCase().trim();
+        const regs = new Set([
             'A', 'B', 'C', 'D', 'E', 'H', 'L', 'I', 'R',
             "AF", "BC", "DE", "HL", "SP", "IX", "IY", "AF'",
             'NZ', 'Z', 'NC', 'C', 'PO', 'PE', 'P', 'M'
@@ -1568,30 +1499,29 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
         // Indexed (IX+nn)/(IY+nn) carries a displacement value, so NOT register-like
         return false;
     };
-    var findNextValueOperandIndex = function (start) {
-        var idx = start;
+    const findNextValueOperandIndex = (start) => {
+        let idx = start;
         while (idx < operands.length && isRegisterLike(operands[idx]))
             idx++;
         return idx;
     };
-    var stripParens = function (s) { return (s || '').trim().replace(/^\(|\)$/g, '').trim(); };
-    for (var _i = 0, parts_1 = parts; _i < parts_1.length; _i++) {
-        var p = parts_1[_i];
+    const stripParens = (s) => (s || '').trim().replace(/^\(|\)$/g, '').trim();
+    for (const p of parts) {
         if (p === 'YY') {
             // YY is for relative jumps (JR, DJNZ).
             // If operand is a label, compute displacement: label_offset - (pc+2).
             // If operand is a numeric literal, use it directly as the signed byte supplied by the programmer.
             opIdx = findNextValueOperandIndex(opIdx);
-            var rawOp = operands[opIdx++] || '';
-            var opStr = stripParens(rawOp);
-            var isLabel = (/^[A-Z][A-Z0-9]*$/).test(opStr.trim());
+            const rawOp = operands[opIdx++] || '';
+            const opStr = stripParens(rawOp);
+            const isLabel = (/^[A-Z][A-Z0-9]*$/).test(opStr.trim());
             if (isLabel) {
-                var targetOffset = 0;
-                var lab = opStr.toUpperCase();
+                let targetOffset = 0;
+                const lab = opStr.toUpperCase();
                 if (labelMap && typeof labelMap[lab] === 'number') {
                     targetOffset = labelMap[lab];
                 }
-                var displacement = targetOffset - (baseOffset + 2);
+                const displacement = targetOffset - (baseOffset + 2);
                 out.push(displacement & 0xFF);
                 // Track relative label reference
                 if (labelReferences) {
@@ -1600,18 +1530,18 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
             }
             else {
                 // Numeric literal: take the supplied 8-bit value directly
-                var literal = parseImmediateOperand(opStr) & 0xFF;
+                const literal = parseImmediateOperand(opStr) & 0xFF;
                 out.push(literal);
                 // Record number reference for YY (byte treated as relative displacement)
                 // Check for Hex (#) or Decimal sequences, allowing for +/- prefix
-                var cleanOp = opStr.trim();
-                var checkOp = cleanOp;
+                const cleanOp = opStr.trim();
+                let checkOp = cleanOp;
                 if (checkOp.startsWith('+') || checkOp.startsWith('-')) {
                     checkOp = checkOp.substring(1).trim();
                 }
                 // Matches logic in parseImmediateOperand implementation
-                var isHex = /^[#]/.test(checkOp);
-                var isDec = /^[0-9]+$/.test(checkOp);
+                const isHex = /^[#]/.test(checkOp);
+                const isDec = /^[0-9]+$/.test(checkOp);
                 if ((isHex || isDec) && numberReferences) {
                     // Offset points to the displacement byte we just pushed (last element)
                     addRefOffset(numberReferences, cleanOp, 'relative', baseOffset + out.length - 1);
@@ -1620,35 +1550,35 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
         }
         else if (p === 'XX' || p === 'N' || p === 'ZZ') {
             // Prefer the operand that carries an IX/IY displacement when encoding ZZ
-            var selectedIdx = opIdx;
+            let selectedIdx = opIdx;
             if (p === 'ZZ') {
-                var idxMatch = operands.findIndex(function (o) { return /\((IX|IY)[+-]/.test((o || '').trim()); });
+                const idxMatch = operands.findIndex(o => /\((IX|IY)[+-]/.test((o || '').trim()));
                 if (idxMatch >= 0)
                     selectedIdx = idxMatch;
             }
             selectedIdx = findNextValueOperandIndex(selectedIdx);
-            var rawOp = operands[selectedIdx] || '';
+            const rawOp = operands[selectedIdx] || '';
             opIdx = selectedIdx + 1;
-            var opStr = stripParens(rawOp);
+            const opStr = stripParens(rawOp);
             // Indexed displacement (IX+d/IY+d) carries the byte following the opcodes
-            var indexedMatch = /^\((IX|IY)[+-](.+)\)$/.exec(rawOp.trim());
-            var operandForParse = indexedMatch ? indexedMatch[2] : opStr;
+            const indexedMatch = /^\((IX|IY)[+-](.+)\)$/.exec(rawOp.trim());
+            const operandForParse = indexedMatch ? indexedMatch[2] : opStr;
             // Reject bare hex without prefix to surface user error (should be #XX)
             if (/^[+-]?[0-9A-F]+$/.test(operandForParse) && /[A-F]/.test(operandForParse) && !/^([+-]?#)/.test(operandForParse)) {
-                throw new Error("Hex operand ".concat(operandForParse, " requires # prefix"));
+                throw new Error(`Hex operand ${operandForParse} requires # prefix`);
             }
-            var cleanOp = operandForParse.trim();
-            var v = parseImmediateOperand(cleanOp);
-            var isQuotedChar = /^"[^"]"$/.test(cleanOp);
+            const cleanOp = operandForParse.trim();
+            let v = parseImmediateOperand(cleanOp);
+            const isQuotedChar = /^"[^"]"$/.test(cleanOp);
             // >>> HIGHLIGHT 1: New logic to check for Decimal numbers (isDec) <<<
-            var checkOp = cleanOp;
+            let checkOp = cleanOp;
             if (checkOp.startsWith('+') || checkOp.startsWith('-')) {
                 checkOp = checkOp.substring(1).trim();
             }
-            var isHex = /^[#]/.test(checkOp);
-            var isDec = /^[0-9]+$/.test(checkOp); // This line is new
+            const isHex = /^[#]/.test(checkOp);
+            const isDec = /^[0-9]+$/.test(checkOp); // This line is new
             if ((/^[A-Z][A-Z0-9]*$/).test(cleanOp)) {
-                var lab = cleanOp.toUpperCase();
+                const lab = cleanOp.toUpperCase();
                 if (labelMap && typeof labelMap[lab] === 'number')
                     v = labelMap[lab];
                 if (labelReferences) {
@@ -1666,19 +1596,19 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
         }
         else if (p === 'XXXX') {
             opIdx = findNextValueOperandIndex(opIdx);
-            var rawOp2 = operands[opIdx++] || '';
-            var opStr2 = stripParens(rawOp2);
-            var v2 = parseImmediateOperand(opStr2);
+            const rawOp2 = operands[opIdx++] || '';
+            const opStr2 = stripParens(rawOp2);
+            let v2 = parseImmediateOperand(opStr2);
             // >>> HIGHLIGHT 3: New logic for XXXX operand to check for Decimal (isDec2) <<<
             // Check for Hex (#) or Decimal sequences, allowing for +/- prefix (Logic from YY)
-            var checkOp2 = opStr2.trim();
+            let checkOp2 = opStr2.trim();
             if (checkOp2.startsWith('+') || checkOp2.startsWith('-')) {
                 checkOp2 = checkOp2.substring(1).trim();
             }
-            var isHex2 = /^[#]/.test(checkOp2);
-            var isDec2 = /^[0-9]+$/.test(checkOp2); // This line is new
+            const isHex2 = /^[#]/.test(checkOp2);
+            const isDec2 = /^[0-9]+$/.test(checkOp2); // This line is new
             if ((/^[A-Z][A-Z0-9]*$/).test(opStr2.trim())) {
-                var lab2 = opStr2.toUpperCase();
+                const lab2 = opStr2.toUpperCase();
                 if (labelMap && typeof labelMap[lab2] === 'number')
                     v2 = labelMap[lab2];
                 if (labelReferences) {
@@ -1700,13 +1630,13 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
         }
         else if (/^[0-9A-F]+$/.test(p) && p.length % 2 === 0) {
             // Multi-byte hex sequence (e.g., "ED5A" -> ED, 5A or "DDCB" -> DD, CB)
-            for (var i = 0; i < p.length; i += 2) {
-                var hexByte = p.substring(i, i + 2);
+            for (let i = 0; i < p.length; i += 2) {
+                const hexByte = p.substring(i, i + 2);
                 out.push(parseInt(hexByte, 16));
             }
         }
         else {
-            var maybe = parseInt(p, 16);
+            const maybe = parseInt(p, 16);
             if (!Number.isNaN(maybe))
                 out.push(maybe & 0xff);
         }
@@ -1714,8 +1644,8 @@ function opCodePatternToBytes(opCodePattern, parsed, labelMap, numberReferences,
     return out;
 }
 function processMTXDirectives(directives) {
-    var totalDirectiveLength = 0;
-    directives.forEach(function (directive) {
+    let totalDirectiveLength = 0;
+    directives.forEach((directive) => {
         if (directive.startsWith("<0x00>")) {
             // Number definition
             totalDirectiveLength += 3; // Example: Adjust based on actual directive length
@@ -1742,36 +1672,6 @@ function processMTXDirectives(directives) {
         }
     });
     return totalDirectiveLength;
-}
-function updateCodeBlockLength(codeBlock, directives) {
-    var codeBlockResult = processCodeBlock(codeBlock);
-    var directiveLength = processMTXDirectives(directives);
-    var totalLength = codeBlockResult.totalCodeLength;
-    return { totalLength: totalLength, opcodeBytes: codeBlockResult.opcodeBytes, mtxDirectiveBytes: codeBlockResult.mtxDirectiveBytes };
-}
-function refineConvertTextToHex(line) {
-    var lineNumber = parseInt(line.split(' ')[0], 10);
-    var command = line.split(' ')[1];
-    if (command === 'CODE') {
-        // Extract the code block (everything after the command)
-        var codeBlock = line.split('CODE')[1].trim();
-        // Dynamically calculate the length of the Z80 opcodes in the code block
-        var codeBlockResult = processCodeBlock(codeBlock);
-        // Extract and calculate the length of the MTX directives
-        var directives = extractMTXDirectives(codeBlock); // Implement directive extraction
-        var directiveLength = processMTXDirectives(directives);
-        // Calculate the total length dynamically
-        var totalLength = 7 + codeBlockResult.totalOpcodeLength + directiveLength;
-        return __spreadArray(__spreadArray(__spreadArray([
-            totalLength & 0xFF, (totalLength >> 8) & 0xFF, // Total length
-            lineNumber & 0xFF, (lineNumber >> 8) & 0xFF, // Line number
-            0xC2, // Token for CODE
-            codeBlockResult.totalOpcodeLength & 0xFF, (codeBlockResult.totalOpcodeLength >> 8) & 0xFF
-        ], codeBlockResult.opcodeBytes, true), codeBlockResult.mtxDirectiveBytes, true), [
-            0xFF // End of line marker
-        ], false);
-    }
-    return []; // Default case
 }
 function extractMTXDirectives(codeBlock) {
     // Placeholder: Implement logic to extract MTX directives from the code block

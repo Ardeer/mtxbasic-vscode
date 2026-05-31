@@ -62,15 +62,15 @@ exports.initCreateHdr = initCreateHdr;
     DESAVE/DESAVE_1 found at + 250 & 251 displacement from start of sys_var => 0xFB4A & 0xFB4B
 */
 // If MTX BASIC is used then MTXOS grabs 0xC000 to #FA50 for its own use. NOTE: if no BASIC, and only Machine code, then the machine code can only use this space.
-var mtxFilename = "              "; //default filename for MTX programs saved to tape. Maxium 16 characters including extension. Will be truncated if longer. If less than 16 characters padded with 0x20 (space) bytes.
-var readMarkerDescriptor = [0xF2, 0xF8]; //read marker descriptor bytes used in MTX tape/file header
-var hdrPadByte = 0x00; //padding byte used in MTX tape/file header
-var hdrPadByteLength = 350; //number of padding bytes used in MTX tape/file header (default 350)
-var hdrTotalBytes = 619; //total number of bytes in MTX tape/file header (default 619)
-var createHdr = []; //array to hold the MTX tape/file header bytes. To be exported for use in extension.ts
+let mtxFilename = "              "; //default filename for MTX programs saved to tape. Maxium 16 characters including extension. Will be truncated if longer. If less than 16 characters padded with 0x20 (space) bytes.
+const readMarkerDescriptor = [0xF2, 0xF8]; //read marker descriptor bytes used in MTX tape/file header
+const hdrPadByte = 0x00; //padding byte used in MTX tape/file header
+const hdrPadByteLength = 350; //number of padding bytes used in MTX tape/file header (default 350)
+const hdrTotalBytes = 619; //total number of bytes in MTX tape/file header (default 619)
+let createHdr = []; //array to hold the MTX tape/file header bytes. To be exported for use in extension.ts
 exports.createHdr = createHdr;
 // sysVal contains the default hexadecimal value stored when the MTX512 is first switched on, for reference.
-var sysVarSaved = [
+const sysVarSaved = [
     { hexVal: 0xFA50, sysName: "SYS_START", sysVal: 0x00 }, // FA50 sysVal=0x00
     { hexVal: 0xFA51, sysName: "SND_Env_buf", sysVal: 0x00 }, //top of envelope buffers for sound
     { hexVal: 0xFA52, sysName: "CTRBADR", sysVal: 0x00 }, //control buffers for sound (10 bits/channel)
@@ -332,17 +332,17 @@ function initCreateHdr() {
     exports.createHdr = createHdr = [];
     createHdr.push(0xFF); //first byte is 0xFF
     // 1-15 bytes contain spaces 0x20, this is where the filename will be stored.
-    for (var i = 0; i < 15; i++) {
+    for (let i = 0; i < 15; i++) {
         createHdr.push(0x20);
     }
     // 16-17 bytes contain 0xF2 and 0xF8
-    createHdr.push.apply(createHdr, readMarkerDescriptor);
+    createHdr.push(...readMarkerDescriptor);
     // the 350 bytes (see hdrPadByteLength) contain 0x00
-    for (var i = 0; i < hdrPadByteLength; i++) {
+    for (let i = 0; i < hdrPadByteLength; i++) {
         createHdr.push(hdrPadByte);
     }
     // then add the default bytes in sysVal
-    sysVarSaved.forEach(function (item) {
+    sysVarSaved.forEach(item => {
         createHdr.push(item.sysVal);
     });
 }

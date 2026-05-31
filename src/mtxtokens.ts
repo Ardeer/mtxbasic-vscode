@@ -8,12 +8,8 @@ v0.1
 
 import {
     z80Cmds,
-    normalizeInstruction,
-    parseZ80Line
+    normalizeInstruction
 } from './z80codes.js';
-
-//Not imported     Z80Error, Z80ParsedLine, CodeBlock, LabelInfo, splitOperands, detectCodeBlocks, collectLabels, findZ80Command,
-//                 validateZ80Instruction, validateZ80InstructionWithLabels, validateCodeBlock, validateCodeBlocks,  getZ80InstructionInfo
 
 //ascii (non-printable 0 to 31 and printable from 32 to 127) + MTX BASIC tokens (from 128 to 255)
 const mtxTokens: {tokenDec: number, tokenHex: number, token: string}[] = [
@@ -1455,21 +1451,6 @@ function buildReferenceSections(refs: RefBuckets, codeStartAbsolute: number): nu
   return bytes;
 }
 
-// Helper to convert string to ASCII bytes, setting bit 7 on the very last character - use buildDbDirectivePayload function instead where possible
-function convertToAsciiWithHiBit(str: string): number[] {
-  if (!str) return [];
-  const bytes: number[] = [];
-  for (let i = 0; i < str.length; i++) {
-    let code = str.charCodeAt(i);
-    // If it's the last character, set bit 7
-    if (i === str.length - 1) {
-      code |= 0x80;
-    }
-    bytes.push(code);
-  }
-  return bytes;
-}
-
 // =================== MAIN PROCESSCODEBOCK FUNCTION ===================
 function processCodeBlock(codeBlock: string, baseAddr = 0x4000): {
   totalOpcodeLength: number;
@@ -2023,50 +2004,6 @@ function processMTXDirectives(directives: string[]): number {
     return totalDirectiveLength;
 }
 
-
-
-function updateCodeBlockLength(codeBlock: string, directives: string[]): { totalLength: number; opcodeBytes: number[], mtxDirectiveBytes: number[] } {
-    const codeBlockResult = processCodeBlock(codeBlock);
-    const directiveLength = processMTXDirectives(directives);
-
-    const totalLength = codeBlockResult.totalCodeLength;
-
-    return { totalLength, opcodeBytes: codeBlockResult.opcodeBytes, mtxDirectiveBytes: codeBlockResult.mtxDirectiveBytes };
-}
-
-
-function refineConvertTextToHex(line: string): number[] {
-    const lineNumber = parseInt(line.split(' ')[0], 10);
-    const command = line.split(' ')[1];
-
-    if (command === 'CODE') {
-        // Extract the code block (everything after the command)
-        const codeBlock = line.split('CODE')[1].trim();
-
-        // Dynamically calculate the length of the Z80 opcodes in the code block
-        const codeBlockResult = processCodeBlock(codeBlock);
-
-        // Extract and calculate the length of the MTX directives
-        const directives = extractMTXDirectives(codeBlock); // Implement directive extraction
-        const directiveLength = processMTXDirectives(directives);
-
-        // Calculate the total length dynamically
-        const totalLength = 7 + codeBlockResult.totalOpcodeLength + directiveLength;
-
-        return [
-            totalLength & 0xFF, (totalLength >> 8) & 0xFF, // Total length
-            lineNumber & 0xFF, (lineNumber >> 8) & 0xFF, // Line number
-            0xC2, // Token for CODE
-            codeBlockResult.totalOpcodeLength & 0xFF, (codeBlockResult.totalOpcodeLength >> 8) & 0xFF, // Code block length
-            ...codeBlockResult.opcodeBytes, // Z80 opcodes
-            ...codeBlockResult.mtxDirectiveBytes, // MTX directives
-            0xFF // End of line marker
-        ];
-    }
-
-    return []; // Default case
-}
-
 function extractMTXDirectives(codeBlock: string): string[] {
     // Placeholder: Implement logic to extract MTX directives from the code block
     return [];
@@ -2075,7 +2012,6 @@ function extractMTXDirectives(codeBlock: string): string[] {
 export { mtxTokens,
     convertTextToHex,
     basicTokeniseLine,
-    refineConvertTextToHex,
     compressSpacesAndAscii,
     findBestZ80Match,
     convertNoddyBlock,
@@ -2083,7 +2019,6 @@ export { mtxTokens,
     opCodePatternToBytes,
     processMTXDirectives,
     processCodeBlock,
-    updateCodeBlockLength,
     extractMTXDirectives,
     isAtWordBoundary
  };

@@ -29,7 +29,7 @@ so when converting mtx assembly language use shift F3 for hexadecimal prefix
 */
 //Start of the system variables saved to tape
 // sysVal contains the default hexadecimal value stored when the MTX512 is first switched on, for reference.
-var sysVarSaved = [
+const sysVarSaved = [
     { hexVal: 0xFA50, sysName: "SYS_START", sysVal: 0x00 }, // FA50 sysVal=0x00
     { hexVal: 0xFA51, sysName: "SND_Env_buf", sysVal: 0x00 }, //top of envelope buffers for sound
     { hexVal: 0xFA52, sysName: "CTRBADR", sysVal: 0x00 }, //control buffers for sound (10 bits/channel)
