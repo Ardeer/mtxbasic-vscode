@@ -79,7 +79,7 @@ b) or from "CTRL SHIFT p" and select "MTX: Renumber Z80 addresses in CODE block"
 
 NOTE: This will update all codeblocks in the listing.
 
-Hover over a Z80 mnenomic like LD and it will list possible options, e.g. LD (HL),A . There is no Symbols Label vs address summary at the end of the code block. CTRL F (find) is more convenient to use and it made the coding slightly less cumbersome. The code will flag an error if a LABEL is duplicated.
+Hover over a Z80 mnemonic like LD and it will list possible options, e.g. LD (HL),A . There is no Symbols Label vs address summary at the end of the code block. CTRL F (find) is more convenient to use and it made the coding slightly less cumbersome. The code will flag an error if a LABEL is duplicated.
 
 A quirk of the assembler and to keep consistency with the original, the hexadecimal address in the code block is not preceded by '#' to indicate a hexadecimal number. However, numbers and addresses used in Z80 instructions must be preceded by '#' unless it the user uses the decimal equivalent, see examples below.
 
@@ -94,7 +94,7 @@ In a CODE block, do not use blank lines or comment only lines as this will resul
 
 The CODE block will flag if duplicate or missing LABELS.
 
-One quirk not applied in this implementation is the frustrating way the built in assembler dealt with changes after an assembly instruction was entered. For example, if you changed LD DE,#7000 to LD DE,#9000 the total length of the code increases by 9 bytes in this example. It leaves a residue of 00 23 39 30 30 b0 00 00 00 behind. Working with VS code does not generate this. Note: mtxdisassembly will strip out these reminants resulting in modified code lengths and if the coder had used fixed memory addresses, these strip outs could result in positional changes that may affect execution after recompiling in this extension. So bewary.
+One quirk not applied in this implementation is the frustrating way the built in assembler dealt with changes after an assembly instruction was entered. For example, if you changed LD DE,#7000 to LD DE,#9000 the total length of the code increases by 9 bytes in this example. It leaves a residue of 00 23 39 30 30 b0 00 00 00 behind. Working with VS code does not generate this. Note: mtxdisassembly will strip out these remnants resulting in modified code lengths and if the coder had used fixed memory addresses, these strip outs could result in positional changes that may affect execution after recompiling in this extension. So be aware.
 
 The NODDY editor is not accessible in VS code using NODDY<return>. However, the workaround is this free form text version is at the very end of a BASIC listing and the very last entry, is to use REM NODDY as the placeholder trigger to allow NODDY programs and text pages to be constructed. 
 
