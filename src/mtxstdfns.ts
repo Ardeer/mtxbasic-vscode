@@ -139,7 +139,23 @@ type BoolSpan = { spanStart: number; spanEnd: number };
     }   // END of convertToNumber   
 
 
-    function stringExprParts(expr: string): validparts[] { // Updated to handle concatenated expressions. Used by splitStringConcats
+        function isValidStringFunctionArgs(part: string, fnName: 'LEFT$' | 'MID$' | 'RIGHT$'): boolean {
+            const prefix = `${fnName}(`;
+            if (!part.startsWith(prefix) || !part.endsWith(')')) return false;
+
+            const inner = part.slice(prefix.length, -1).trim();
+            const args = splitTopLevel(inner).map(arg => arg.trim()).filter(Boolean);
+            const expectedCount = fnName === 'MID$' ? 3 : 2;
+            if (args.length !== expectedCount) return false;
+
+            const [strArg, ...numArgs] = args;
+            const strOk = stringExprParts(strArg).every(row => row[1] === true);
+            if (!strOk) return false;
+
+            return numArgs.every(arg => varExprParts(arg).every(row => row[1] === true) || isValidArithmetic(arg));
+        }
+
+        function stringExprParts(expr: string): validparts[] { // Updated to handle concatenated expressions. Used by splitStringConcats
             const s = expr; //  no trim – keep original spacing for regexes
             if (!s) return [['',false]];
 
@@ -168,11 +184,11 @@ type BoolSpan = { spanStart: number; spanEnd: number };
                     // 4a. GR$(x,y,b)
                     if (/^(?:GR)\$\((?:\d+|[A-Z][A-Z0-9]*?),(?:\d+|[A-Z][A-Z0-9]*?),(?:\d+|[A-Z][A-Z0-9]*?)\s*\)$/.test(part))  return extractParts.push([part, true]);
                     // 4b. LEFT$(str,num)
-                    if (/^(?:LEFT)\$\((?:"[^"]*"|[A-Z][A-Z0-9]*\$?),(?:\d+|[A-Z][A-Z0-9]*?)\s*\)$/.test(part))  return extractParts.push([part, true]);
+                    if (isValidStringFunctionArgs(part, 'LEFT$'))  return extractParts.push([part, true]);
                     // 4c. MID$(str,x,y)
-                    if (/^(?:MID)\$\((?:"[^"]*"|[A-Z][A-Z0-9]*\$?),(?:\d+|[A-Z][A-Z0-9]*?),(?:\d+|[A-Z][A-Z0-9]*?)\s*\)$/.test(part))  return extractParts.push([part, true]);
+                    if (isValidStringFunctionArgs(part, 'MID$'))  return extractParts.push([part, true]);
                     // 4d. RIGHT$(str,num)
-                    if (/^(?:RIGHT)\$\((?:"[^"]*"|[A-Z][A-Z0-9]*\$?),(?:\d+|[A-Z][A-Z0-9]*?)\s*\)$/.test(part))  return extractParts.push([part, true]);
+                    if (isValidStringFunctionArgs(part, 'RIGHT$'))  return extractParts.push([part, true]);
                     // 4e. STR$(num/expr) allows 2+2 Returns a string, allows STR$(2+2) but not suitable for nested STR$((3^2)*2-4)
                     //if (/^STR\$\((?:[A-Z][A-Z0-9]*|\d+(?:\.\d+)?)(?:\s*[\+\-\*\/\^]\s*(?:[A-Z][A-Z0-9]*|\d+(?:\.\d+)?|\([^)]*$))*\s*\)$/.test(part)){
                     //        return extractParts.push([part, true]);
@@ -374,8 +390,8 @@ type BoolSpan = { spanStart: number; spanEnd: number };
         //const reLenFn   = /^(?:LEN)\s*/;                                     // LEN needs a space after it to be valid but handled separately
         // $‑ending identifier that is a function call (e.g. CHR$(…))
         const reDollarFn = /^[A-Z][A-Z0-9]*\$(?=\s*\()/;                  //replaced [A-Z]{1,}[0-9] with [A-Z][A-Z0-9]
-        const reDollar   = /^[A-Z][A-Z0-9]*\$(?![A-Z0-9])/;            // plain $‑ending token
-        const reIdent    = /^(?:[A-Z][A-Z0-9]*\$?)/;                     // identifiers containing at least one letter
+        const reDollar   = /^[A-Z][A-Z0-9]*\$(?![A-Z0-9$])/;            // plain $‑ending token; do not accept a valid prefix of N$$
+        const reIdent    = /^(?:[A-Z][A-Z0-9]*\$?)(?!\$)/;             // identifiers containing at least one letter
         const reNumber   = /^(\d+(?:.\d+)?(?:[eE][+-]?\d+)?)/;              // integer or decimal or scientific
         const reArithOp  = /^[+\-*/^]/;                                     // Arthimetical operators
         const reBoolOp   = /^(?:AND|NOT|OR)\s*/;                            // Boolean operators
@@ -578,7 +594,7 @@ function classifyExpr(expr: string): { hasString: boolean; hasNumeric: boolean }
         return { hasString: false, hasNumeric: true };
     }
 
-    const leadingTokenMatch = /^([A-Za-z][A-Za-z0-9]*\$?)/.exec(trimmed);
+    const leadingTokenMatch = /^([A-Za-z][A-Za-z0-9]*\$?)(?!\$)/.exec(trimmed);
     const leadingToken = leadingTokenMatch?.[1] ?? '';
 
     if (leadingToken && leadingToken !== leadingToken.toUpperCase()) {
@@ -953,7 +969,7 @@ const noddyProgTitlePattern = /^Program title=([A-Za-z0-9]+)\s*$/i;
 // NODDY command definitions - includes full names and abbreviations
 const noddyCommands: NoddyCommand[] = [
     // *A or *ADVANCE - advance to next page
-    { id: 'ADVANCE', pattern: /^\*(?:A|ADVANCE)\s*$/, hasArg: false, argType: 'none', description: 'Advance to next page' },
+    { id: 'ADVANCE', pattern: /^\*(?:A|ADVANCE)\s*$/, hasArg: false, argType: 'none', description: 'Advance through the program stack (see STACK)' },
     
     // *B or *BRANCH <label> - unconditional branch to label
     { id: 'BRANCH', pattern: /^\*(?:B|BRANCH)\s+(\w+)\s*$/, hasArg: true, argType: 'label', description: 'Unconditional branch to label' },
@@ -974,8 +990,8 @@ const noddyCommands: NoddyCommand[] = [
     // *L or *LIST - list the noddy program
     { id: 'LIST', pattern: /^\*(?:L|LIST)\s*$/, hasArg: false, argType: 'none', description: 'List the Noddy program' },
     
-    // *O or *OFF - turn off/exit noddy
-    { id: 'OFF', pattern: /^\*(?:O|OFF)\s*$/, hasArg: false, argType: 'none', description: 'Turn off/exit Noddy' },
+    // *O or *OFFSTACK - turn off/exit noddy
+    { id: 'OFF', pattern: /^\*(?:O|OFFSTACK)\s*$/, hasArg: false, argType: 'none', description: 'Extract a NODDY program file from the stack without executing it' },
     
     // *P or *PAUSE - wait for keypress
     { id: 'PAUSE', pattern: /^\*(?:P|PAUSE)\s*$/, hasArg: false, argType: 'none', description: 'Wait for keypress' },
@@ -1003,6 +1019,7 @@ function parseNoddyContent(lines: string[], startLine: number): {
     let currentPage: NoddyPage | null = null;
     let textLineCount = 0;
     let isFirstContentLine = false;
+    let flaggedMissingProgramTitleForPage: string | null = null;
     
     for (let i = startLine; i < lines.length; i++) {
         const line = lines[i];
@@ -1034,7 +1051,7 @@ function parseNoddyContent(lines: string[], startLine: number): {
                         errors.push({
                             line: currentPage.lineStart,
                             message: `Program page "${currentPage.name}" contains no NODDY commands ` +
-                                     `(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFF, *PAUSE, *RETURN, *STACK)`,
+                                     `(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFFSTACK, *PAUSE, *RETURN, *STACK)`,
                             start: 0,
                             end: lines[currentPage.lineStart].length
                         });
@@ -1056,6 +1073,19 @@ function parseNoddyContent(lines: string[], startLine: number): {
             };
             textLineCount = 0;
             isFirstContentLine = true;
+            flaggedMissingProgramTitleForPage = null;
+            continue;
+        }
+
+        if (!currentPage) {
+            if (trimmed.length > 0) {
+                errors.push({
+                    line: i,
+                    message: 'Each NODDY page must start with either "Text title=<name>" or "Program title=<name>"',
+                    start: 0,
+                    end: line.length
+                });
+            }
             continue;
         }
 
@@ -1071,6 +1101,19 @@ function parseNoddyContent(lines: string[], startLine: number): {
 
             currentPage.content.push(line);
             textLineCount++;
+
+            if (currentPage.type === 'text' && trimmed.length > 0 && flaggedMissingProgramTitleForPage !== currentPage.name) {
+                const looksLikeProgramCommand = trimmed.startsWith('*') || trimmed.startsWith('^');
+                if (looksLikeProgramCommand) {
+                    errors.push({
+                        line: i,
+                        message: `Text page "${currentPage.name}" contains NODDY program syntax; missing "Program title=<name>" before this program page`,
+                        start: 0,
+                        end: line.length
+                    });
+                    flaggedMissingProgramTitleForPage = currentPage.name;
+                }
+            }
 
             if (textLineCount > 24) {
                 errors.push({
@@ -1100,7 +1143,7 @@ function parseNoddyContent(lines: string[], startLine: number): {
                 errors.push({
                     line: currentPage.lineStart,
                     message: `Program page "${currentPage.name}" contains no NODDY commands ` +
-                             `(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFF, *PAUSE, *RETURN, *STACK)`,
+                             `(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFFSTACK, *PAUSE, *RETURN, *STACK)`,
                     start: 0,
                     end: lines[currentPage.lineStart].length
                 });

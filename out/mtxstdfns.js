@@ -147,6 +147,21 @@ function convertToNumber(s) {
     }
     return null;
 } // END of convertToNumber   
+function isValidStringFunctionArgs(part, fnName) {
+    const prefix = `${fnName}(`;
+    if (!part.startsWith(prefix) || !part.endsWith(')'))
+        return false;
+    const inner = part.slice(prefix.length, -1).trim();
+    const args = splitTopLevel(inner).map(arg => arg.trim()).filter(Boolean);
+    const expectedCount = fnName === 'MID$' ? 3 : 2;
+    if (args.length !== expectedCount)
+        return false;
+    const [strArg, ...numArgs] = args;
+    const strOk = stringExprParts(strArg).every(row => row[1] === true);
+    if (!strOk)
+        return false;
+    return numArgs.every(arg => varExprParts(arg).every(row => row[1] === true) || isValidArithmetic(arg));
+}
 function stringExprParts(expr) {
     const s = expr; //  no trim – keep original spacing for regexes
     if (!s)
@@ -178,13 +193,13 @@ function stringExprParts(expr) {
         if (/^(?:GR)\$\((?:\d+|[A-Z][A-Z0-9]*?),(?:\d+|[A-Z][A-Z0-9]*?),(?:\d+|[A-Z][A-Z0-9]*?)\s*\)$/.test(part))
             return extractParts.push([part, true]);
         // 4b. LEFT$(str,num)
-        if (/^(?:LEFT)\$\((?:"[^"]*"|[A-Z][A-Z0-9]*\$?),(?:\d+|[A-Z][A-Z0-9]*?)\s*\)$/.test(part))
+        if (isValidStringFunctionArgs(part, 'LEFT$'))
             return extractParts.push([part, true]);
         // 4c. MID$(str,x,y)
-        if (/^(?:MID)\$\((?:"[^"]*"|[A-Z][A-Z0-9]*\$?),(?:\d+|[A-Z][A-Z0-9]*?),(?:\d+|[A-Z][A-Z0-9]*?)\s*\)$/.test(part))
+        if (isValidStringFunctionArgs(part, 'MID$'))
             return extractParts.push([part, true]);
         // 4d. RIGHT$(str,num)
-        if (/^(?:RIGHT)\$\((?:"[^"]*"|[A-Z][A-Z0-9]*\$?),(?:\d+|[A-Z][A-Z0-9]*?)\s*\)$/.test(part))
+        if (isValidStringFunctionArgs(part, 'RIGHT$'))
             return extractParts.push([part, true]);
         // 4e. STR$(num/expr) allows 2+2 Returns a string, allows STR$(2+2) but not suitable for nested STR$((3^2)*2-4)
         //if (/^STR\$\((?:[A-Z][A-Z0-9]*|\d+(?:\.\d+)?)(?:\s*[\+\-\*\/\^]\s*(?:[A-Z][A-Z0-9]*|\d+(?:\.\d+)?|\([^)]*$))*\s*\)$/.test(part)){
@@ -394,8 +409,8 @@ function complexTokeniser(expr) {
     //const reLenFn   = /^(?:LEN)\s*/;                                     // LEN needs a space after it to be valid but handled separately
     // $‑ending identifier that is a function call (e.g. CHR$(…))
     const reDollarFn = /^[A-Z][A-Z0-9]*\$(?=\s*\()/; //replaced [A-Z]{1,}[0-9] with [A-Z][A-Z0-9]
-    const reDollar = /^[A-Z][A-Z0-9]*\$(?![A-Z0-9])/; // plain $‑ending token
-    const reIdent = /^(?:[A-Z][A-Z0-9]*\$?)/; // identifiers containing at least one letter
+    const reDollar = /^[A-Z][A-Z0-9]*\$(?![A-Z0-9$])/; // plain $‑ending token; do not accept a valid prefix of N$$
+    const reIdent = /^(?:[A-Z][A-Z0-9]*\$?)(?!\$)/; // identifiers containing at least one letter
     const reNumber = /^(\d+(?:.\d+)?(?:[eE][+-]?\d+)?)/; // integer or decimal or scientific
     const reArithOp = /^[+\-*/^]/; // Arthimetical operators
     const reBoolOp = /^(?:AND|NOT|OR)\s*/; // Boolean operators
@@ -604,7 +619,7 @@ function classifyExpr(expr) {
     if (isValidVarName(trimmed)) {
         return { hasString: false, hasNumeric: true };
     }
-    const leadingTokenMatch = /^([A-Za-z][A-Za-z0-9]*\$?)/.exec(trimmed);
+    const leadingTokenMatch = /^([A-Za-z][A-Za-z0-9]*\$?)(?!\$)/.exec(trimmed);
     const leadingToken = leadingTokenMatch?.[1] ?? '';
     if (leadingToken && leadingToken !== leadingToken.toUpperCase()) {
         return { hasString: false, hasNumeric: false };
@@ -947,7 +962,7 @@ const noddyProgTitlePattern = /^Program title=([A-Za-z0-9]+)\s*$/i;
 // NODDY command definitions - includes full names and abbreviations
 const noddyCommands = [
     // *A or *ADVANCE - advance to next page
-    { id: 'ADVANCE', pattern: /^\*(?:A|ADVANCE)\s*$/, hasArg: false, argType: 'none', description: 'Advance to next page' },
+    { id: 'ADVANCE', pattern: /^\*(?:A|ADVANCE)\s*$/, hasArg: false, argType: 'none', description: 'Advance through the program stack (see STACK)' },
     // *B or *BRANCH <label> - unconditional branch to label
     { id: 'BRANCH', pattern: /^\*(?:B|BRANCH)\s+(\w+)\s*$/, hasArg: true, argType: 'label', description: 'Unconditional branch to label' },
     // *D or *DISPLAY <pagename>. - display a text page (note the trailing period)
@@ -961,8 +976,8 @@ const noddyCommands = [
     { id: 'IF', pattern: /^\*(?:I|IF)\s+([A-Z0-9]),(\w+)\s*$/, hasArg: true, argType: 'char_label', description: 'Conditional branch on character input' },
     // *L or *LIST - list the noddy program
     { id: 'LIST', pattern: /^\*(?:L|LIST)\s*$/, hasArg: false, argType: 'none', description: 'List the Noddy program' },
-    // *O or *OFF - turn off/exit noddy
-    { id: 'OFF', pattern: /^\*(?:O|OFF)\s*$/, hasArg: false, argType: 'none', description: 'Turn off/exit Noddy' },
+    // *O or *OFFSTACK - turn off/exit noddy
+    { id: 'OFF', pattern: /^\*(?:O|OFFSTACK)\s*$/, hasArg: false, argType: 'none', description: 'Extract a NODDY program file from the stack without executing it' },
     // *P or *PAUSE - wait for keypress
     { id: 'PAUSE', pattern: /^\*(?:P|PAUSE)\s*$/, hasArg: false, argType: 'none', description: 'Wait for keypress' },
     // *R or *RETURN - return to BASIC
@@ -980,6 +995,7 @@ function parseNoddyContent(lines, startLine) {
     let currentPage = null;
     let textLineCount = 0;
     let isFirstContentLine = false;
+    let flaggedMissingProgramTitleForPage = null;
     for (let i = startLine; i < lines.length; i++) {
         const line = lines[i];
         const trimmed = line.trim();
@@ -1007,7 +1023,7 @@ function parseNoddyContent(lines, startLine) {
                         errors.push({
                             line: currentPage.lineStart,
                             message: `Program page "${currentPage.name}" contains no NODDY commands ` +
-                                `(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFF, *PAUSE, *RETURN, *STACK)`,
+                                `(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFFSTACK, *PAUSE, *RETURN, *STACK)`,
                             start: 0,
                             end: lines[currentPage.lineStart].length
                         });
@@ -1027,6 +1043,18 @@ function parseNoddyContent(lines, startLine) {
             };
             textLineCount = 0;
             isFirstContentLine = true;
+            flaggedMissingProgramTitleForPage = null;
+            continue;
+        }
+        if (!currentPage) {
+            if (trimmed.length > 0) {
+                errors.push({
+                    line: i,
+                    message: 'Each NODDY page must start with either "Text title=<name>" or "Program title=<name>"',
+                    start: 0,
+                    end: line.length
+                });
+            }
             continue;
         }
         if (currentPage) {
@@ -1040,6 +1068,18 @@ function parseNoddyContent(lines, startLine) {
             }
             currentPage.content.push(line);
             textLineCount++;
+            if (currentPage.type === 'text' && trimmed.length > 0 && flaggedMissingProgramTitleForPage !== currentPage.name) {
+                const looksLikeProgramCommand = trimmed.startsWith('*') || trimmed.startsWith('^');
+                if (looksLikeProgramCommand) {
+                    errors.push({
+                        line: i,
+                        message: `Text page "${currentPage.name}" contains NODDY program syntax; missing "Program title=<name>" before this program page`,
+                        start: 0,
+                        end: line.length
+                    });
+                    flaggedMissingProgramTitleForPage = currentPage.name;
+                }
+            }
             if (textLineCount > 24) {
                 errors.push({
                     line: i,
@@ -1066,7 +1106,7 @@ function parseNoddyContent(lines, startLine) {
                 errors.push({
                     line: currentPage.lineStart,
                     message: `Program page "${currentPage.name}" contains no NODDY commands ` +
-                        `(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFF, *PAUSE, *RETURN, *STACK)`,
+                        `(*ADVANCE, *BRANCH, *DISPLAY, *ENTER, *GOTO, *IF, *LIST, *OFFSTACK, *PAUSE, *RETURN, *STACK)`,
                     start: 0,
                     end: lines[currentPage.lineStart].length
                 });

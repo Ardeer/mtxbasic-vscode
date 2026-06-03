@@ -1014,3 +1014,74 @@ npm run compile = one build, then exit
 npm run watch = keep running, rebuild on each file change
 Use watch when you are actively editing .ts files and want the .js files in out to stay up to date automatically.
 
+3-Jun-2026
+PRINT error even though the error was to do with PRINT ASC (A$) where extra space after ASC not print.
+the root cause: printCheck() returns message text but not a precise subrange, so the caller paints the whole PRINT ... tail.
+The fix is to carry per-argument offsets out of printCheck() and use them when creating the diagnostic range, so spacing errors point at ASC (A$) instead of the whole PRINT clause.
+
+NOTE IF/THEN/ELSE itself is not affected in the same way now.
+FOR/NEXT/STEP is not affected in the same way for its normal custom checks.
+other special handlers are mostly already better targeted than PRINT was.
+There are still a few cases in the code where the squiggle is intentionally broad because the parser only knows “this whole construct is malformed”, for example:
+
+invalid whole LET statements that fall back to segRange
+malformed FOR statements where there is no reliable sub-expression to point at
+some fallback keyword/branch diagnostics that point at the command start by design
+So this was not a general “all non-standard checks are wrong” issue. It was a local bug in the PRINT/LPRINT path, and that path is now aligned with the rest of the validator.
+
+Findings in src/extension.ts, ordered by impact.
+
+extension.ts:2525
+Bare-assignment diagnostics use brange with a hardcoded length of 3.
+Why broad/inaccurate: this is not a precise token range; it highlights only the first three characters from the segment start, regardless of actual variable name length or position. For LONGVAR=..., the underline will still only cover three chars.
+Assessment: definite improvement opportunity. FIXED
+
+extension.ts:2559
+REM-without-space uses a range from just after REM to start + seg.text.length.
+Why broad: the start is correct, but the end is too wide because it adds the full segment length to an already-offset start. That can push the underline well past the offending suffix.
+Assessment: likely bug, not just a coarse fallback. FIXED
+
+extension.ts:2001
+LET fallback uses segRange for invalid LET statement.
+Why broad: when letCheck() returns no usable RHS parts, the diagnostic spans the whole segment instead of the specific bad token or side of the assignment.
+Assessment: likely improvement opportunity. It is a fallback, but it is broader than necessary for user guidance.
+
+extension.ts:2548
+The “string only line” guard highlights the entire segment with srange.
+Why broad: for a line like a standalone string literal, the problem is the literal token itself, but the diagnostic spans the whole segment.
+Assessment: probably intentional fallback, but still broader than necessary.
+
+extension.ts:1756
+reportKeywordTypo() fallback uses absStart .. absStart + expected keyword length.
+Why broad/inexact: when no typo token is found, it highlights only a guessed prefix based on the first expected keyword, not the actual malformed fragment. The message may be right, but the range is a heuristic rather than the true offending token.
+Assessment: intentional fallback, but a clear improvement opportunity for IF, ON, and similar control-structure checks. FIXED
+
+150 NEXT T 160 GOTO 50
+after NEXT T should be a colon
+the 160 should flag and error
+
+NEXT-specific malformed-tail check that allows NEXT and NEXT T, but flags the first stray token after that optional variable, with a “missing ':' before next statement” message.
+
+ABS((X)) error, similar to the ON MOD(..) error. The helper itself is generic in extension.ts:896, and the validator applies it to every spec whose syntaxForm is call or spaced-call at extension.ts:1278.
+
+N$$ not showing as an error.
+That means changing the tokenisers to something like “valid identifier, but not if another $ follows immediately”, rather than changing the actual variable-definition rules.
+
+Therefore,
+string var names in mtxstdfns.ts:49 are already correct
+the likely bug is token prefix consumption, not the canonical validators
+the lowest-risk repair is to add trailing guards to the token-scanning regexes, not to loosen or rewrite the shared variable-name validators
+
+In extension.ts The missing error is now clear: PRINT never asks “is this identifier shape itself invalid?” It only checks case, typoed built-ins, and known command/function validators. I’m adding one narrow expression-level identifier check so malformed tokens like N$$ are rejected without broad regex churn elsewhere.
+The fix is now expression-wide, not PRINT-specific. The remaining distinction is that it only appears where the code path explicitly calls findExpressionIssues(...). Free-form text paths like REM, raw DATA payloads, or other non-expression special cases will not use it unless they opt in. DATA not fixed. REM is free form and not an issue.
+
+ 660 IF SGN(X)<>-1 THEN LET P$(A)=MID$(P$(A),2,LEN (P$(A)))
+ LEN not handled properly and THEN LET branch not functioning correctly.
+ FIX applied to stringExprParts in mtxsrdfns.ts and THEN LET check in extension.ts
+
+Not showing errors when NODDY text or program titles misisng
+
+4000 DATA a=, b=   is valid but showing as an error.
+The safest design is: DATA should stay raw and free-form, and variable-name integrity should be enforced on READ targets, not on DATA payload. The current code does the opposite, so I’m switching that: remove identifier-style validation from DATA, and add real target-variable validation to READ.
+
+Updated extension.ts and mtxstdfns.ts changing *OFF to *OFFSTACK as used in Phoenix owners manual.

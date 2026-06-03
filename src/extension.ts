@@ -48,7 +48,7 @@ import { createHdr, initCreateHdr} from './mtxsavehdr.js';
 //  Types used by functions below
 // ------------------------------------------------------------
 
-type CheckResult = { groupIndex: number; message: string } | null;
+type CheckResult = { groupIndex: number; message: string; startOffset?: number; endOffset?: number } | null;
 type Validator = {
 name: string;
 re: RegExp;
@@ -452,10 +452,60 @@ export function activate(ctx: vscode.ExtensionContext) {
                 return issues;
         }
 
+        function findInvalidExpressionIdentifiers(text: string): ExpressionIssue[] {
+                const issues: ExpressionIssue[] = [];
+                if (!text) return issues;
+
+                let inString = false;
+                for (let idx = 0; idx < text.length; idx++) {
+                        const ch = text[idx];
+                        if (ch === '"') {
+                                inString = !inString;
+                                continue;
+                        }
+                        if (inString) {
+                                continue;
+                        }
+                        if (!/[A-Za-z]/.test(ch)) {
+                                continue;
+                        }
+                        if (idx > 0 && /[A-Za-z0-9$]/.test(text[idx - 1])) {
+                                continue;
+                        }
+
+                        let end = idx + 1;
+                        while (end < text.length && /[A-Za-z0-9$]/.test(text[end])) {
+                                end++;
+                        }
+
+                        const token = text.slice(idx, end);
+                        if (/^[A-Z][A-Z0-9]*\$?$/.test(token)) {
+                                idx = end - 1;
+                                continue;
+                        }
+
+                        if (/[A-Z]/.test(token) && /\$.*\$/.test(token)) {
+                                issues.push({
+                                        index: idx,
+                                        length: token.length,
+                                        message: `Invalid identifier "${token}": only one trailing "$" is allowed`
+                                });
+                        }
+
+                        idx = end - 1;
+                }
+
+                return issues;
+        }
+
         function findExpressionIssues(text: string): ExpressionIssue[] {
                 const caseIssues = findExpressionCaseIssues(text);
                 if (caseIssues.length > 0) {
                         return caseIssues;
+                }
+                const invalidIdentifierIssues = findInvalidExpressionIdentifiers(text);
+                if (invalidIdentifierIssues.length > 0) {
+                        return invalidIdentifierIssues;
                 }
                 return findMistypedExpressionBuiltins(text);
         }
@@ -599,6 +649,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         if (!argsText) return res;
 
         const parts = splitTopLevel(argsText);
+        let searchFrom = 0;
 
         const hasTopLevelAssignment = (s: string): boolean => {
                 let inString = false;
@@ -610,7 +661,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                 if (ch === '(') { parenDepth++; continue; }
                 if (ch === ')') { if (parenDepth > 0) parenDepth--; continue; }
                 if (ch === '=' && parenDepth === 0) {
-                        if (/([A-Z][A-Z0-9]*\$?)\s*$/.test(s.slice(0, i))) return true;
+                                if (/([A-Z][A-Z0-9]*\$?)\s*$/.test(s.slice(0, i))) return true;
                 }
                 }
                 return false;
@@ -618,8 +669,10 @@ export function activate(ctx: vscode.ExtensionContext) {
 
         for (let i = 0; i < parts.length; i++) {
                 const text = (parts[i] ?? '').trim();
+                const partOffset = text ? Math.max(0, argsText.indexOf(text, searchFrom)) : searchFrom;
+                searchFrom = partOffset + text.length;
                 if (!text) {
-                res.push({ groupIndex:  1, message: 'empty expression between separators' });
+                res.push({ groupIndex:  1, message: 'empty expression between separators', startOffset: partOffset, endOffset: partOffset + 1 });
                 continue;
                 }
                 if (/^".*"$/.test(text)) continue;
@@ -627,7 +680,12 @@ export function activate(ctx: vscode.ExtensionContext) {
                 const expressionIssues = findExpressionIssues(text);
                 if (expressionIssues.length > 0) {
                         expressionIssues.forEach(issue => {
-                                res.push({ groupIndex: 1, message: issue.message });
+                                res.push({
+                                        groupIndex: 1,
+                                        message: issue.message,
+                                        startOffset: partOffset + issue.index,
+                                        endOffset: partOffset + issue.index + Math.max(1, issue.length)
+                                });
                         });
                         continue;
                 }
@@ -638,7 +696,9 @@ export function activate(ctx: vscode.ExtensionContext) {
                 boolSpacing.forEach(issue => {
                 res.push({
                         groupIndex:  1,
-                        message: `Boolean operator ${issue.token} must be separated by whitespace (found "${issue.fragment}")`
+                        message: `Boolean operator ${issue.token} must be separated by whitespace (found "${issue.fragment}")`,
+                        startOffset: partOffset + issue.start,
+                        endOffset: partOffset + issue.end
                 });
                 });
 
@@ -647,30 +707,53 @@ export function activate(ctx: vscode.ExtensionContext) {
                         validateBooleanConnectors(candidate, boolSpans, (spanStart: number, spanEnd: number, bad: string) => {
                         res.push({
                                 groupIndex:  1,
-                                message: `Invalid boolean connector "${bad}" inside PRINT argument (expected AND, OR, or NOT)`
+                                message: `Invalid boolean connector "${bad}" inside PRINT argument (expected AND, OR, or NOT)`,
+                                startOffset: partOffset + spanStart,
+                                endOffset: partOffset + spanEnd
                         });
                         });
                 }
                 if (hasTopLevelAssignment(text)) {
                 res.push({
                         groupIndex:  1,
-                        message: 'PRINT: assignment not allowed here; use LET for assignments'
+                        message: 'PRINT: assignment not allowed here; use LET for assignments',
+                        startOffset: partOffset,
+                        endOffset: partOffset + text.length
                 });
                 }
 
-                runValidatorsOnSegment(text, validatorsList, (err, rawMatch) => {
+                runValidatorsOnSegment(text, validatorsList, (err, rawMatch, absoluteMatchIndex, matchArray) => {
                 if (!err) return;
                 const context = rawMatch && rawMatch.trim().length ? rawMatch.trim() : text;
+                let matchStart = partOffset;
+                let matchEnd = partOffset + text.length;
+
+                if (typeof absoluteMatchIndex === 'number') {
+                        let capture = rawMatch;
+                        if (matchArray && typeof err.groupIndex === 'number') {
+                                const idx = err.groupIndex;
+                                capture = matchArray[idx] ?? matchArray[idx + 1] ?? matchArray[1] ?? rawMatch;
+                        }
+
+                        matchStart = partOffset + absoluteMatchIndex;
+                        if (matchArray && matchArray[0] && capture) {
+                                const inner = matchArray[0].indexOf(capture);
+                                if (inner >= 0) matchStart = partOffset + absoluteMatchIndex + inner;
+                        }
+                        matchEnd = matchStart + Math.max(1, capture?.length ?? rawMatch.length);
+                }
                 res.push({
                         groupIndex:  1 + (err.groupIndex || 0),
-                        message: `${context}: ${err.message}`
+                        message: `${context}: ${err.message}`,
+                        startOffset: matchStart,
+                        endOffset: matchEnd
                 });
                 });
         }
 
         return res;
         }       //END of printCheck function        
-    
+
         // Add this helper function before refreshDiagnostics
         // Update validateLineNumbers function to include format and range checks:
         // Update validateLineNumbers function to handle NODDY internally:
@@ -859,6 +942,73 @@ export function activate(ctx: vscode.ExtensionContext) {
                   args: ArgSpec[];
                 };
 
+
+                function extractBalancedCallArgs(rawMatch: string, keyword: string, syntaxForm: SyntaxForm): { argsText: string; trailingText: string } | null {
+                const trimmed = rawMatch.trimStart();
+                if (!trimmed.toUpperCase().startsWith(keyword)) {
+                        return null;
+                }
+
+                let cursor = keyword.length;
+                if (syntaxForm === 'spaced-call') {
+                        const spaceMatch = /^(\s+)/.exec(trimmed.slice(cursor));
+                        if (!spaceMatch) {
+                                return null;
+                        }
+                        cursor += spaceMatch[1].length;
+                } else if (/^\s/.test(trimmed.slice(cursor))) {
+                        return null;
+                }
+
+                if (trimmed[cursor] !== '(') {
+                        return null;
+                }
+
+                let depth = 0;
+                let inString = false;
+                for (let idx = cursor; idx < trimmed.length; idx++) {
+                        const ch = trimmed[idx];
+                        if (ch === '"') {
+                                inString = !inString;
+                                continue;
+                        }
+                        if (inString) {
+                                continue;
+                        }
+                        if (ch === '(') {
+                                depth++;
+                                continue;
+                        }
+                        if (ch === ')') {
+                                depth--;
+                                if (depth === 0) {
+                                        return {
+                                                argsText: trimmed.slice(cursor + 1, idx),
+                                                trailingText: trimmed.slice(idx + 1)
+                                        };
+                                }
+                        }
+                }
+
+                return null;
+                }
+
+                function isAllowedExpressionContinuation(text: string): boolean {
+                const trimmed = text.trimStart();
+                if (!trimmed) {
+                        return true;
+                }
+
+                if (/^[)\],:+\-*/^=<>]/.test(trimmed)) {
+                        return true;
+                }
+
+                if (/^(AND|OR|MOD)\b/.test(trimmed)) {
+                        return true;
+                }
+
+                return false;
+                }
                 type CmdSpec = {
                   id: string;
                   pattern: string;
@@ -1192,12 +1342,15 @@ export function activate(ctx: vscode.ExtensionContext) {
                     // PRINT / LPRINT / INPUT are handled outside the generic validator loop via printCheck()
                     // keep the generic validator code free of PRINT/LPRINT/INPUT special cases
 
-                    if (spec.id==='CHR$' || spec.id==='GR$' ||  spec.id==='LEFT$' || spec.id==='MID$' || spec.id==='RIGHT$' || spec.id==='STR$' ) {
-                        //strip outer parentheses if present for string functions otherwise it will not correctly determine the number of arguments
-                        const s=stripOuterParentheses(groups[0] || '');
-                        groups[0]=s;
-                    }
-                    let argsText = (groups[0] || '').trim(); 
+                                        const extractedCall = (spec.syntaxForm === 'call' || spec.syntaxForm === 'spaced-call')
+                                        ? extractBalancedCallArgs(rawMatch, spec.id, spec.syntaxForm)
+                                        : null;
+
+                                        let argsText = extractedCall ? extractedCall.argsText.trim() : (groups[0] || '').trim();
+
+                                            if (extractedCall && spec.expectEnd && extractedCall.trailingText.trim() && !isAllowedExpressionContinuation(extractedCall.trailingText)) {
+                                                        res.push({ groupIndex: 1, message: `unexpected extra argument(s): ${extractedCall.trailingText.trim()}` });
+                                        }
                 
                     const parts = splitTopLevel(argsText); //why is this not splitting when args are present within function calls?
                     const providedCount = argsText ? parts.length : 0;
@@ -1557,6 +1710,38 @@ export function activate(ctx: vscode.ExtensionContext) {
                         vscode.DiagnosticSeverity.Error
                 );
                 }
+                function getMalformedNextDiagnostic(text: string, lineNum: number, absStart: number, labelPrefix: string): vscode.Diagnostic | null {
+                if (!/^\s*NEXT\b/.test(text)) {
+                        return null;
+                }
+
+                const nextMatch = /^\s*NEXT(?:\s+([A-Z][A-Z0-9]*\$?))?(.*)$/.exec(text);
+                if (!nextMatch) {
+                        return null;
+                }
+
+                const trailingText = nextMatch[2] || '';
+                if (!trailingText.trim()) {
+                        return null;
+                }
+
+                const extraTokenMatch = /\S+/.exec(trailingText);
+                if (!extraTokenMatch) {
+                        return null;
+                }
+
+                const extraToken = extraTokenMatch[0] || '';
+                const trailingStart = text.indexOf(trailingText, nextMatch.index ?? 0);
+                const tokenOffset = (trailingStart >= 0 ? trailingStart : 0) + (extraTokenMatch.index ?? 0);
+                const startChar = absStart + tokenOffset;
+                const endChar = startChar + Math.max(1, extraToken.length);
+
+                return new vscode.Diagnostic(
+                        new vscode.Range(new vscode.Position(lineNum, startChar), new vscode.Position(lineNum, endChar)),
+                        `${labelPrefix}: unexpected token "${extraToken}" after NEXT${nextMatch[1] ? ` ${nextMatch[1]}` : ''}; missing ":" before next statement?`,
+                        vscode.DiagnosticSeverity.Error
+                );
+                }
 
                 function getUnknownLeadingTokenDiagnostic(text: string, lineNum: number, absStart: number, branchName: string): vscode.Diagnostic | null {
                 const trimmed = text.trimStart();
@@ -1721,9 +1906,11 @@ export function activate(ctx: vscode.ExtensionContext) {
                         return true;
                 }
 
-                const fallbackLength = expectedKeywords[0]?.length || 1;
+                const fallbackMatch = /[A-Z][A-Z0-9$]*/.exec(text) ?? /\S+/.exec(text);
+                const fallbackIndex = fallbackMatch?.index ?? 0;
+                const fallbackLength = fallbackMatch?.[0]?.length || expectedKeywords[0]?.length || 1;
                 diags.push(new vscode.Diagnostic(
-                        new vscode.Range(new vscode.Position(lineNum, absStart), new vscode.Position(lineNum, absStart + fallbackLength)),
+                        new vscode.Range(new vscode.Position(lineNum, absStart + fallbackIndex), new vscode.Position(lineNum, absStart + fallbackIndex + fallbackLength)),
                         `${labelPrefix}: ${defaultMessage}`,
                         vscode.DiagnosticSeverity.Error
                 ));
@@ -1964,9 +2151,12 @@ export function activate(ctx: vscode.ExtensionContext) {
                         const letM = /^\s*LET\s+([A-Z][A-Z0-9]*(?:\$(?:\([^)]+\))?|(?:\([^)]+\))?))\s*=\s*(.+)$/.exec(segText);
                         if (letM) {
                                 const [, lhs, rhsText] = letM;
+                                const diagCountBeforeLet = diags.length;
                                 const rhsParts = letCheck(lhs ?? '', rhsText ?? '', segRange, diags);
                                 if (!rhsParts || rhsParts.length === 0) {
+                                        if (diags.length === diagCountBeforeLet) {
                                         diags.push(new vscode.Diagnostic(segRange, `${branchName}: invalid LET statement`, vscode.DiagnosticSeverity.Error));
+                                        }
                                 } else {
                                         rhsParts.forEach(itemInRhs => {
                                                 const rhsPart = typeof itemInRhs === 'string' ? itemInRhs : (itemInRhs[0] ?? '');
@@ -1994,11 +2184,15 @@ export function activate(ctx: vscode.ExtensionContext) {
                                         continue;
                                 }
                                 const args = rawArgs.trim();
+                                const argsOffsetInSeg = Math.max(0, segText.indexOf(args));
                                 const perr = printCheck(args, validators);
                                 perr.forEach(e => {
                                         if (!e) return;
+                                        const diagStart = segAbsStart + argsOffsetInSeg + (typeof e.startOffset === 'number' ? e.startOffset : 0);
+                                        const diagEndBase = segAbsStart + argsOffsetInSeg + (typeof e.endOffset === 'number' ? e.endOffset : Math.max(1, args.length));
+                                        const diagEnd = Math.max(diagStart + 1, diagEndBase);
                                         diags.push(new vscode.Diagnostic(
-                                                new vscode.Range(new vscode.Position(lineNum, segAbsStart), new vscode.Position(lineNum, segAbsStart + Math.min(segText.length, 1))),
+                                                new vscode.Range(new vscode.Position(lineNum, diagStart), new vscode.Position(lineNum, diagEnd)),
                                                 `${branchName}->PRINT: ${e.message}`,
                                                 vscode.DiagnosticSeverity.Error
                                         ));
@@ -2012,6 +2206,12 @@ export function activate(ctx: vscode.ExtensionContext) {
 
                         const forValidation = validateForCommand(segText, lineNum, segAbsStart, `${branchName}->FOR`);
                         if (forValidation.matched) {
+                                continue;
+                        }
+
+                        const malformedNextDiag = getMalformedNextDiagnostic(segText, lineNum, segAbsStart, `${branchName}->NEXT`);
+                        if (malformedNextDiag) {
+                                diags.push(malformedNextDiag);
                                 continue;
                         }
 
@@ -2485,10 +2685,13 @@ export function activate(ctx: vscode.ExtensionContext) {
 
                 // Match assignments not preceded by LET (BareAssignment) when they should
                 const bareAss= /^\s*(?:\d+\s+)?(?!LET\b)([A-Z][A-Z0-9]*\$?)\s*=/.exec(seg.text);
-                const bstart = seg.start
-                const brange = new vscode.Range(new vscode.Position(i, bstart), new vscode.Position(i, bstart + 3)); //length for testing only
                 if (bareAss){
                         const varName = bareAss[1] || '';
+                        const bareVarStart = seg.start + Math.max(0, seg.text.indexOf(varName));
+                        const brange = new vscode.Range(
+                                new vscode.Position(i, bareVarStart),
+                                new vscode.Position(i, bareVarStart + Math.max(1, varName.length))
+                        );
 
                         if (isRemCommentSegment(seg.text)) {
                                 // REM = and REM == are valid comment text, not assignments.
@@ -2520,8 +2723,11 @@ export function activate(ctx: vscode.ExtensionContext) {
                 //guard to capture REM without space after it
                 const remNoSpace = /^\s*REM\S+/.exec(seg.text);
                 if (remNoSpace) {
-                const start = seg.start + remNoSpace.index! + 3;
-                const range = new vscode.Range(new vscode.Position(i, start), new vscode.Position(i, start + seg.text.length));
+                const remText = remNoSpace[0] || '';
+                const suffixStart = Math.max(0, remText.search(/\S/));
+                const start = seg.start + Math.max(0, remNoSpace.index ?? 0) + 3;
+                const end = seg.start + Math.max(0, remNoSpace.index ?? 0) + Math.max(4, remText.length);
+                const range = new vscode.Range(new vscode.Position(i, start), new vscode.Position(i, Math.max(start + 1, end)));
                 diags.push(new vscode.Diagnostic(
                         range,
                         'REM must now be followed by a space before comment text',
@@ -3149,6 +3355,23 @@ export function activate(ctx: vscode.ExtensionContext) {
                         const startChar = seg.start + seg.text.toUpperCase().indexOf('DATA');
                         const range = new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + 4));
                         diags.push(new vscode.Diagnostic(range, 'DATA requires at least one value', vscode.DiagnosticSeverity.Error));
+                } else {
+                        const items = splitTopLevel(payload);
+                        let searchFrom = 0;
+                        items.forEach(item => {
+                                const text = item.trim();
+                                const itemOffset = text ? Math.max(0, payload.indexOf(text, searchFrom)) : searchFrom;
+                                searchFrom = itemOffset + text.length;
+
+                                if (!text) {
+                                        const startChar = seg.start + (dataMatch.index ?? 0) + seg.text.slice(dataMatch.index ?? 0).indexOf(payload) + itemOffset;
+                                        diags.push(new vscode.Diagnostic(
+                                        new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + 1)),
+                                        'DATA contains an empty item between separators',
+                                        vscode.DiagnosticSeverity.Error
+                                        ));
+                                }
+                        });
                 }
                 dataFlag = true; // new boolean so the generic validator block skips this segment
                 } //END of DATA handling
@@ -3168,6 +3391,32 @@ export function activate(ctx: vscode.ExtensionContext) {
                         'READ requires at least one target variable',
                         vscode.DiagnosticSeverity.Error
                         ));
+                } else {
+                        const targets = splitTopLevel(payload).map(v => v.trim());
+                        let searchFrom = 0;
+                        targets.forEach(target => {
+                                const itemOffset = target ? Math.max(0, payload.indexOf(target, searchFrom)) : searchFrom;
+                                searchFrom = itemOffset + target.length;
+
+                                if (!target) {
+                                        const startChar = seg.start + (readMatch.index ?? 0) + seg.text.slice(readMatch.index ?? 0).indexOf(payload) + itemOffset;
+                                        diags.push(new vscode.Diagnostic(
+                                        new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + 1)),
+                                        'READ contains an empty target between separators',
+                                        vscode.DiagnosticSeverity.Error
+                                        ));
+                                        return;
+                                }
+
+                                if (!isValidVarName(target) && !isValidStrVarName(target)) {
+                                        const startChar = seg.start + (readMatch.index ?? 0) + seg.text.slice(readMatch.index ?? 0).indexOf(payload) + itemOffset;
+                                        diags.push(new vscode.Diagnostic(
+                                        new vscode.Range(new vscode.Position(i, startChar), new vscode.Position(i, startChar + target.length)),
+                                        `READ target must be a valid variable or array element (got "${target}")`,
+                                        vscode.DiagnosticSeverity.Error
+                                        ));
+                                }
+                        });
                 }
                 readFlag = true; // add this boolean and include it in the final guard
                 } //END of READ handling
@@ -3221,7 +3470,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         } // END OF else block
                 } // END of CODE misplaced check
 
-                // Detect standalone NEXT/RETURN for spacing checks
+                // Detect standalone NEXT for spacing checks
                 
                 if (/^\s*NEXT(?=\s|[A-Z]|$)/.test(seg.text)) nextFlag = true;
 
@@ -3307,6 +3556,11 @@ export function activate(ctx: vscode.ExtensionContext) {
                         }
                         }
                 }
+                }
+
+                const malformedNextDiag = getMalformedNextDiagnostic(seg.text, i, seg.start, 'NEXT');
+                if (malformedNextDiag) {
+                        diags.push(malformedNextDiag);
                 }
 
                 const standaloneFunctionDiag = getStandaloneFunctionDiagnostic(seg.text, i, seg.start);
@@ -3857,7 +4111,8 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `20 PRINT ATN(1): REM ATN of 1 rads is 0.785 rads = 45 degress\n\n` + 
                     ` \n\n` + 
                     `NOTE: arc sin (ASN) and arc cosine (ACS) were not built in to MTX BASIC.Use the following formulae \n\n` +
-                    ``);
+                    `ASN(X)=ATN(X/SQR(1-X*X))  range X = -1 to 1. IF X=-1 then ASN(X)=-PI/2. IF X=1 then ASN(X)=PI/2\n\n` +
+                    `ACS(X)=PI/2-ATN(X/SQR(1-X*X))  range X = -1 to 1. IF X=-1 then ACS(X)=PI. IF X=1 then ACS(X)=0`);
             }
             if (word === 'ATTR') {
 		return new vscode.Hover(`**ATTR**:  Defines effects on the grahphics screen with the specified parameters.\n\n` +
@@ -4293,7 +4548,7 @@ ctx.subscriptions.push(vscode.languages.registerHoverProvider('mtxbasic', {
                     `Usage: NODDY \n\n` +
                     `Passes control to the Noddy editor. Noddy should appear at the base of the screen, See Notes below for VS Code usage.\n\n` + 
                     `Commands: *A or *ADVANCE ; *B or *BRANCH ; *D or *DISPLAY ; *E or *ENTER ; *G or *GOTO \n\n` + 
-                    `*I or *IF ; *L or *LIST ; *O or *OFF ; *P or *PAUSE ; *R or *RETURN ; *S or *STACK \n\n` + 
+                    `*I or *IF ; *L or *LIST ; *O or *OFFSTACK ; *P or *PAUSE ; *R or *RETURN ; *S or *STACK \n\n` + 
                     `NODDY coding language also uses "^" symbol followed by a label which is required for branching.\n\n` +
                     `IF R,r\n\n` +
                     `^r *R    (or ^r *RETURN)\n\n` +
