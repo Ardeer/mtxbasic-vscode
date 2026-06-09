@@ -11,18 +11,19 @@ This extension provides support for the MTX BASIC programming language in Visual
 
 ## Installation
 
-1. Clone the repository or download and unzip the ZIP file. NOTE: in future hoping to have this available in the VS Code extension marketplace for download.
+1. Clone the repository or download and unzip the ZIP file. NOTE: in future hoping to have this available in the VS Code extension marketplace for download which means the installation detail below is not required.
 2. In linux, ensure hidden folders are visible, move the folder to .vscode/extensions/ (the dot in front of vscode is required). You should now have a folder 
-   .vscode\extensions\mtxbasic-extension
-   In Windows this will be found at, remember to change the USERNAME to that in your system. Note: Linux uses (/) and windows uses (\) for file/directory paths.
-   C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\resources\app\extensions 
-   Apologies, I don't have a mac.
-3. Exit and reload VS Code. This should update extension.json file in folder .vscode/extensions. It should look like the following (example from raspberry pi5 PiOS, replace $USER with your username)
+   .vscode\extensions\mtxbasic-extension or just mtxbasic depending on the ZIP file name.
+3.In Windows, again ensure hidden folders are visible, move the folder to 
+   C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\???\resources\app\extensions where USERNAME is your username in windows and ??? is a unique number related to the most recent VS Code update (e.g. 6a44c35bd).
+   The best way to find the correct folder in windows is to type %appdata% in the file manager, then select Local, Programs, Microsoft VS Code then the mystery named folder then resources\app\extensions
+   Note: if there are 2 mystery named folders, then VS Code has an update waiting, load VS code and bottom left hand corner, select restart. This will update and should result in only 1 folder.
+4. Apologies, I don't have a mac.
+5. Exit and reload VS Code. This should update extension.json file in folder .vscode/extensions. It should look like the following (example from raspberry pi5 PiOS, replace $USER with your username)
 {"id":"ardeer.mtxbasic-extension"},"version":"0.0.1","location":{"$mid":1,"fsPath":"/home/$USER/.vscode/extensions/mtxbasic-extension","external":"file:///home/$USER/.vscode/extensions/mtxbasic-extension","path":"/home/$USER/.vscode/extensions/mtxbasic-extension","scheme":"file"},"relativeLocation":"mtxbasic-extension"}
-4. Either press "CTRL SHIFT p", select <Developer: Restart Host Extension> within the existing workspace window (recommended) or `F5` to run the extension in a new Extension Development Host window.
-5. package.json has been configured to to ensure Hover is switched on and autofill is off as invariably it gets it wrong. If that   
-   doesn't work, you can also configure VS code File->Preferences->Settings then select USER tab and search for Hover, and tick
-   enabled.
+6. Either press "CTRL SHIFT p", select <Developer: Restart Host Extension> within the existing workspace window (recommended) or `F5` to run the extension in a new Extension Development Host window. 
+7. package.json has been configured to to ensure Hover is switched on and autofill is
+   off as invariably it gets it wrong. If that doesn't work, you can also configure VS code File->Preferences->Settings then select USER tab and search for Hover, and tick enabled.
    Alternatively, to set manually, in VS Code, keypress: "CTRL SHIFT p" and select Preferences: OPEN USER SETTINGS (JSON). 
    or if you want to access the user settings outside of VS code, in linux this can be found at ~/.config/Code/User/settings.json
          //Hover is probably better for novices to the language or as a refresher. Experienced users may find it annoying, setting to false switches it off.
@@ -30,16 +31,16 @@ This extension provides support for the MTX BASIC programming language in Visual
         //avoids CSS colour swatches appearing in front of #hex addresses like a dark red square in front of #401B 
         "editor.colorDecorators": false,
    Additional specific VS Code setting changes for mtxbasic are found in package.json in this extension.
-6. Once the extension is installed, Create a new file or text file. Then click on the {} shown on the bottom left hand corner of VS code main. Click on this and scroll down until you find 
-   MTX-BASIC. You are now in the MTX-BASIC environment. You cannot open historical .mtx, .com or .BAS files, these will be in the original MTX binary format. Use mtxdisassembly.py (ref 5.) to 
-   convert these into .bas files, Use the lowercase .bas extension as this will be in VS code MTX-BASIC text format and you will be able to edit them in VS code editor, save as .bas and to 
-   save as .mtx binary format for execution on a MTX computer or emulator like MEMU, See below for further details.
+8. Once the extension is installed, Create a new file or text file. Then click on the {} Plain text shown on the bottom right hand corner of VS code main. Click on this and scroll down until you find MTX-BASIC. 
+   You are now in the MTX-BASIC environment. You cannot open historical .mtx, .com or .BAS files, as these will be in the original MTX binary format. Use mtxdisassembly.py (ref 5.) to convert these into .bas files, Use the lowercase .bas extension as this will be in VS code MTX-BASIC text format and you will be able to edit them in VS code editor, save as .bas 
+   To save as .mtx binary format for execution on a MTX computer or emulator like MEMU, See below for further details.
+9. Installing the extension as above, will actually list MTX BASIC in the extension list on your PC. In Linux, VS Code updates don't appear to affect the extension once installed as above, However, in windows, there is a possibility that the extension is not carried forward between updates and require it to be installed. More testing is required.
 
 ## Coding Convention and Usage
 
-Once the extension is installed, you can open any "TEXT" based MTX BASIC file (.BAS or .bas or .txt), and the syntax highlighting will be applied automatically (the bottom left hand corner of the VS code taskbar should have {} MTX BASIC as the selected language mode). If File New or New text file, the default selected language will be {} plain text. Just use the mouse to click on this and scroll down until you find MTX-BASIC and select this. You are now ready to program in MTX BASIC in VS Code.
+Once the extension is installed, you can open any "TEXT" based MTX BASIC file (.BAS or .bas or .txt), and the syntax highlighting will be applied automatically (the bottom left hand corner of the VS code taskbar should have {} MTX BASIC as the selected language mode). However, if it doesn't automatically pick up MTX BASIC but picks up "{} Plain Text" or "{} BASIC", click on the "{} BASIC" and select Configure file association for ".bas", and scroll down the list until you find MTX BASIC.  If File New or New text file, the default selected language will be "{} Plain Text". Just use the mouse to click on {} Plain Texts and scroll down the list until you find MTX-BASIC and select this. You are now ready to program in MTX BASIC in VS Code.
 
-MTX BASIC requires all Keywords, Variables and Z80 assembly code to be in UPPERCASE. Variables must not start with a number. Lowercase can be used in NODDY text pages, REM statements and any text enclosed by double quotes. Recommend using CAPS LOCK while writing MTX BASIC code. If you hover over a BASIC command (e.g. PRINT or LET or ..), it will bring up its description and usage based on reference 1. Errors like missing space after a command or too many spaces, or insufficient or too many arguments or numeric assigned to string and vice versa will show a red squiggly line under the command/function that needs attention. Hovering over it will also show the error prompt message(s). Errors are also listed on the Problems Tab if a TERMINAL window is opened within VS Code. The <linenumber> must be the start immediately on a new line (no space before it) and must be followed by a single space after it. The reason for this will become apparent shortly.
+MTX BASIC requires all Keywords, Variables and Z80 assembly code to be in UPPERCASE. Variables must not start with a number. Lowercase can be used in NODDY text pages, DATA or REM statements and any text enclosed by double quotes. Recommend using CAPS LOCK while writing MTX BASIC code. If you hover over a BASIC command (e.g. PRINT or LET or ..), it will bring up its description and usage based on reference 1. Errors like missing space after a command or too many spaces, or insufficient or too many arguments or numeric assigned to string and vice versa will show a red squiggly line under the command/function that needs attention and will prevent compiling later. Hovering over it will also show the error prompt message(s). Errors are also listed on the Problems Tab if a TERMINAL window is opened within VS Code. The <linenumber> must be the start immediately on a new line (no space before it) and must be followed by a single space after it. The reason for this will become apparent shortly. NOTE: A orange squilly line under a command like PANEL is a warning, nothing sinster, just these commands (i.e ASSEM, AUTO, EDIT, FRE, LIST, LLIST, PANEL, VERIFY) are not required in the VS code environment, however, these will still be compiled if used in a BASIC line.
 
 <linenumber><sp><KEYWORD>
 10 PRINT "HELLO"
@@ -48,15 +49,17 @@ MTX BASIC requires all Keywords, Variables and Z80 assembly code to be in UPPERC
 
 15 LET A=1: PRINT A
 
-The length of a BASIC line is the same as for MTX BASIC (158 characters), otherwise you wouldn't be able to edit the line in MEMU.
+The length of a BASIC line is the same as for MTX BASIC (158 characters), otherwise you wouldn't be able to edit the line in MEMU. If line length is greater, a red squilly line will be under the last charaacter on the line.
 
 One known issue is that MTX BASIC is a bit more forgiving than how I have coded it, for example, MTX BASIC allows X,Y coordinates to be decimals when clearly they should be integers. Therefore, there is a possibility that some original programs if disaasembled and loaded into VS Code will show up as errors, e.g. CIRCLE 10.5,20,1.5 . There are some function command ranges where I have selected based the maximum-minium MTX BASIC allowed me to enter before showing an error. Further work is needed in this area.
 
 The use of colon (:) within REM statements that are not enclosed within double quotes will lead to ironically the following error "Unrecognised Keyword, Typo or stray text. If stray text Did you mean to add 'REM' beforehand?". Avoid using a colon (:) in free form REM statements as this is used as a keyword separator in BASIC. Also, ensure there is a space after REM. Minor changes from original MTX editor to simplify the parser coding in VS code.
 
-The mtxbasic-extension uses regular expressions (regex) to parse the command syntax (e.g. const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);). Unfortunately, this is not without its challenges, too many to discuss here, but one area where it struggles is with nested (or depth) parentheses, for example, ON MOD(Z(1),2) GOSUB 700,800 , I had to apply an additional a strip parentheses to this syntax parser to allow it to detect the second argument in the MOD() function due to Z(1) conflict. 
+The mtxbasic-extension uses regular expressions (regex) to parse the command syntax (e.g. const onMatch = /^\s*ON\s+(.+?)\s+(GOTO|GOSUB)\s+(.+?)\s*$/.exec(seg.text);). Unfortunately, this is not without its challenges, too many to discuss here, but one area where it struggles is with nested (or depth) parentheses, for example, ON MOD(Z(1),2) GOSUB 700,800 , I had to apply an additional a strip parentheses to this syntax parser to allow it to detect the second argument in the MOD() function due to Z(1) conflict. This many only manifest itself if multiple embedded parentheses. Send me an example of this causing an error and I'll retrain the model.
 
-MTX editor tool keywords like PANEL in VS Code are specified as not valid and will generate an amber warning as signified by the file name on the top bar of VS code changing colour to Amber with the number of errors and warnings shown next to it. If an error is also present, the file name will be displayed in red). These keywords will still be converted to the appropriate BASIC tokens and saved later. Only red warnings prevent converting to a MTX binary file.
+The extension is space sensitive so it expects functions to have no space between the name and the opening parenthesis (e.g. SIN(1) is OK but SIN (1) would flag as an error). LEN is the exception as it requires a space between, e.g. LEN ("test"). Multiple spaces will flag as errors in VS code.
+
+MTX editor tool keywords ((i.e ASSEM, AUTO, EDIT, FRE, LIST, LLIST, PANEL, VERIFY) in VS Code are specified as not required and will be shown as a warning with an orange (amber) squilly under them, however, these will still be compiled if used in a BASIC line. Warning as signified by the file name on the top bar of VS code changing colour to Orange (amber) with the number of errors and warnings shown next to it. If an error is also present, the file name will be displayed in red. Only red warnings prevent converting compiling to a MTX binary file (.mtx).
 
 MTX BASIC inline z80 assembler is handled slightly different. Inline z80 assembler (ASSEM <linenumber>) command would normally generate a <linenumber> CODE in MTX BASIC. ASSEM option is not required in VS Code as we can type <linenumber> CODE directly into the BASIC listing as a placeholder followed by return, you can then enter Z80 assembly language instructions. 
 
@@ -140,9 +143,9 @@ calling a NODDY program within MTX BASIC is unchanged.
 
 SAVING is a 2 step process.
 
-i) Once you have created your MTX BASIC masterpiece, save the VS code text file, using VS Code SAVE AS to save the program listing as a text based file (.bas or .txt).
+i) Once you have created your MTX BASIC masterpiece, save the VS code text file (.bas), using VS Code SAVE AS to save the program listing as a text based MTX BASIC file (.bas).
 
-ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h.  This will bring up MTX save window, enter the filename.mtx (yes use the .mtx extension as preferred for MEMU emulator). A second prompt at the top middle of the VS code screen will ask if you want to auto-run or not (NOTE: do not forget to select "Yes or No" or the file will not be saved). If Yes (auto-run) is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator). If there are any errors, the binary file (.mtx) will not save, error message(s) will appear at the bottom left hand corner of the VS code screen.
+ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h (recommended), the cursor must be in the active editor window.  This will bring up MTX save window, enter the filename.mtx (yes use the .mtx extension as preferred for MEMU emulator). A second prompt at the top middle of the VS code screen will ask if you want to auto-run or not (NOTE: do not forget to select "Yes or No" or the file will not be saved). If Yes (auto-run) is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator). If there are any errors, the binary file (.mtx) will not save, error message(s) will appear at the bottom left hand corner of the VS code screen.
 
 The .mtx code generated for use on the Memotech MEMU emulator only uses minimal changes to the standard system variables that are normally saved to tape. In this version, the MTX header block including MTX tape based system variables is equivalent to 619 bytes.
 
@@ -150,7 +153,7 @@ Finally, the extension default mode is for a MTX 512. Currently, to change to a 
 
 ## Contributing
 
-Contributions are welcome! I have included guardrails to minimise potential conflicts or weak code fallbacks, unfortunately the use of a different number of AI has made this process more difficult for a rich programming language like MTX BASIC , Z80 assembly and NODDY text languages. Therefore, potential errors or inconsistencies are still possible. Please feel free to submit a pull request or open an issue for any enhancements or bug fixes. Thanks.
+Contributions are welcome! I have included guardrails to minimise potential conflicts or weak code fallbacks, unfortunately the use of a different number of AI has made this process more difficult for a rich programming environment like Memotech with BASIC, Z80 assembly and NODDY text languages built in. Therefore, potential errors or inconsistencies are still possible. Please feel free to submit a pull request or open an issue for any enhancements or bug fixes. Thanks.
 
 ## License
 
@@ -158,7 +161,7 @@ This project is licensed under the GNU License. See the LICENSE file for more de
 
 ## Creation
 
-This extension was developed on a raspberry pi5 running Ubuntu 25.10 (ARM64) and on piOS.  The code was tested on a raspberry PI5 runnig Ubuntu and Memotech emulator (memu-fb in console mode, see ref 7). VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I decided to use a combination of Microsoft copilot which is integrated into VS code, where a user can select a range of non-Microsoft A.I. Models (from Q4 20026 to Q1 2026) and a range of browser A.I. tools (like duck.ai) to assist in the development of this MTX BASIC extension. The building blocks of the extension were taken from my own python MTX disassembly and hexdump programs. The majority of the underlying MTX BASIC (z80) building blocks were in place, but the one thing that I needed to get started, was a suitable JSON schema. I used https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension. Coding using A.I. tools needs a LOT of patience and perseverance to get to a workable end result, even for the simplest of tasks. A lot of time is spent re-defining followed by extensive testing of any recommended code. Different A.I. models also have different approaches, this has lead to unfortunate duplication or fallback fragility even when specifying "avoid complexity and duplication" or ensure suitable guardrails are in place. Each new iteration of the A.I. coding models has improved over time, which if I had started later may have been more straightforward. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech MTX computer.
+This extension was developed on a raspberry pi5 running Ubuntu 25.10 (ARM64) and on piOS.  The code was tested on a raspberry PI5 running Ubuntu and Memotech emulator (memu-fb in console mode, see ref 7). VS code extensions are based on typescript/javascript and node. Rather than learn yet another computer language syntax! other than a cursory scan (see reference 3 below), I decided to use a combination of Microsoft copilot which is integrated into VS code, where a user can select a range of non-Microsoft A.I. Models (from Q4 20026 to Q1 2026) and a range of browser A.I. tools (like duck.ai) to assist in the development of this MTX BASIC extension. The building blocks of the extension were taken from my own python MTX disassembly and hexdump programs, the one thing that I needed to get started, was a suitable JSON schema (ref 8). Coding using A.I. tools needs a LOT of patience and perseverance to get to a workable end result, even for the simplest of tasks. A lot of time is spent re-defining followed by extensive testing of any recommended code. Different A.I. models also have different approaches, this led to unfortunate duplication or in some case fallback fragility even when specifying "avoid complexity and duplication and ensure suitable guardrails are in place". Each new iteration of the A.I. coding models has improved over time, which if I had started in Q2 20026, coding the extension would probably been faster and less problematic. I hope the final result makes coding for the Memotech that little more convenient for those not lucky enough to still own a working Memotech MTX computer.
 
 ## For more information
 
@@ -171,6 +174,7 @@ Mac users replace CMD for CTRL.
 5. MTX DISASSEMBLY utility (python) will take an existing binary (Program) file (e.g. .BAS or .mtx) and convert it to a .text file of the BASIC listing (.bas).
 6. MTX HEXDUMP utility (python) will generate a hexadecimal byte and ASCII character text file output of the binary (program) input file to assist in debugging (same as the utility "MTX PANEL COPY" which outputted PANEL to a dot matrix printer).
 7. MEMU download available at https://github.com/Memotech-Bill/MEMU
+8. https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json which I found in JSJ's zxbasic extension
 
 
 **Enjoy!**
