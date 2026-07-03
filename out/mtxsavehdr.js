@@ -8,6 +8,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createHdr = void 0;
 exports.initCreateHdr = initCreateHdr;
+exports.getSysVarStart = getSysVarStart;
 /**
     The MTX header will be inserted before the main BASIC program data when saving to tape or disc. It doesn't change the BASIC starting address used in extension.ts
     but will update "Command: save converted HEX bytes from active editor" in extension.ts file to add the header before saving the .mtx file.
@@ -28,6 +29,38 @@ exports.initCreateHdr = initCreateHdr;
     246 (=251-5) bytes: system variables (see below, note: 3 0x00s and the 2 read markers are already counted as part of the system variables)
     TOTAL 619 bytes
 */
+/**
+Tape files contain :-
+
+    a 0xff byte = 1 byte
+    15 byte tape_name, padded with spaces = 15 bytes
+    little endian 16 bit word, defining the system_variables_base (often 0xf8f2) = 2 bytes
+    0xfb4b-system_variables_base bytes of system variables (often 0x0259 bytes = 601)
+    the Basic program itself, from 0x4000 onwards..
+ */
+/**
+If you had an MTX with an SDX disc (with the normal SDX ROM) you might have SDX Basic programs as .BAS files.
+
+SDX Basic files contain :-
+
+    a little endian 16 bit STKLIM value (often 0xf2f8)
+    a little endian 16 bit length of system variables (often 0x0259)
+    system variables
+    the Basic program itself, from 0x4000 onwards...
+
+These would be loaded and saved using USER LOAD and USER SAVE commands.
+*/
+/**
+If you had an MTX with an SDX disc (with the normal SDX ROM), you might have games supplied as .RUN files.
+
+RUN files contain :-
+
+    little-endian 16 bit word with the code_base
+    little-endian 16 bit word with the code_length
+    code_length bytes of machine code, to be loaded at code_base in memory, and executed by jumping there
+
+These would be loaded from MTX BASIC using USER RUN "FILE.RUN".
+ */
 /**
     The header information is required to create a valid file for running on a MTX computer or emulator such as MEMU.
     The filename is uppercase and must start with a letter, can contain ASCII letters and numbers only with a fullstop (.) before the file type extension.
@@ -69,6 +102,9 @@ const hdrPadByteLength = 350; //number of padding bytes used in MTX tape/file he
 const hdrTotalBytes = 619; //total number of bytes in MTX tape/file header (default 619)
 let createHdr = []; //array to hold the MTX tape/file header bytes. To be exported for use in extension.ts
 exports.createHdr = createHdr;
+function getSysVarStart(format) {
+    return format === 'BAS' ? 4 + hdrPadByteLength : 18 + hdrPadByteLength;
+}
 // sysVal contains the default hexadecimal value stored when the MTX512 is first switched on, for reference.
 const sysVarSaved = [
     { hexVal: 0xFA50, sysName: "SYS_START", sysVal: 0x00 }, // FA50 sysVal=0x00
@@ -328,15 +364,20 @@ const sysVarSaved = [
 /**
  * Helper function to update createHdr using the default information
  */
-function initCreateHdr() {
+function initCreateHdr(format = 'mtx') {
     exports.createHdr = createHdr = [];
-    createHdr.push(0xFF); //first byte is 0xFF
-    // 1-15 bytes contain spaces 0x20, this is where the filename will be stored.
-    for (let i = 0; i < 15; i++) {
-        createHdr.push(0x20);
+    if (format === 'BAS') {
+        createHdr.push(0xF2, 0xF8, 0x59, 0x02);
     }
-    // 16-17 bytes contain 0xF2 and 0xF8
-    createHdr.push(...readMarkerDescriptor);
+    else {
+        createHdr.push(0xFF); //first byte is 0xFF
+        // 1-15 bytes contain spaces 0x20, this is where the filename will be stored.
+        for (let i = 0; i < 15; i++) {
+            createHdr.push(0x20);
+        }
+        // 16-17 bytes contain 0xF2 and 0xF8
+        createHdr.push(...readMarkerDescriptor);
+    }
     // the 350 bytes (see hdrPadByteLength) contain 0x00
     for (let i = 0; i < hdrPadByteLength; i++) {
         createHdr.push(hdrPadByte);

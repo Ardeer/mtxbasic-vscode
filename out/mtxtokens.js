@@ -1053,7 +1053,8 @@ function parseCodeBlockPhase3(labelMap, labelReferences, numberReferences, direc
             mtxDirectiveBytes.push(relOffset & 0xff, (relOffset >> 8) & 0xff);
             const val = dir.directiveValue || '';
             const dbPayload = buildDbDirectivePayload(val);
-            mtxDirectiveBytes.push(dbPayload.itemCount & 0xff); // byte count (comma-separated items)
+            const dbByteCount = parseDbValues(val).length;
+            mtxDirectiveBytes.push(dbByteCount & 0xff); // byte count of emitted DB bytes
             mtxDirectiveBytes.push(dbPayload.ascii.length & 0xff); // ascii length excluding commas
             mtxDirectiveBytes.push(...dbPayload.ascii); // ascii bytes with bit7 set on last char of each item
         }

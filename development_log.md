@@ -1085,3 +1085,66 @@ Not showing errors when NODDY text or program titles misisng
 The safest design is: DATA should stay raw and free-form, and variable-name integrity should be enforced on READ targets, not on DATA payload. The current code does the opposite, so I’m switching that: remove identifier-style validation from DATA, and add real target-variable validation to READ.
 
 Updated extension.ts and mtxstdfns.ts changing *OFF to *OFFSTACK as used in Phoenix owners manual.
+
+11-Jun-2026
+Request From Dave to include SDX basic files (.BAS) and SDX (.RUN) files. Updated mtxsavehdr.ts to include the format for both these.
+Need to update extension.ts to have in addition to select
+1) MTX (.mtx)
+2) SDX (.BAS)
+3) SDC (.RUN) - future option
+
+all three with option to auto run or not and all thress to select MTX500 or 512.
+Initiallly code simply. Also, will need to update hexdump for SDX format output and mtxdisassembly for SDX. Done.
+
+Disc filenames must be 8.3 format (aka CPM 2.2). If error it generates a text warning (bottom RHC) and a beep as it refreshes the save dialog. Includes filename length description information.
+
+MTX .mtx still uses system-variable start 18 + 350 = 368 (0x0170)
+SDX .BAS now uses system-variable start 4 + 350 = 354 (0x0162)
+
+discrepency resolved.
+
+Updated DESAVE to cover SDX - length = filename length Plus dot plus BAS.
+
+3-Jul-2026
+the code below crashes when loading into MEMU. This is because the byte length is incorrect, its 0x01 instead of 0x07.
+10 CODE
+ 4007 LD A,3
+ 4009 RET
+ 400A DB "MESSAGE"
+ 4011 RET
+
+values below are hexadecimal
+
+Basic token, line number, total and code lengths
+ 28 00 0a 00 C2 0B 00
+ Z80 opcode/operands
+ 3E 03
+ C9
+ 4D 45 53 53 41 47 45
+ C9
+ mtx directives
+ 00     => number token
+ B3     => number 3 with bit 7 high as end of ascii characters
+ 01     => byte sized number, 1 of
+ 01 00  => relative offset
+ 00 00  => 2 pad bytes to end as part of the byte sized number construct
+
+ 03     => Define Byte (DB)
+ 03 00  => relative offset
+ 07     => number of bytes within the code block (4D 45 53 53 41 47 45)
+ 09     => number ascii characters (includes the surrounding double quotes)
+ 22 4D 45 53 53 41 47 45 A2     => "MESSAGE" The last character has bit 7 set high as end of ascii characters
+ 
+ FF     => end of BASIC line
+
+When compiled by extension.ts, the 07 number of bytes was processed as 01.
+
+ the defect is in mtxtokens.ts (lines 1318 to 1320): the DB directive record writes itemCount where the MTX format expects the emitted byte count. For DB "MESSAGE", that means 1 item was written instead of 7 bytes. I’m patching that exact field and then validating the tokenizer file. Root cause: the DB directive metadata was writing the number of comma-separated items, not the number of bytes actually emitted into the code block
+replaced
+mtxDirectiveBytes.push(dbPayload.itemCount & 0xff);
+with
+const dbByteCount = parseDbValues(val).length;
+mtxDirectiveBytes.push(dbByteCount & 0xff);
+
+Original MTX interpreter allowed leading zeroes, e.g. COLOUR 1,07. This is not common programming practice. To accommodate involves a lot of changes to the extension. So will leave the error in place and have added to the error message. 
+COLOUR 01,001: argument 2 is not a valid number or has leading zeroes (got 01)

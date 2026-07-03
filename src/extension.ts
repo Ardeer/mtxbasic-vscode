@@ -41,7 +41,8 @@ import {
         convertNoddyBlock
  } from './mtxtokens.js';
 
-import { createHdr, initCreateHdr} from './mtxsavehdr.js';
+import { createHdr, initCreateHdr, getSysVarStart } from './mtxsavehdr.js';
+import type { SaveHeaderFormat } from './mtxsavehdr.js';
 
 
 // ------------------------------------------------------------
@@ -119,7 +120,104 @@ export function activate(ctx: vscode.ExtensionContext) {
                                 return;
                         }
 
-                        initCreateHdr(); //initialize the createHdr array before populating it with updated values
+                        const selectedFormat = await vscode.window.showQuickPick(
+                                [
+                                        { label: 'MTX tape binary name (15 chars max)', description: '.mtx', format: 'mtx' as SaveHeaderFormat },
+                                        { label: 'SDX disk binary name (8 chars max)', description: '.BAS', format: 'BAS' as SaveHeaderFormat }
+                                ],
+                                { placeHolder: 'Select save target: MTX tape uses a 15-character name, SDX disk uses 8.3 with up to 8 characters before .BAS' }
+                        );
+                        if (!selectedFormat) return;
+
+                        const saveHeaderFormat: SaveHeaderFormat = selectedFormat.format;
+                        const splitFsPath = (fsPath: string) => {
+                                const pathSeparator = fsPath.includes('\\') ? '\\' : '/';
+                                const pathParts = fsPath.split(/[/\\]/);
+                                const baseName = pathParts.pop() || 'output';
+                                const parentDir = pathParts.join(pathSeparator);
+                                return { pathSeparator, parentDir, baseName };
+                        };
+                        const joinFsPath = (parentDir: string, pathSeparator: string, baseName: string) => {
+                                return parentDir ? `${parentDir}${pathSeparator}${baseName}` : baseName;
+                        };
+                        const ringErrorBell = async () => {
+                                try {
+                                        const processLike = (globalThis as typeof globalThis & {
+                                                process?: { platform?: string; stdout?: { write?: (text: string) => void } }
+                                        }).process;
+                                        const moduleName = 'child_process';
+                                        const childProcess = await import(moduleName);
+                                        const exec = (childProcess as { exec?: (command: string) => void }).exec;
+
+                                        if (processLike?.platform === 'linux') {
+                                                exec?.('command -v paplay >/dev/null 2>&1 && paplay /usr/share/sounds/freedesktop/stereo/dialog-warning.oga >/dev/null 2>&1 || command -v canberra-gtk-play >/dev/null 2>&1 && canberra-gtk-play -i dialog-warning >/dev/null 2>&1 || printf "\\a"');
+                                                return;
+                                        }
+                                        if (processLike?.platform === 'darwin') {
+                                                exec?.('afplay /System/Library/Sounds/Funk.aiff >/dev/null 2>&1 || printf "\\a"');
+                                                return;
+                                        }
+                                        if (processLike?.platform === 'win32') {
+                                                exec?.('powershell -NoProfile -Command "[console]::beep(1000,150)"');
+                                                return;
+                                        }
+
+                                        processLike?.stdout?.write?.('\x07');
+                                } catch {
+                                        try {
+                                                const processLike = (globalThis as typeof globalThis & {
+                                                        process?: { stdout?: { write?: (text: string) => void } }
+                                                }).process;
+                                                processLike?.stdout?.write?.('\x07');
+                                        } catch {
+                                                // Ignore bell failures and still show the validation error.
+                                        }
+                                }
+                        };
+
+                        let defaultBasePath = doc.uri && doc.uri.fsPath ? doc.uri.fsPath.replace(/\.[^.]*$/, '') : 'output';
+                        if (saveHeaderFormat === 'BAS') {
+                                const { pathSeparator, parentDir, baseName } = splitFsPath(defaultBasePath);
+                                defaultBasePath = joinFsPath(parentDir, pathSeparator, baseName.toUpperCase());
+                        }
+
+                        const maxBaseNameLength = saveHeaderFormat === 'mtx' ? 15 : 8;
+                        const extension = saveHeaderFormat === 'BAS' ? '.BAS' : '.mtx';
+                        let uri: vscode.Uri;
+                        let saveFileName = '';
+                        let lastDotIdx = -1;
+
+                        while (true) {
+                                const selectedBaseUri = await vscode.window.showSaveDialog({
+                                        defaultUri: vscode.Uri.file(defaultBasePath),
+                                        saveLabel: saveHeaderFormat === 'mtx' ? 'Save MTX tape binary name (15 chars max)' : 'Save SDX disk binary name (8 chars max)'
+                                });
+                                if (!selectedBaseUri) return;
+
+                                const basePath = selectedBaseUri.fsPath.replace(/\.(mtx|bas)$/i, '');
+                                const { pathSeparator, parentDir, baseName } = splitFsPath(basePath);
+                                const normalizedBaseName = saveHeaderFormat === 'BAS' ? baseName.toUpperCase() : baseName;
+
+                                if (normalizedBaseName.length > maxBaseNameLength) {
+                                        const limitLabel = saveHeaderFormat === 'mtx'
+                                                ? 'MTX tape filenames stored in the header must be 15 characters or fewer before .mtx'
+                                                : 'SDX disk filenames must be 8 characters or fewer before .BAS';
+                                        void ringErrorBell();
+                                        vscode.window.showErrorMessage(`Filename "${normalizedBaseName}" is too long. ${limitLabel}. Please choose a shorter name.`);
+                                        defaultBasePath = joinFsPath(parentDir, pathSeparator, normalizedBaseName);
+                                        continue;
+                                }
+
+                                const finalFilePath = parentDir
+                                        ? `${parentDir}${pathSeparator}${normalizedBaseName}${extension}`
+                                        : `${normalizedBaseName}${extension}`;
+                                uri = vscode.Uri.file(finalFilePath);
+                                saveFileName = uri.fsPath.split(/[/\\]/).pop() || '';
+                                lastDotIdx = saveFileName.lastIndexOf('.');
+                                break;
+                        }
+
+                        initCreateHdr(saveHeaderFormat); // initialize the header before populating it with updated values
                         const { noddyStartLine } = validateLineNumbers(doc);
                         //const noddyLengthForDoc = computeNoddyAsciiLength(doc, noddyStartLine);
                         //noddyLength = noddyLengthForDoc;
@@ -146,8 +244,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                         //Pass the above data to update the system variables in createHdr array before inserting the header
                         const BASELINaddr=BASBOTaddr // default is BASBOTaddr. This is a test
 
-                        initCreateHdr();
-                        const sysVarStart = 368;
+                        const sysVarStart = getSysVarStart(saveHeaderFormat);
                         const setSysVar = (offset: number, value: number) => {
                                 createHdr[sysVarStart + offset] = value & 0xFF;
                                 createHdr[sysVarStart + offset + 1] = (value >> 8) & 0xFF;
@@ -165,44 +262,30 @@ export function activate(ctx: vscode.ExtensionContext) {
                         //setSysVar(136,GOSUBSTaddr); // Start of GOSUB stack
                         setSysVar(246,BASBOTaddr); // DATAAD
                         
-                        //insert MTX header before the BASIC program bytes above - still to be added here
-                        const defaultFileName = doc.uri && doc.uri.fsPath ? doc.uri.fsPath.replace(/\.[^.]*$/, '') + '.mtx' : 'output.mtx';
-                        const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(defaultFileName), saveLabel: 'Save HEX' });
-                        if (!uri) return;
-
                         // Check filename length and update createHdr
-                        let fileName = uri.fsPath.split(/[/\\]/).pop() || '';
-                        
-                        const lastDotIdx = fileName.lastIndexOf('.');
-                        let nameOnly = lastDotIdx > -1 ? fileName.substring(0, lastDotIdx) : fileName;
-                        const extension = lastDotIdx > -1 ? fileName.substring(lastDotIdx) : '';
+                        let nameOnly = lastDotIdx > -1 ? saveFileName.substring(0, lastDotIdx) : saveFileName;
 
                         nameOnly = nameOnly.toUpperCase();
-                        let headerName = "";
+                        const headerName = nameOnly;
 
-                        // 1) strip .mtx from the name saved to createHdr only
-                        // doesn't apply if extension is .BAS for example
-                        if (extension.toLowerCase() === '.mtx') {
-                                headerName = nameOnly;
-                        } else {
-                                headerName = nameOnly + extension.toUpperCase();
-                        }
-                        
-                        // 2) filename length can be 15 bytes without .mtx
-                        if (headerName.length > 15) {
-                                vscode.window.showErrorMessage(`Filename header "${headerName}" is too long. Must be 15 chars or less.`);
+                        // Tape saves store only the base filename in the header; .mtx is not included.
+                        if (saveHeaderFormat === 'mtx' && headerName.length > 15) {
+                                vscode.window.showErrorMessage(`MTX tape filename header "${headerName}" is too long. Use 15 characters or fewer before .mtx.`);
                                 return;
                         }
 
                         // Populate createHdr (bytes 1-15)
-                        for (let i = 1; i < 16; i++) {
-                                // Use (i - 1) because headerName is 0-indexed
-                                createHdr[i] = (i - 1) < headerName.length ? headerName.charCodeAt(i - 1) : 0x20;
+                        if (saveHeaderFormat === 'mtx') {
+                                for (let i = 1; i < 16; i++) {
+                                        // Use (i - 1) because headerName is 0-indexed
+                                        createHdr[i] = (i - 1) < headerName.length ? headerName.charCodeAt(i - 1) : 0x20;
+                                }
                         }
-                        // DESAVE for non-auto run programs uses the DESAVE 0xFB4E + headerName.length; 
+                        // Tape saves offset DESAVE by the tape filename length stored in the header.
+                        // SDX to save the offset DESAVE by the total filename length (filename in the header plus dot plus BAS)
                         // auto-run programs will depend on the program. For BOMBER.BAS its 0x401B (equivalent of line 4 where the GENPAT statements are located)
                         // need to consider a prompt here to ask user if auto-run or not and adjust DESAVE accordingly
-                        let DESAVEaddr = 0xFB4E + headerName.length; //default non auto-run DESAVE address
+                        let DESAVEaddr = 0xFB4E + (saveHeaderFormat === 'mtx' ? headerName.length : saveHeaderFormat === 'BAS' ? headerName.length + 1 + 3 : 0); //default non auto-run DESAVE address
                         const desavePrompt = await vscode.window.showQuickPick(
                                 ['Yes', 'No'],
                                 { placeHolder: 'Is this an auto-run program? (affects DESAVE address)' }
@@ -254,7 +337,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                                         return;
                                 }
                         } else {        
-                                DESAVEaddr = 0xFB4E + headerName.length; //non auto-run DESAVE address
+                                DESAVEaddr = 0xFB4E + (saveHeaderFormat === 'mtx' ? headerName.length : saveHeaderFormat === 'BAS' ? headerName.length + 1 + 3 : 0); //non auto-run DESAVE address
                         }
                         vscode.window.showInformationMessage(`Setting DESAVE for non-auto-run program at 0x${DESAVEaddr.toString(16).toUpperCase()}`);
                         
@@ -1439,7 +1522,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                                                         if (isNumValid) {
                                                         const nval = convertToNumber(text);
                                                         if (nval === null) {
-                                                                res.push({ groupIndex: 1, message: `argument ${i + 1} is not a valid number (got ${text})` });
+                                                                res.push({ groupIndex: 1, message: `argument ${i + 1} is not a valid number or has leading zeroes (got ${text})` });
                                                         } else {
                                                                 if (a.allowedValues && a.allowedValues.length > 0) {
                                                                         if (!a.allowedValues.includes(nval)) {

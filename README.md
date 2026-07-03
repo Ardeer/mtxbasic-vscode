@@ -12,17 +12,16 @@ This extension provides support for the MTX BASIC programming language in Visual
 ## Installation
 
 1. Clone the repository or download and unzip the ZIP file. NOTE: in future hoping to have this available in the VS Code extension marketplace for download which means the installation detail below is not required.
-2. In linux, ensure hidden folders are visible, move the folder to .vscode/extensions/ (the dot in front of vscode is required). You should now have a folder 
+2. In linux, ensure hidden folders are visible, move the unzipped folder to .vscode/extensions/ (the dot in front of vscode is required). You should now have a folder 
    .vscode\extensions\mtxbasic-extension or just mtxbasic depending on the ZIP file name.
-3.In Windows, again ensure hidden folders are visible, move the folder to 
-   C:\Users\USERNAME\AppData\Local\Programs\Microsoft VS Code\???\resources\app\extensions where USERNAME is your username in windows and ??? is a unique number related to the most recent VS Code update (e.g. 6a44c35bd).
-   The best way to find the correct folder in windows is to type %appdata% in the file manager, then select Local, Programs, Microsoft VS Code then the mystery named folder then resources\app\extensions
-   Note: if there are 2 mystery named folders, then VS Code has an update waiting, load VS code and bottom left hand corner, select restart. This will update and should result in only 1 folder.
+   Exit and reload VS Code. This should update extension.json file in folder .vscode/extensions. If not, open the file using a text editor, go the the end of the file and insert directly before the closing square bracket, the following, do forget the initial comma also replace $USER with your username. Save the updated file.
+,{"id":"ardeer.mtxbasic-extension"},"version":"0.0.1","location":{"$mid":1,"fsPath":"/home/$USER/.vscode/extensions/mtxbasic","external":"file:///home/$USER/.vscode/extensions/mtxbasic","path":"/home/$USER/.vscode/extensions/mtxbasic","scheme":"file"},"relativeLocation":"mtxbasic"}
+3.In Windows, again ensure hidden folders are visible, move the unzipped folder to C:\Users\USERNAME\.vscode\extensions Note: the dot in front of vscode is required and the USERNAME is your username 
+  in windows. Next open the file C:\Users\USERNAME\.vscode\extensions\extensions.json in a text editor. Go to the end of the file where there should be a ]. Insert directly before the closing square bracket the following, don't forget the starting comma and then save the updated file. Remember to change the USERNAME to your username.
+   ,{"identifier":{"id":"ardeer.mtxbasic-extension"},"version":"0.0.1","location":{"$mid":1,"fsPath":"c:\\Users\\USERNAME\\.vscode\\extensions\\mtxbasic","_sep":1,"external":"file:///c%3A/Users/USERNAME/.vscode/extensions/mtxbasic","path":"/c:/Users/USERNAME/.vscode/extensions/mtxbasic","scheme":"file"},"relativeLocation":"mtxbasic"}
 4. Apologies, I don't have a mac.
-5. Exit and reload VS Code. This should update extension.json file in folder .vscode/extensions. It should look like the following (example from raspberry pi5 PiOS, replace $USER with your username)
-{"id":"ardeer.mtxbasic-extension"},"version":"0.0.1","location":{"$mid":1,"fsPath":"/home/$USER/.vscode/extensions/mtxbasic-extension","external":"file:///home/$USER/.vscode/extensions/mtxbasic-extension","path":"/home/$USER/.vscode/extensions/mtxbasic-extension","scheme":"file"},"relativeLocation":"mtxbasic-extension"}
-6. Either press "CTRL SHIFT p", select <Developer: Restart Host Extension> within the existing workspace window (recommended) or `F5` to run the extension in a new Extension Development Host window. 
-7. package.json has been configured to to ensure Hover is switched on and autofill is
+5. Either press "CTRL SHIFT p", select <Developer: Restart Host Extension> within the existing workspace window (recommended) or `F5` to run the extension in a new Extension Development Host window. 
+6. package.json has been configured to to ensure Hover is switched on and autofill is
    off as invariably it gets it wrong. If that doesn't work, you can also configure VS code File->Preferences->Settings then select USER tab and search for Hover, and tick enabled.
    Alternatively, to set manually, in VS Code, keypress: "CTRL SHIFT p" and select Preferences: OPEN USER SETTINGS (JSON). 
    or if you want to access the user settings outside of VS code, in linux this can be found at ~/.config/Code/User/settings.json
@@ -31,14 +30,14 @@ This extension provides support for the MTX BASIC programming language in Visual
         //avoids CSS colour swatches appearing in front of #hex addresses like a dark red square in front of #401B 
         "editor.colorDecorators": false,
    Additional specific VS Code setting changes for mtxbasic are found in package.json in this extension.
-8. Once the extension is installed, Create a new file or text file. Then click on the {} Plain text shown on the bottom right hand corner of VS code main. Click on this and scroll down until you find MTX-BASIC. 
-   You are now in the MTX-BASIC environment. You cannot open historical .mtx, .com or .BAS files, as these will be in the original MTX binary format. Use mtxdisassembly.py (ref 5.) to convert these into .bas files, Use the lowercase .bas extension as this will be in VS code MTX-BASIC text format and you will be able to edit them in VS code editor, save as .bas 
+7. Once the extension is installed, Create a new file or text file. Then click on the "{} Plain Text" shown on the bottom right hand corner of VS code main. 
+   Click on this and scroll down until you find MTX-BASIC. You are now in the MTX-BASIC environment. You cannot open historical .mtx, .com or .BAS files, as these will be in the original MTX/SDX/FDX binary format. Use mtxdisassembly.py (ref 5.) to convert (currently tape files (.mtx) and SDX disk files (.BAS)) these into .bas files, Use the lowercase .bas extension as this will be in VS code MTX-BASIC text format and you will be able to edit them in VS code editor, save as .bas 
    To save as .mtx binary format for execution on a MTX computer or emulator like MEMU, See below for further details.
-9. Installing the extension as above, will actually list MTX BASIC in the extension list on your PC. In Linux, VS Code updates don't appear to affect the extension once installed as above, However, in windows, there is a possibility that the extension is not carried forward between updates and require it to be installed. More testing is required.
+8. Installing the extension as above, will actually list MTX BASIC in the extension list on your PC. 
 
 ## Coding Convention and Usage
 
-Once the extension is installed, you can open any "TEXT" based MTX BASIC file (.BAS or .bas or .txt), and the syntax highlighting will be applied automatically (the bottom left hand corner of the VS code taskbar should have {} MTX BASIC as the selected language mode). However, if it doesn't automatically pick up MTX BASIC but picks up "{} Plain Text" or "{} BASIC", click on the "{} BASIC" and select Configure file association for ".bas", and scroll down the list until you find MTX BASIC.  If File New or New text file, the default selected language will be "{} Plain Text". Just use the mouse to click on {} Plain Texts and scroll down the list until you find MTX-BASIC and select this. You are now ready to program in MTX BASIC in VS Code.
+Once the extension is installed, you can open any "TEXT" based MTX BASIC file (.bas or .txt), and the syntax highlighting will be applied automatically (the bottom left hand corner of the VS code taskbar should have "{} MTX BASIC" as the selected language mode). However, if it doesn't automatically pick up MTX BASIC but picks up "{} Plain Text" or "{} BASIC", click on the "{} Plain Text" or "{} BASIC" and select Configure file association for ".bas", and scroll down the list until you find MTX BASIC.  If File New or New text file, the default selected language will be "{} Plain Text". Just use the mouse to click on "{} Plain Text" and scroll down the list until you find MTX-BASIC and select this. You are now ready to program in MTX BASIC in VS Code.
 
 MTX BASIC requires all Keywords, Variables and Z80 assembly code to be in UPPERCASE. Variables must not start with a number. Lowercase can be used in NODDY text pages, DATA or REM statements and any text enclosed by double quotes. Recommend using CAPS LOCK while writing MTX BASIC code. If you hover over a BASIC command (e.g. PRINT or LET or ..), it will bring up its description and usage based on reference 1. Errors like missing space after a command or too many spaces, or insufficient or too many arguments or numeric assigned to string and vice versa will show a red squiggly line under the command/function that needs attention and will prevent compiling later. Hovering over it will also show the error prompt message(s). Errors are also listed on the Problems Tab if a TERMINAL window is opened within VS Code. The <linenumber> must be the start immediately on a new line (no space before it) and must be followed by a single space after it. The reason for this will become apparent shortly. NOTE: A orange squilly line under a command like PANEL is a warning, nothing sinster, just these commands (i.e ASSEM, AUTO, EDIT, FRE, LIST, LLIST, PANEL, VERIFY) are not required in the VS code environment, however, these will still be compiled if used in a BASIC line.
 
@@ -143,16 +142,17 @@ calling a NODDY program within MTX BASIC is unchanged.
 
 SAVING is a 2 step process.
 
-i) Once you have created your MTX BASIC masterpiece, save the VS code text file (.bas), using VS Code SAVE AS to save the program listing as a text based MTX BASIC file (.bas).
+i) Once you have created your MTX BASIC masterpiece, save the VS code text file (.bas), using VS Code File -> SAVE AS to save the program listing as a text based MTX BASIC file (.bas).
 
-ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h (recommended), the cursor must be in the active editor window.  This will bring up MTX save window, enter the filename.mtx (yes use the .mtx extension as preferred for MEMU emulator). A second prompt at the top middle of the VS code screen will ask if you want to auto-run or not (NOTE: do not forget to select "Yes or No" or the file will not be saved). If Yes (auto-run) is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator). If there are any errors, the binary file (.mtx) will not save, error message(s) will appear at the bottom left hand corner of the VS code screen.
+ii) Using VS Code command CTRL SHIFT P and selecting "MTX: SAVE hex from active editor" or press CTRL SHIFT h (recommended), the cursor must be in the active editor window.  This will bring up MTX save window, enter the filename (without extension). Press enter, a second prompt at the top middle of the VS code screen will ask if you want to save as a tape file (.mtx) or a SDX disk file (.BAS). A third VS code screen will then ask if the code needs to auto-run or not (NOTE: do not forget to select "Yes or No" or the file will not be saved). If Yes (auto-run) is selected you can either specify the BASIC line number to start from (e.g. 40) or the hexadecimal address to start from (e.g. #401B as used by the MTX game BOMBER.BAS" which auto-runs on loading in the MEMU emulator). If there are any errors, the binary file (.mtx) will not save, error message(s) will appear at the bottom left hand corner of the VS code screen.
 
-The .mtx code generated for use on the Memotech MEMU emulator only uses minimal changes to the standard system variables that are normally saved to tape. In this version, the MTX header block including MTX tape based system variables is equivalent to 619 bytes.
+The .mtx or .BAS code generated for use on the Memotech MEMU emulator only uses minimal changes to the standard system variables that are normally saved to tape or disk. In this version, the MTX header block including MTX tape based system variables is equivalent to 619 bytes.
 
 Finally, the extension default mode is for a MTX 512. Currently, to change to a MTX500, you will have to manually edit the file extension.js in the OUT folder of the extension and change const ramSize = 48; to const ramSize = 32; This will set free RAM to #8000 instead of #4000.
 
 ## Contributing
 
+Thanks to Dave Stevenson (ref 4) for testing and suggestions for improvement (i.e. SDX disk output)
 Contributions are welcome! I have included guardrails to minimise potential conflicts or weak code fallbacks, unfortunately the use of a different number of AI has made this process more difficult for a rich programming environment like Memotech with BASIC, Z80 assembly and NODDY text languages built in. Therefore, potential errors or inconsistencies are still possible. Please feel free to submit a pull request or open an issue for any enhancements or bug fixes. Thanks.
 
 ## License

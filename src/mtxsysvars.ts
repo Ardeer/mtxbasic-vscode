@@ -21,6 +21,7 @@ in the Z80 mnenomic tables, they use postfix "H" for hexadecimal numbers
 so when converting mtx assembly language use shift F3 for hexadecimal prefix
 */
 
+
 /**	information needed for disassembly
     LSTPG at 0xFA7A (+42 displacement from start of sys_var)= number of 32K pages (00 for MTX500 and 01 for MTX512)
 	END OF NODDY found at + 84 & 85 displacement from start of sys_var => 0xFAA4 & 0xFAA5
@@ -161,7 +162,7 @@ const sysVarSaved: {hexVal: number, sysName: string, sysVal:number}[] = [
     {hexVal:0xFACF,sysName:"BASELIN",sysVal:0x00}, //current BASIC line hex address
     {hexVal:0xFAD0,sysName:"BASELIN_1",sysVal:0x40},
     {hexVal:0xFAD1,sysName:"BASLNP",sysVal:0x00},
-    {hexVal:0xFAD2,sysName:"PAGE",sysVal:0x10}, //current page configuration - varies sometimes 00 or 10
+    {hexVal:0xFAD2,sysName:"PAGE",sysVal:0x10}, //current page configuration - varies sometimes 00 or 10 or 50 for SDX
     {hexVal:0xFAD3,sysName:"CRNTPG",sysVal:0x00}, //current BASIC page
     {hexVal:0xFAD4,sysName:"PGN1",sysVal:0x00},
     {hexVal:0xFAD5,sysName:"PGN2",sysVal:0x00},
