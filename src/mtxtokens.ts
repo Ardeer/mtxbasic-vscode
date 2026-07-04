@@ -1837,17 +1837,19 @@ function opCodePatternToBytes(
   for (const p of parts) {
     if (p === 'YY') {
       // YY is for relative jumps (JR, DJNZ).
-      // If operand is a label, compute displacement: label_offset - (pc+2).
-      // If operand is a numeric literal, use it directly as the signed byte supplied by the programmer.
+      // If operand is a label or an absolute hex target, compute the displacement:
+      // target_address - (pc + 2).
 
       opIdx = findNextValueOperandIndex(opIdx);
       const rawOp = operands[opIdx++] || '';
       const opStr = stripParens(rawOp);
-      const isLabel = (/^[A-Z][A-Z0-9]*$/).test(opStr.trim());
+      const trimmedOp = opStr.trim();
+      const isLabel = (/^[A-Z][A-Z0-9]*$/).test(trimmedOp);
+      const absoluteHexMatch = /^#([0-9A-Fa-f]{3,4})$/.exec(trimmedOp);
 
       if (isLabel) {
         let targetOffset = 0;
-        const lab = opStr.toUpperCase();
+        const lab = trimmedOp.toUpperCase();
         if (labelMap && typeof labelMap[lab] === 'number') {
           targetOffset = labelMap[lab];
         }
@@ -1858,27 +1860,18 @@ function opCodePatternToBytes(
         if (labelReferences) {
           addRefOffset(labelReferences, lab, 'relative', baseOffset + out.length - 1);
         }
+      } else if (absoluteHexMatch) {
+        const targetAddress = parseInt(absoluteHexMatch[1], 16);
+        const displacement = targetAddress - (baseOffset + 2);
+        out.push(displacement & 0xFF);
+
+        if (numberReferences) {
+          addRefOffset(numberReferences, `#${absoluteHexMatch[1].toUpperCase()}`, 'relative', baseOffset + out.length - 1);
+        }
       } else {
-        // Numeric literal: take the supplied 8-bit value directly
-        const literal = parseImmediateOperand(opStr) & 0xFF;
+        // Fallback for invalid inputs; validation should reject these before save.
+        const literal = parseImmediateOperand(trimmedOp) & 0xFF;
         out.push(literal);
-        
-        // Record number reference for YY (byte treated as relative displacement)
-        // Check for Hex (#) or Decimal sequences, allowing for +/- prefix
-        const cleanOp = opStr.trim();
-        let checkOp = cleanOp;
-        if (checkOp.startsWith('+') || checkOp.startsWith('-')) {
-             checkOp = checkOp.substring(1).trim();
-        }
-
-        // Matches logic in parseImmediateOperand implementation
-        const isHex = /^[#]/.test(checkOp);
-        const isDec = /^[0-9]+$/.test(checkOp);
-
-        if ((isHex || isDec) && numberReferences) {
-          // Offset points to the displacement byte we just pushed (last element)
-          addRefOffset(numberReferences, cleanOp, 'relative', baseOffset + out.length - 1);
-        }
       }
     } else if (p === 'XX' || p === 'N' || p === 'ZZ') {
       // Prefer the operand that carries an IX/IY displacement when encoding ZZ

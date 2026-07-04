@@ -1160,12 +1160,11 @@ function validateOperandSize(op, placeholder) {
             return null;
         }
         else if (placeholder === 'YY') {
-            if (hexDigitCount > 2) {
-                return `${placeholder} must use at most 2 hex digits, got #${normalizedHexStr}`;
+            if (hexDigitCount < 3 || hexDigitCount > 4) {
+                return `${placeholder} must use an absolute hex address like #400D or a label, got #${normalizedHexStr}`;
             }
-            // 8-bit signed: -128 to +127 (0x00 to 0xFF in unsigned, but interpreted as -128..+127)
-            if (hexValue < 0 || hexValue > 0xFF) {
-                return `${placeholder} must be 8-bit signed (#00 to #FF), got #${normalizedHexStr}`;
+            if (hexValue < 0 || hexValue > 0xFFFF) {
+                return `${placeholder} must be a 16-bit absolute hex address (#0000 to #FFFF), got #${normalizedHexStr}`;
             }
             return null;
         }
@@ -1192,11 +1191,7 @@ function validateOperandSize(op, placeholder) {
             return null;
         }
         else if (placeholder === 'YY') {
-            // 8-bit signed: -128 to +127
-            if (decValue < -128 || decValue > 127) {
-                return `${placeholder} must be -128 to +127 in decimal, got ${decValue}`;
-            }
-            return null;
+            return `${placeholder} must use an absolute hex address like #400D or a label, got ${decValue}`;
         }
         else if (placeholder === 'XXXX') {
             // 16-bit unsigned: 0 to 65535
@@ -1209,6 +1204,9 @@ function validateOperandSize(op, placeholder) {
     // Invalid format for a numeric operand
     if (placeholder === 'XXXX') {
         return `${placeholder} must be a hex value (#0000-#FFFF), decimal (0-65535), or a label`;
+    }
+    else if (placeholder === 'YY') {
+        return `${placeholder} must use an absolute hex address like #400D or a label`;
     }
     else {
         return `${placeholder} must be a hex value, decimal, or a label`;
@@ -1930,6 +1928,22 @@ function validateCodeBlock(lines, startLine, baseAddr = 0x4000, expectedStartAdd
                                 message: sizeError,
                                 severity: 'error'
                             });
+                        }
+                        else if (placeholder === 'YY') {
+                            const absHexMatch = /^#([0-9A-F]{3,4})$/.exec(op.trim());
+                            if (absHexMatch) {
+                                const targetAddress = parseInt(absHexMatch[1], 16);
+                                const offset = targetAddress - (currentAddress + 2);
+                                if (offset < -128 || offset > 127) {
+                                    errors.push({
+                                        line: startLine + i,
+                                        start: lines[i].indexOf(op),
+                                        end: lines[i].indexOf(op) + op.length,
+                                        message: `Relative jump target ${op.trim()} is out of range (offset: ${offset}, valid: -128 to +127)`,
+                                        severity: 'error'
+                                    });
+                                }
+                            }
                         }
                     }
                     else {

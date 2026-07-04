@@ -98,6 +98,8 @@ The CODE block will flag if duplicate or missing LABELS.
 
 One quirk not applied in this implementation is the frustrating way the built in assembler dealt with changes after an assembly instruction was entered. For example, if you changed LD DE,#7000 to LD DE,#9000 the total length of the code increases by 9 bytes in this example. It leaves a residue of 00 23 39 30 30 b0 00 00 00 behind. Working with VS code does not generate this. Note: mtxdisassembly will strip out these remnants resulting in modified code lengths and if the coder had used fixed memory addresses, these strip outs could result in positional changes that may affect execution after recompiling in this extension. So be aware.
 
+Another quirk of the mtx inline assembler is that it requires relative jumps (JR and DJNZ) to be defined as either a label or absolute hex address within a displacement range of -128 to + 127. The actual z80 code will use a signed byte displacement but the mtx directive describing the jump will be either a label or an address. The mtx inline assembler will accept say JR #08 but when you try to exit it will say "JR #08 is out of range". So the extension will also flag its usage as an error.
+
 The NODDY editor is not accessible in VS code using NODDY<return>. However, the workaround is this free form text version is at the very end of a BASIC listing and the very last entry, is to use REM NODDY as the placeholder trigger to allow NODDY programs and text pages to be constructed. 
 
 <linenumber><sp><REM><sp><NODDY>   or <linenumber><sp><other BASIC commands...>:<REM><sp><NODDY> 

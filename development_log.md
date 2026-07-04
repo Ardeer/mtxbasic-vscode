@@ -1148,3 +1148,39 @@ mtxDirectiveBytes.push(dbByteCount & 0xff);
 
 Original MTX interpreter allowed leading zeroes, e.g. COLOUR 1,07. This is not common programming practice. To accommodate involves a lot of changes to the extension. So will leave the error in place and have added to the error message. 
 COLOUR 01,001: argument 2 is not a valid number or has leading zeroes (got 01)
+
+4-Jul-2026
+The opcodes for JR , JR Flags and DJNZ relative jumps are associated with signed byte operands (-128 to 127). The binary file contains 2 parts, the z80 code and the mtx directives describing the operand. The mtx directive is typically a label but if not a label it will be an absolute address described in ascii. For example
+
+10 CODE
+ 4007 LD A,3
+ 4009 LD B,2
+ 400B JR L1 ;or JR #400D or JR #00
+ 400D L1: RET
+ 400E RET
+
+var 00 0A 00 C2 08 00 => total length varies depending on line 400B
+3E 03
+06 02
+18 00
+C9
+C9
+
+mtx directives
+00 B3 01 01 00 00 00
+00 B2 01 03 00 00 00
+
+02 06 00 4C B1 00 00 01 00 05 => L1 defined and referenced (when JR L1)
+
+
+02 06 00 4C B1 00 00 00 => L1 defined but not referenced (JR #400D)
+00 23 34 30 30 C4 00 00 01 05 00
+
+02 06 00 4C B1 00 00 00 => L1 defined but not referenced (JR #00)
+00 23 30 B0 00 00 01 05 00
+
+Also, need to fix a defined label with no references which is not processed in the binary file.
+
+I’m editing the YY encoder and YY validator together so the source rule and emitted directive rule stay aligned: label or absolute hex target only, with displacement still computed into the opcode byte. Requires changes to both mtxtoken.ts and z80codes.ts
+
+For labels, yes: there is already a second-pass range check on JR and DJNZ labels. For absolute hex targets, not yet; the current edit accepts #400D syntax but does not yet reject out-of-range targets before encoding, so I’m tightening that now in the validator.
