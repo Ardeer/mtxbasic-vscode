@@ -5,9 +5,9 @@ This program takes any binary file and outputs a text file showing both the hexa
 ## Features
 
 - Written in Python
-- Reads text or program file (binary .mtx or .BAS or .COM file types)
+- Reads text or program file (binary .mtx or .BAS .RUN or .COM file types)
 - Outputs a text file (address, 16 byte data per line, 16 ASCII characters per line)
-- MTX series customised output version breaks the code into sections:
+- MTX series customised output version (.mtx and ,BAS only) breaks the code into sections:
     Tape header,
     Saved system variables,
     Main BASIC listing including z80 assembly code
@@ -23,9 +23,6 @@ This program takes any binary file and outputs a text file showing both the hexa
 ## Usage
 
 Run mtxhexump.py from within your IDE. It will ask you to select the input filename and then output filename. If the file detects a MTX binary program, it will by default select the customised version. However, there is a check message to confirm to proceed on this basis or to over-ride this and output in the general layout format.
-
-NOTE: there have been a couple of files where sys_vars marker byte pairs preceded by three null bytes (00) do not match up with the equivalent markers at the start of the header at bytes 16 and 17. This caused the program to hang when MTX customisation mode is selected but general layout mode remains unaffected. The code was
-modified to trap this and compare against the default settings to generate the correct customisation breakdown. Tested against BOMBER.mtx which exhibited this.
 
 
 ## Contributing
@@ -43,8 +40,6 @@ a) MTX Disassembly (previously called MTX BASIC to text) written in Python
 b) MTX BASIC extension for Visual Studio code written in typescript/javascript.
 
 ## For more information
-
-Mac users replace CMD for CTRL.
 
 1. "MTX Series Operator's Manual" by Brian Pritchard.
 2. "The Memotech Operator's Manual" by Spencer Bateson

@@ -19,6 +19,63 @@ import os
 #Next section is the program (BASIC) data in tokenised byte format and z80 assembly opcode bytes. 
 #Final section is the NODDY section, mostly ascii text data.
 
+'''
+    The MTX header will be inserted before the main BASIC program data when saving to tape or disc. It doesn't change the BASIC starting address used in extension.ts 
+    but will update "Command: save converted HEX bytes from active editor" in extension.ts file to add the header before saving the .mtx file.
+    MTX tape header is constructed as follows:
+    byte 0: 0xFF
+    bytes 1-15: tape or file name with pad bytes (0x20) to make up 15 bytes. 
+    NOTE: if name is gteater than 16 bytes it is truncated to 16 bytes and typically .mtx is not recorded in the 1st 16 bytes but included in the name (a function of the MEMU emulator)
+    bytes 16-17: read marker descriptor (LSB/MSB format), e.g. 0xf2 0xf8
+    - essentially search for these two bytes again and this plus the 3 bytes before it (typically 0x00 0x00 0xx00) are the start of the system variables below
+    bytes 18 onwards are typically 0x00's until byte 16/17 match pair is found (see above). 
+    The number of bytes between the first occurrence of the read marker descriptor and the second occurrence is variable, is typically after a further 353 bytes but sometimes a lot more.
+    typical header length is 619 bytes
+    16 bytes: tape or file name plus padding (0x20)
+    2 bytes: read marker descriptor (e.g. 0xf2 0xf8)
+    350 bytes: padding (typically 0x00)
+    3 bytes: 0x00 0x00 0x00
+    2 bytes: read marker descriptor (e.g. 0xf2 0xf8)
+    246 (=251-5) bytes: system variables (see below, note: 3 0x00s and the 2 read markers are already counted as part of the system variables)
+    TOTAL 619 bytes
+'''
+
+'''
+Tape files contain :-
+
+    a 0xff byte = 1 byte
+    15 byte tape_name, padded with spaces = 15 bytes
+    little endian 16 bit word, defining the system_variables_base (often 0xf8f2) = 2 bytes
+    350 bytes: padding (typically 0x00)
+    0xfb4b-system_variables_base bytes of system variables (often 0x0259 bytes = 601)
+    the Basic program itself, from 0x4000 onwards..
+'''
+
+'''
+If you had an MTX with an SDX disc (with the normal SDX ROM) you might have SDX Basic programs as .BAS files.
+
+SDX Basic files contain :-
+
+    a little endian 16 bit STKLIM value (often 0xf2f8) = 2 bytes
+    a little endian 16 bit length of system variables (often 0x0259) = 2 bytes
+    pad bytes until system variables reached - typically pad bytes = 0x00
+    system variables
+    the Basic program itself, from 0x4000 onwards... 
+
+These would be loaded and saved using USER LOAD and USER SAVE commands. 
+'''
+
+'''
+If you had an MTX with an SDX disc (with the normal SDX ROM), you might have games supplied as .RUN files.
+
+RUN files contain :-
+
+    little-endian 16 bit word with the code_base
+    little-endian 16 bit word with the code_length
+    code_length bytes of machine code, to be loaded at code_base in memory, and executed by jumping there 
+
+These would be loaded from MTX BASIC using USER RUN "FILE.RUN". 
+'''
 
 def hexdump_file_to_txt(): #read 
     GV_fname_r="Rtest"
@@ -27,15 +84,17 @@ def hexdump_file_to_txt(): #read
     GC_extn_w=".txt"
 
     heading1=": "+"Contents in hexadecimal byte format (0x dropped)     "+"ASCII character"
-    heading2="MTX file potentially detected, hexdump will split up accordingly"
+    heading2="MTX/SDX file potentially detected, hexdump will split up accordingly"
     heading3="ASCII or non-MTX file"
-    heading4="TAPE HEADER (excluding saved system variables)"
+    heading4="TAPE/DISK HEADER (excluding saved system variables)"
     heading5="SAVED SYSTEM VARIABLES"
     heading6="BASIC tokenised listing and z80 opcodes in byte format"
     heading7="NODDY text section"
 
     dec_val=0 #initialised.
     mtxflag=False
+    sdxBflag=False
+    sdxRflag=False # future option
     dec_addr=-16 #increments of 16 starting at 0.
     hex_addr_str=""
     hdr_str="" 
@@ -113,7 +172,7 @@ def hexdump_file_to_txt(): #read
     msgbox.showinfo(title="MTX Hexdump",message="This program reads a file and produces a corresponding text file showing the byte data (hexadecimal) and ASCII characters.\n" \
                     "Option to select a customised version for the Memotech MTX computer.\n" )
 
-    GV_fname_r = askopenfilename(title="Binary (Program) input filename",defaultextension=GC_extn_r, filetypes=[("Binary (Program) files", GC_extn_r),("COM files", "*.COM"),("EXE files", "*.exe"),("All files","*.*")])
+    GV_fname_r = askopenfilename(title="Binary (Program) input filename",defaultextension=GC_extn_r, filetypes=[("Binary (Program) files", GC_extn_r),("SDX BAS files", "*.BAS"),("SDX RUN files", "*.RUN"),("COM files", "*.COM"),("EXE files", "*.exe"),("All files","*.*")])
     #print("write conversion out as a text hex/ascii file (*.txt)")
     GV_fname_w = asksaveasfilename(title="Hexdump output filename", defaultextension=GC_extn_w, filetypes=[("TEXT files", GC_extn_w),("All files","*.*")]) 
     
@@ -121,37 +180,58 @@ def hexdump_file_to_txt(): #read
         fn_r_size=os.path.getsize (GV_fname_r) #replaces GC_array_rows
 
         fn_r=open(GV_fname_r, 'rb')
-        #is it mtx file or not?
+        #is it mtx or SDX file or not?
 
         dec_val=int.from_bytes(fn_r.read(1),"little") #READ BYTES 
         hdrend=hdrend+1
-        if dec_val!=255: #if first byte is 0xFF then its a MTX program file, so do not skip the 619 byte header but affects how the hexdump output will look like
-            mtxflag=False
-        else:
-            mtxflag=True
-            for i in range(15): #1st byte of block of 16 already read
-                dec_val=int.from_bytes(fn_r.read(1),"little") #READ BYTES 
+        #not checking for .RUN as these should be hexdumped in standard format only.
+        if (dec_val==255 and GV_fname_r.lower().endswith(".mtx")) or (dec_val==242 and GV_fname_r.upper().endswith(".BAS")):
+            if dec_val==255 and GV_fname_r.lower().endswith(".mtx"): # MTX Tape file
+                #print("MTX file")
+                mtxflag=True
+                for i in range(15): #1st byte of block of 16 already read
+                    dec_val=int.from_bytes(fn_r.read(1),"little") #READ BYTES 
+                    hdrend=hdrend+1
+                #end for
+                marker1=int.from_bytes(fn_r.read(1),"little") #READ BYTES
+                marker2=int.from_bytes(fn_r.read(1),"little") #READ BYTES  
+                hdrend=hdrend+2
+            elif dec_val==242 and GV_fname_r.upper().endswith(".BAS"): #SDX BASIC file
+                #print("SDX file")
+                sdxBflag=True
+                marker1=dec_val
+                marker2=int.from_bytes(fn_r.read(1),"little") #Future check to confirm 0xF8
                 hdrend=hdrend+1
-            #end for
-            marker1=int.from_bytes(fn_r.read(1),"little") #READ BYTES
-            marker2=int.from_bytes(fn_r.read(1),"little") #READ BYTES  
-            hdrend=hdrend+2
+                #revist this later to confirm 0x0259 bytes. Check if the same for mtx
+                dec_val=int.from_bytes(fn_r.read(1),"little") #READ BYTES 
+                dec_val=int.from_bytes(fn_r.read(1),"little") #READ BYTES
+                hdrend=hdrend+2
+            #end if-elif
+            #option to use SYSVAR_check() function from mtxdisassembly.py here
             tmp_marker_def=[0,0,0,242,248]
             tmp_marker=[0,0,0,0,0]
             tmp_marker[3]=marker1
             tmp_marker[4]=marker2
             tmp_wip=tmp_marker.copy()
-            while mtxflag is True:
+            while mtxflag is True or sdxBflag is True:
                 #skip the next section of the tape header until find the system variable section
-                dec_val=int.from_bytes(fn_r.read(1),"little")
-                hdrend=hdrend+1
-                tmp_wip.pop(0)
-                tmp_wip.append(dec_val)
-                if tmp_wip==tmp_marker or tmp_wip==tmp_marker_def:
-                    #print("TEST: marker block=",tmp_wip)
-                    markerflag=True
-                    break #exit while loop
-                #end if
+                try:
+                    raw_byte=fn_r.read(1)
+                    if raw_byte==b'': #EOF reached.
+                        print("DEBUG: EOF reached")
+                        break #exit while loop
+                    #end if
+                    dec_val=int.from_bytes(raw_byte,"little")
+                    hdrend=hdrend+1
+                    tmp_wip.pop(0)
+                    tmp_wip.append(dec_val)
+                    if tmp_wip==tmp_marker or tmp_wip==tmp_marker_def:
+                        #print("TEST: marker block=",tmp_wip)
+                        markerflag=True
+                        break #exit while loop
+                    #end if
+                except EOFError:
+                    break
             #end while
         #end if-else
         fn_r.close()
@@ -164,19 +244,20 @@ def hexdump_file_to_txt(): #read
                     i=1
                     #add a option for user to ignore mtx mode
                     
-                    if mtxflag is True: #if first byte is 0xFF then its likely to be a MTX program file, so do not skip the 619 byte header but affects how the hexdump output will look like
-                        answer=msgbox.askyesno(title="MTX Hexdump",message="MTX program detected,\n OK with customised hexdump?")
+                    if mtxflag is True or sdxBflag is True: #if first byte is 0xFF or 0xF2 then its likely to be a MTX or SDX program file, so do not skip the 619 byte header but affects how the hexdump output will look like
+                        answer=msgbox.askyesno(title="MTX Hexdump",message="MTX/SDX program detected,\n OK with customised hexdump?")
                         if answer is True:
                             fn_w.write(heading2)
                         else:
                             mtxflag=False
+                            sdxBflag=False
                             fn_w.write(heading3)
                     else: 
                         fn_w.write(heading3)
                     #end if-else
                     fn_w.write('\n\n') #EOL and a new line
 
-                    if mtxflag is False:
+                    if mtxflag is False and sdxBflag is False:
                         while i<fn_r_size+1:
                             prt_char="     " #space between hexdump and ascii info
                             dec_addr=dec_addr+16
